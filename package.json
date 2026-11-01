@@ -1,0 +1,43 @@
+{
+  "name": "mai-code",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop coding agent for MAI models — chat client with tools, AGENTS.md, skills, MCP and plugins",
+  "type": "module",
+  "main": "electron/main.js",
+  "author": "crruton",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/crruton/mai-code.git"
+  },
+  "homepage": "https://github.com/crruton/mai-code#readme",
+  "keywords": [
+    "electron",
+    "ai-agent",
+    "coding-agent",
+    "vibe-coding",
+    "mai",
+    "llm",
+    "mcp"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "icon": "node scripts/make-icon.mjs",
+    "shortcut": "powershell -ExecutionPolicy Bypass -File ./install-shortcut.ps1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "openai": "^6.0.0"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0"
+  },
+  "allowScripts": {
+    "electron@38.8.6": true
+  }
+}

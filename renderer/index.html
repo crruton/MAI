@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MAI Code</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">M</div>
+          <div>
+            <div class="brand-title">MAI Code</div>
+            <div class="brand-sub">vibe coding</div>
+          </div>
+        </div>
+
+        <button class="btn primary new-chat" id="new-chat">＋ Новый чат</button>
+
+        <div class="sidebar-section">Чаты</div>
+        <div class="sessions" id="sessions"></div>
+
+        <div class="sidebar-footer">
+          <button class="project-btn" id="project-btn" title="Сменить папку проекта">
+            <span class="project-icon">📁</span>
+            <span class="project-name" id="project-name">Папка не выбрана</span>
+          </button>
+          <div class="conn" id="conn"><i></i><span>MAI</span></div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="model-wrap">
+            <label class="model-label">Модель</label>
+            <select id="model-select" class="model-select"></select>
+          </div>
+          <div class="top-actions">
+            <button class="btn ghost" data-panel="agents">AGENTS.md</button>
+            <button class="btn ghost" data-panel="skills">Навыки</button>
+            <button class="btn ghost" data-panel="mcp">MCP</button>
+            <button class="btn ghost" data-panel="plugins">Плагины</button>
+            <button class="btn icon" id="settings-btn" title="Настройки">⚙</button>
+          </div>
+        </header>
+
+        <section class="messages" id="messages">
+          <div class="empty" id="empty">
+            <div class="empty-mark">M</div>
+            <h1>Чем займёмся?</h1>
+            <p>Выберите папку проекта, модель MAI — и опишите задачу. Агент прочитает код, внесёт правки и запустит проверки.</p>
+            <div class="hints">
+              <button class="hint" data-hint="Объясни структуру этого проекта и найди слабые места">Разобрать проект</button>
+              <button class="hint" data-hint="Найди и исправь ошибки в последних изменениях">Исправить ошибки</button>
+              <button class="hint" data-hint="Напиши тесты для основного модуля">Написать тесты</button>
+            </div>
+          </div>
+        </section>
+
+        <footer class="composer-wrap">
+          <div class="composer">
+            <textarea id="input" rows="1" placeholder="Опишите задачу…  Enter — отправить, Shift+Enter — новая строка"></textarea>
+            <div class="composer-actions">
+              <span class="composer-hint" id="composer-hint"></span>
+              <button class="btn icon send" id="send" title="Отправить">➤</button>
+              <button class="btn icon stop" id="stop" title="Остановить" hidden>■</button>
+            </div>
+          </div>
+          <div class="composer-note">Модели: MAI · агент может менять файлы и запускать команды — с вашего подтверждения</div>
+        </footer>
+      </main>
+    </div>
+
+    <div id="modal-root"></div>
+    <div id="toasts"></div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
