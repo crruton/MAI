@@ -120,13 +120,12 @@ button { cursor: pointer; }
   backdrop-filter: blur(8px);
 }
 .model-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.top-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.runtime-select { min-width: 190px; }
+.top-left { display: flex; align-items: center; gap: 14px; min-width: 0; flex: 0 1 auto; }
 .avatar.mono { font-family: var(--mono); font-size: 14px; }
 .model-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-faint); }
 .model-select {
   background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 9px;
-  padding: 7px 30px 7px 10px; min-width: 260px; max-width: 420px;
+  padding: 7px 30px 7px 10px; min-width: 220px; max-width: 320px;
   appearance: none;
   background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%), linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
   background-position: calc(100% - 16px) 15px, calc(100% - 11px) 15px;
@@ -134,7 +133,8 @@ button { cursor: pointer; }
   background-repeat: no-repeat;
 }
 .model-select:focus { outline: none; border-color: var(--accent); }
-.top-actions { display: flex; align-items: center; gap: 4px; }
+.runtime-select { min-width: 170px; max-width: 200px; }
+.top-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 
 /* ---------- messages ---------- */
 
