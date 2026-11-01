@@ -120,6 +120,9 @@ button { cursor: pointer; }
   backdrop-filter: blur(8px);
 }
 .model-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.top-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.runtime-select { min-width: 190px; }
+.avatar.mono { font-family: var(--mono); font-size: 14px; }
 .model-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-faint); }
 .model-select {
   background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 9px;
@@ -193,6 +196,11 @@ button { cursor: pointer; }
 .md pre .code-head button { border: 0; background: transparent; color: var(--text-dim); font-size: 11px; }
 .md pre .code-head button:hover { color: var(--accent-2); }
 .md pre code { display: block; padding: 12px; background: transparent; border: 0; overflow-x: auto; white-space: pre; }
+.terminal {
+  margin: 8px 0 0; padding: 12px; background: #0b0d13; border: 1px solid var(--border);
+  border-radius: 10px; font-family: var(--mono); font-size: 12px; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 520px; overflow: auto; color: #c7d0e0;
+}
 .md blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--accent); color: var(--text-dim); }
 .md a { color: var(--accent-2); }
 .md hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }

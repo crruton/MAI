@@ -59,6 +59,7 @@ function parseArgs(raw) {
 
 export async function runAgent({
   settings,
+  provider,
   projectDir,
   model,
   messages,
@@ -69,7 +70,10 @@ export async function runAgent({
   pluginTools = [],
   transforms = [],
 }) {
-  const client = new OpenAI({ apiKey: settings.apiKey, baseURL: settings.baseURL, maxRetries: 1 });
+  if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
+  if (!provider.apiKey) throw new Error(`Не задан API-ключ провайдера «${provider.name || 'unknown'}»`);
+
+  const client = new OpenAI({ apiKey: provider.apiKey, baseURL: provider.baseURL, maxRetries: 1 });
   const skills = listSkills(projectDir);
   const tools = [...fsTools, ...shellTools, ...skillTools, ...pluginTools, ...mcp.toolSchemas()];
 

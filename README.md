@@ -9,6 +9,12 @@
 
 - **Модели MAI** — список подтягивается из `GET /v1/models`, в дропдауне только чат-модели
   с человеческими названиями и размером контекста.
+- **Несколько провайдеров** — MAI, AgentRouter и любой другой OpenAI-совместимый шлюз
+  (OpenAI, DeepSeek, Anthropic в режиме совместимости). Модели в дропдауне сгруппированы
+  по провайдерам и записываются как `провайдер/модель`, у каждого свой ключ и кэш моделей.
+- **Внешние рантаймы** — OpenCode, herdr и любая своя команда: процесс запускается в папке
+  проекта, вывод стримится в чат, есть кнопка «Остановить» и шаблоны `{prompt}`, `{model}`,
+  `{projectDir}`, `{target}`.
 - **Чат с агентом** — потоковые ответы, блок «Размышления», история чатов, переключение сессий,
   остановка генерации.
 - **Инструменты агента**:
@@ -46,10 +52,29 @@ npm.cmd start
 powershell -ExecutionPolicy Bypass -File .\install-shortcut.ps1
 ```
 
-### Ключ и адрес шлюза
+### Ключи и адреса шлюзов
 
-При первом запуске приложение берёт ключ из `mai-api-key.txt` рядом с проектом (если файл есть),
-дальше ключ хранится в `%APPDATA%\mai-code\settings.json` и задаётся через шестерёнку.
+При первом запуске приложение ищет ключ в таком порядке:
+
+1. `%APPDATA%\mai-code\.env`;
+2. `%USERPROFILE%\Desktop\dev\.env`;
+3. `<папка приложения>\.env`;
+4. `mai-api-key.txt` рядом с проектом;
+5. переменные окружения процесса.
+
+Формат `.env` — обычный `KEY=value`, также поддерживается табуляция (`KEY\t=value`):
+
+```dotenv
+LLM_BASE_URL=https://api-ai.mai.ru/v1
+LLM_MODEL=deepseek-v4.1-flash
+LLM_API_KEY=sk-...
+AGENTROUTER_BASE_URL=https://agentrouter.org/v1
+AGENTROUTER_MODEL=claude-opus-5-5
+AGENTROUTER_API_KEY=sk-...
+```
+
+Из `LLM_*` создаётся провайдер MAI, из `AGENTROUTER_*` — провайдер AgentRouter.
+Дальше ключи и адреса правятся в панели «Провайдеры» и хранятся в `%APPDATA%\mai-code\settings.json`.
 
 | Параметр | Значение по умолчанию |
 |---|---|
@@ -75,6 +100,38 @@ powershell -ExecutionPolicy Bypass -File .\install-shortcut.ps1
 | Глобальные плагины | `%APPDATA%\mai-code\plugins\` |
 | Навыки проекта | `<проект>/.mai-code/skills\` |
 | Плагины проекта | `<проект>/.mai-code/plugins\` |
+
+## Провайдеры
+
+Кнопка «Провайдеры» в верхней панели. Каждый провайдер — это `Base URL` + `API-ключ` +
+необязательный статический список моделей. Модели в дропдауне показываются группами:
+
+```
+MAI · DeepSeek V4.1 Flash
+AgentRouter · Claude Opus 5.5
+```
+
+«Проверить» дергает `GET {baseURL}/models` и показывает HTTP-статус и число моделей.
+Ключ хранится локально и наружу отдаётся только как `sk-abc…`.
+
+Подходит любой OpenAI-совместимый шлюз: OpenAI, DeepSeek, Anthropic (в режиме
+совместимости), OpenRouter, локальный Ollama/LM Studio. GitHub Copilot требует отдельной
+OAuth-авторизации и пока не поддержан.
+
+## Рантаймы
+
+Список рядом с моделью переключает между встроенным агентом и внешним CLI:
+
+- **OpenCode** — `opencode run --format json {prompt}`, вывод разбирается из JSON-событий;
+- **herdr** — `herdr agent prompt {target} {prompt} --wait`;
+- **Claude Code** — `claude -p {prompt}`;
+- **Codex CLI** — `codex exec {prompt}`;
+- **Gemini CLI** — `gemini -p {prompt}`;
+- **Своя команда** — любые `command` + `args` с подстановками `{prompt}`, `{model}`,
+  `{projectDir}`, `{target}`.
+
+Процесс запускается в папке проекта, вывод идёт в чат потоком, кнопка «Остановить»
+убивает дерево процессов. Ответ сохраняется в историю как сообщение рантайма.
 
 ## Плагин: пример
 

@@ -8,6 +8,18 @@ contextBridge.exposeInMainWorld('mai', {
     save: (patch) => invoke('settings:save', patch),
   },
   models: (force) => invoke('models:list', force),
+  providers: {
+    list: () => invoke('providers:list'),
+    save: (id, provider) => invoke('providers:save', { id, provider }),
+    remove: (id) => invoke('providers:remove', id),
+    test: (id) => invoke('providers:test', id),
+  },
+  runtimes: {
+    list: () => invoke('runtimes:list'),
+    save: (runtimes) => invoke('runtimes:save', runtimes),
+    run: (payload) => invoke('runtimes:run', payload),
+    stop: () => invoke('runtimes:stop'),
+  },
   project: {
     pick: () => invoke('project:pick'),
   },

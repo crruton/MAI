@@ -6,14 +6,18 @@ const api = window.mai;
 const state = {
   settings: null,
   models: [],
+  errors: {},
   sessions: [],
   sessionId: null,
   messages: [],
   toolResults: {},
   live: null,
+  liveRuntime: null,
   running: false,
   projectDir: '',
   model: '',
+  runtime: 'agent',
+  runtimes: {},
   renderQueued: false,
 };
 
@@ -61,14 +65,31 @@ function contextLabel(tokens) {
   if (!tokens) return '';
   if (tokens >= 1_000_000) {
     const millions = tokens / 1_048_576;
-    return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
+    if (Math.abs(millions - Math.round(millions)) < 0.1) return `${Math.round(millions)}M`;
+    return `${millions.toFixed(1)}M`;
   }
   if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`;
   return String(tokens);
 }
 
-function modelLabel(id) {
-  return state.models.find((m) => m.id === id)?.name || id || '';
+function modelEntry(key) {
+  return state.models.find((m) => m.key === key) || null;
+}
+
+function modelLabel(key) {
+  const entry = modelEntry(key);
+  if (entry) return entry.name;
+  return String(key || '').split('/').pop();
+}
+
+function providerOf(key) {
+  const providerId = String(key || '').split('/')[0];
+  return state.settings?.providers?.[providerId] || null;
+}
+
+function activeRuntime() {
+  if (state.runtime === 'agent') return null;
+  return state.runtimes[state.runtime] || null;
 }
 
 /* ---------- модальные окна ---------- */
@@ -119,7 +140,7 @@ function renderAll() {
   const stick = isNearBottom();
   box.replaceChildren();
 
-  if (!state.messages.length && !state.live) {
+  if (!state.messages.length && !state.live && !state.liveRuntime) {
     box.append(emptyState());
     return;
   }
@@ -129,6 +150,7 @@ function renderAll() {
     if (node) box.append(node);
   }
   if (state.live) box.append(liveNode());
+  if (state.liveRuntime) box.append(runtimeNode(state.liveRuntime.name, state.liveRuntime.output, null, true));
   if (stick) box.scrollTop = box.scrollHeight;
 }
 
@@ -167,6 +189,9 @@ function messageNode(message) {
       el('div', { class: 'bubble', text: message.content || '' }),
     ]);
   }
+  if (message.role === 'runtime') {
+    return runtimeNode(message.name || 'Рантайм', message.content || '', message.code, false);
+  }
   if (message.role === 'assistant') {
     const body = el('div', { class: 'msg-body' }, [
       el('div', { class: 'msg-name', text: `MAI · ${modelLabel(state.model)}` }),
@@ -202,6 +227,17 @@ function liveNode() {
     body.append(el('div', { class: 'typing' }, [el('i'), el('i'), el('i')]));
   }
   return el('div', { class: 'msg msg-assistant' }, [el('div', { class: 'avatar', text: 'M' }), body]);
+}
+
+function runtimeNode(name, output, code, running) {
+  const body = el('div', { class: 'msg-body' }, [
+    el('div', { class: 'msg-name' }, [
+      name,
+      running ? ' · выполняется' : code === 0 || code == null ? '' : ` · код ${code}`,
+    ]),
+    el('pre', { class: 'terminal', text: output || '…' }),
+  ]);
+  return el('div', { class: 'msg msg-assistant' }, [el('div', { class: 'avatar mono', text: '$' }), body]);
 }
 
 function thinkingBlock(text, open = false) {
@@ -251,7 +287,7 @@ function renderSessions() {
       onclick: () => loadSession(session.id),
     }, [
       el('span', { class: 'session-title', text: session.title || 'Без названия' }),
-      el('span', { class: 'session-meta', text: `${session.model || ''} · ${fmtDate(session.updatedAt)}` }),
+      el('span', { class: 'session-meta', text: `${modelLabel(session.model)} · ${fmtDate(session.updatedAt)}` }),
     ]);
     const del = el('span', {
       class: 'del',
@@ -276,18 +312,54 @@ function renderModels() {
     select.append(el('option', { value: state.model, text: state.model || 'Модели не загружены' }));
     return;
   }
+
+  const groups = new Map();
   for (const model of state.models) {
-    const label = `${model.name}${model.context ? ` · ${contextLabel(model.context)}` : ''}`;
-    select.append(el('option', { value: model.id, text: label }));
+    if (!groups.has(model.provider)) groups.set(model.provider, { name: model.providerName, items: [] });
+    groups.get(model.provider).items.push(model);
+  }
+
+  for (const [, group] of groups) {
+    const optgroup = el('optgroup', { label: group.name });
+    for (const model of group.items) {
+      const suffix = model.context ? ` · ${contextLabel(model.context)}` : '';
+      optgroup.append(el('option', { value: model.key, text: `${model.name}${suffix}` }));
+    }
+    select.append(optgroup);
+  }
+
+  if (!state.models.some((m) => m.key === state.model) && state.models[0]) {
+    state.model = state.models[0].key;
   }
   select.value = state.model;
+}
+
+function renderRuntimes() {
+  const select = $('#runtime-select');
+  select.replaceChildren();
+  select.append(el('option', { value: 'agent', text: 'Встроенный агент' }));
+  for (const [id, runtime] of Object.entries(state.runtimes)) {
+    const disabled = runtime.enabled === false;
+    const option = el('option', {
+      value: id,
+      text: `${runtime.name || id}${disabled ? ' (выкл.)' : ''}`,
+    });
+    if (disabled) option.disabled = true;
+    select.append(option);
+  }
+  if (state.runtime !== 'agent' && !state.runtimes[state.runtime]) state.runtime = 'agent';
+  select.value = state.runtime;
 }
 
 function updateChrome() {
   $('#project-name').textContent = shortPath(state.projectDir);
   $('#project-name').title = state.projectDir || '';
-  $('#conn').classList.toggle('bad', !state.settings?.apiKeySet);
-  $('#conn').querySelector('span').textContent = state.settings?.apiKeySet ? 'MAI подключён' : 'нет ключа';
+  const provider = providerOf(state.model);
+  const ready = Boolean(provider?.apiKeySet);
+  $('#conn').classList.toggle('bad', !ready);
+  $('#conn').querySelector('span').textContent = ready
+    ? `${provider?.name || 'MAI'} подключён`
+    : `нет ключа · ${provider?.name || 'MAI'}`;
 }
 
 /* ---------- данные ---------- */
@@ -306,6 +378,7 @@ async function loadSession(id) {
   if (session.projectDir) state.projectDir = session.projectDir;
   state.toolResults = {};
   state.live = null;
+  state.liveRuntime = null;
   for (const message of state.messages) {
     if (message.role === 'tool' && message.tool_call_id) {
       state.toolResults[message.tool_call_id] = {
@@ -325,6 +398,7 @@ function newChat() {
   state.messages = [];
   state.toolResults = {};
   state.live = null;
+  state.liveRuntime = null;
   renderAll();
   renderSessions();
   $('#input').focus();
@@ -336,11 +410,13 @@ async function loadModels(force = false) {
     toast(result.error, 'err');
     return;
   }
-  state.models = result.models;
-  if (!state.models.some((m) => m.id === state.model) && state.models[0]) {
-    state.model = state.models[0].id;
+  state.models = result.models || [];
+  state.errors = result.errors || {};
+  for (const [provider, error] of Object.entries(state.errors)) {
+    console.warn(`[models] ${provider}: ${error}`);
   }
   renderModels();
+  updateChrome();
 }
 
 /* ---------- отправка ---------- */
@@ -350,10 +426,15 @@ async function send() {
   const input = $('#input');
   const text = input.value.trim();
   if (!text) return;
-  if (!state.settings?.apiKeySet) {
-    toast('Сначала задайте API-ключ MAI в настройках', 'err');
-    openSettings();
-    return;
+
+  const runtime = activeRuntime();
+  if (!runtime) {
+    const provider = providerOf(state.model);
+    if (!provider?.apiKeySet) {
+      toast(`Нет ключа провайдера «${provider?.name || 'MAI'}»`, 'err');
+      openProviders();
+      return;
+    }
   }
   if (!state.projectDir) {
     toast('Выберите папку проекта', 'err');
@@ -363,6 +444,12 @@ async function send() {
 
   input.value = '';
   autosize();
+
+  if (runtime) {
+    await sendRuntime(runtime, text);
+    return;
+  }
+
   state.messages.push({ role: 'user', content: text });
   state.live = { content: '', reasoning: '', tools: [] };
   state.running = true;
@@ -388,21 +475,55 @@ async function send() {
   await refreshSessions();
 }
 
+async function sendRuntime(runtime, text) {
+  state.messages.push({ role: 'user', content: text });
+  state.liveRuntime = { name: runtime.name || 'Рантайм', output: '' };
+  state.running = true;
+  setRunning(true);
+  renderAll();
+
+  const result = await api.runtimes.run({
+    sessionId: state.sessionId,
+    runtime: state.runtime,
+    text,
+    model: state.model,
+    projectDir: state.projectDir,
+  });
+
+  if (!result.ok) {
+    toast(result.error, 'err');
+    state.running = false;
+    state.liveRuntime = null;
+    setRunning(false);
+    state.messages.pop();
+    renderAll();
+    return;
+  }
+  state.sessionId = result.sessionId;
+  await refreshSessions();
+}
+
 function setRunning(running) {
   $('#send').hidden = running;
   $('#stop').hidden = !running;
-  $('#composer-hint').textContent = running ? 'Агент работает…' : '';
+  $('#composer-hint').textContent = running
+    ? state.liveRuntime
+      ? 'Рантайм работает…'
+      : 'Агент работает…'
+    : '';
 }
 
-/* ---------- события агента ---------- */
+/* ---------- события ---------- */
 
 function handleEvent(event) {
   switch (event.type) {
     case 'delta':
+      if (!state.live) state.live = { content: '', reasoning: '', tools: [] };
       state.live.content += event.text;
       scheduleRender();
       break;
     case 'reasoning':
+      if (!state.live) state.live = { content: '', reasoning: '', tools: [] };
       state.live.reasoning += event.text;
       scheduleRender();
       break;
@@ -412,6 +533,7 @@ function handleEvent(event) {
       scheduleRender();
       break;
     case 'tool_call':
+      if (!state.live) state.live = { content: '', reasoning: '', tools: [] };
       state.live.tools.push({ id: event.id, name: event.name, args: safeJson(JSON.stringify(event.args)) });
       scheduleRender();
       break;
@@ -442,6 +564,29 @@ function handleEvent(event) {
       if (event.sessionId) state.sessionId = event.sessionId;
       refreshSessions();
       break;
+    case 'runtime:start':
+      if (state.liveRuntime) state.liveRuntime.name = event.name;
+      scheduleRender();
+      break;
+    case 'runtime:chunk':
+      if (state.liveRuntime) {
+        state.liveRuntime.output += event.text;
+        scheduleRender();
+      }
+      break;
+    case 'runtime:exit': {
+      const name = event.name || state.liveRuntime?.name || 'Рантайм';
+      const output = event.output ?? state.liveRuntime?.output ?? '';
+      state.liveRuntime = null;
+      state.running = false;
+      setRunning(false);
+      state.messages.push({ role: 'runtime', name, content: output, code: event.code });
+      if (event.sessionId) state.sessionId = event.sessionId;
+      if (event.error) toast(event.error, 'err');
+      renderAll();
+      refreshSessions();
+      break;
+    }
     default:
       break;
   }
@@ -484,8 +629,6 @@ function askApproval(event) {
 
 async function openSettings() {
   const settings = state.settings;
-  const baseURL = el('input', { value: settings.baseURL });
-  const apiKey = el('input', { type: 'password', placeholder: settings.apiKeySet ? 'ключ сохранён (***)' : 'sk-…' });
   const temperature = el('input', { type: 'number', step: '0.1', min: '0', max: '2', value: settings.temperature });
   const maxIterations = el('input', { type: 'number', min: '1', max: '100', value: settings.maxIterations });
   const outside = el('input', { type: 'checkbox' });
@@ -494,8 +637,6 @@ async function openSettings() {
   const modal = openModal({
     title: 'Настройки',
     body: [
-      field('Base URL (OpenAI-совместимый шлюз)', baseURL),
-      field('API-ключ', apiKey),
       el('div', { class: 'row' }, [
         field('Температура', temperature),
         field('Максимум шагов агента', maxIterations),
@@ -504,7 +645,10 @@ async function openSettings() {
         el('span', { text: 'Доступ к файлам вне проекта' }),
         el('label', { class: 'hint-text' }, [outside, ' разрешить абсолютные пути вне папки проекта']),
       ]),
-      el('p', { class: 'hint-text', text: 'Ключ хранится локально в %APPDATA%\\mai-code\\settings.json' }),
+      el('p', {
+        class: 'hint-text',
+        text: 'Провайдеры и ключи — в панели «Провайдеры». Настройки лежат в %APPDATA%\\mai-code\\settings.json',
+      }),
     ],
     footer: [
       el('button', {
@@ -518,16 +662,12 @@ async function openSettings() {
         type: 'button',
         text: 'Сохранить',
         onclick: async () => {
-          const patch = {
-            baseURL: baseURL.value.trim(),
+          state.settings = await api.settings.save({
             temperature: Number(temperature.value),
             maxIterations: Number(maxIterations.value),
             allowOutsideProject: outside.checked,
-          };
-          if (apiKey.value.trim()) patch.apiKey = apiKey.value.trim();
-          state.settings = await api.settings.save(patch);
+          });
           updateChrome();
-          await loadModels(true);
           modal.close();
           toast('Настройки сохранены', 'ok');
         },
@@ -636,6 +776,272 @@ async function openSkills() {
           });
           modal.close();
           openSkills();
+        },
+      }),
+    ],
+  });
+}
+
+/* ---------- провайдеры ---------- */
+
+function parseModelsText(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [id, name, context] = line.split('|').map((part) => part.trim());
+      return { id, name: name || '', context: context ? Number(context) : null };
+    })
+    .filter((model) => model.id);
+}
+
+function modelsToText(models) {
+  return (models || []).map((m) => [m.id, m.name || '', m.context || ''].join(' | ')).join('\n');
+}
+
+function providerForm({ id = '', provider = {}, onDone }) {
+  const idInput = el('input', { placeholder: 'agentrouter', value: id });
+  if (id) idInput.disabled = true;
+  const nameInput = el('input', { placeholder: 'AgentRouter', value: provider.name || '' });
+  const baseInput = el('input', { placeholder: 'https://agentrouter.org/v1', value: provider.baseURL || '' });
+  const keyInput = el('input', {
+    type: 'password',
+    placeholder: provider.apiKeySet ? `ключ сохранён (${provider.keyHint}…)` : 'sk-…',
+  });
+  const modelsArea = el('textarea', {
+    rows: '4',
+    placeholder: 'claude-opus-5-5 | Claude Opus 5.5 | 200000',
+  });
+  modelsArea.value = modelsToText(provider.models);
+
+  const modal = openModal({
+    title: id ? `Провайдер: ${provider.name || id}` : 'Новый провайдер',
+    body: [
+      el('div', { class: 'row' }, [field('ID', idInput), field('Название', nameInput)]),
+      field('Base URL (OpenAI-совместимый)', baseInput),
+      field('API-ключ', keyInput),
+      field('Модели (если шлюз не отдаёт /models)', modelsArea),
+      el('p', { class: 'hint-text', text: 'Формат строки: id | Название | контекст. Пустое поле — список возьмётся из /models.' }),
+    ],
+    footer: [
+      el('button', { class: 'btn', type: 'button', text: 'Отмена', onclick: () => modal.close() }),
+      el('button', {
+        class: 'btn primary',
+        type: 'button',
+        text: 'Сохранить',
+        onclick: async () => {
+          const result = await api.providers.save(id || idInput.value, {
+            name: nameInput.value.trim(),
+            baseURL: baseInput.value.trim(),
+            apiKey: keyInput.value.trim(),
+            models: parseModelsText(modelsArea.value),
+          });
+          if (!result.ok) return toast(result.error, 'err');
+          state.settings = await api.settings.get();
+          await loadModels(true);
+          renderRuntimes();
+          modal.close();
+          onDone?.();
+          toast('Провайдер сохранён', 'ok');
+        },
+      }),
+    ],
+  });
+}
+
+async function openProviders() {
+  const providers = await api.providers.list();
+  const list = el('div', { class: 'list' });
+  for (const [id, provider] of Object.entries(providers)) {
+    const badge = el('span', {
+      class: `badge ${provider.apiKeySet ? 'ok' : 'err'}`,
+      text: provider.apiKeySet ? 'ключ есть' : 'нет ключа',
+    });
+    const live = state.models.filter((m) => m.provider === id).length;
+    const status = el('span', { class: 'badge', text: `${live || provider.models?.length || 0} моделей` });
+    list.append(
+      el('div', { class: 'list-item' }, [
+        el('div', {}, [
+          el('div', { class: 'title' }, [provider.name || id, ' ', badge, ' ', status]),
+          el('div', { class: 'sub', text: provider.baseURL }),
+        ]),
+        el('div', { class: 'actions' }, [
+          el('button', {
+            class: 'btn ghost',
+            type: 'button',
+            text: 'Проверить',
+            onclick: async () => {
+              const res = await api.providers.test(id);
+              if (res.ok) toast(`${provider.name || id}: HTTP ${res.status}, моделей ${res.count}`, 'ok');
+              else toast(`${provider.name || id}: ${res.error}`, 'err');
+            },
+          }),
+          el('button', {
+            class: 'btn ghost',
+            type: 'button',
+            text: 'Изменить',
+            onclick: () => {
+              modal.close();
+              providerForm({ id, provider, onDone: openProviders });
+            },
+          }),
+          el('button', {
+            class: 'btn ghost',
+            type: 'button',
+            text: 'Удалить',
+            onclick: async () => {
+              const res = await api.providers.remove(id);
+              if (!res.ok) return toast(res.error, 'err');
+              state.settings = await api.settings.get();
+              await loadModels(true);
+              modal.close();
+              openProviders();
+            },
+          }),
+        ]),
+      ]),
+    );
+  }
+
+  const modal = openModal({
+    title: 'Провайдеры',
+    body: [
+      list,
+      el('p', {
+        class: 'hint-text',
+        text: 'Любой OpenAI-совместимый шлюз: MAI, AgentRouter, OpenAI, DeepSeek. Anthropic подключается через совместимый режим.',
+      }),
+    ],
+    footer: [
+      el('button', {
+        class: 'btn primary',
+        type: 'button',
+        text: 'Добавить провайдера',
+        onclick: () => {
+          modal.close();
+          providerForm({ onDone: openProviders });
+        },
+      }),
+    ],
+  });
+}
+
+/* ---------- рантаймы ---------- */
+
+function runtimeForm({ id, runtime = {}, onDone }) {
+  const idInput = el('input', { placeholder: 'opencode', value: id || '' });
+  if (id) idInput.disabled = true;
+  const nameInput = el('input', { placeholder: 'OpenCode', value: runtime.name || '' });
+  const commandInput = el('input', { placeholder: 'opencode', value: runtime.command || '' });
+  const argsArea = el('textarea', {
+    rows: '5',
+    placeholder: 'run\n--format\njson\n{prompt}',
+  });
+  argsArea.value = (runtime.args || []).join('\n');
+  const targetInput = el('input', { placeholder: 'имя агента в herdr (для {target})', value: runtime.target || '' });
+  const parserSelect = el('select', {}, [
+    el('option', { value: '', text: 'Обычный текст' }),
+    el('option', { value: 'opencode-json', text: 'OpenCode JSON-события' }),
+  ]);
+  parserSelect.value = runtime.parser || '';
+  const enabled = el('input', { type: 'checkbox' });
+  enabled.checked = runtime.enabled !== false;
+
+  const modal = openModal({
+    title: id ? `Рантайм: ${runtime.name || id}` : 'Новый рантайм',
+    body: [
+      el('div', { class: 'row' }, [field('ID', idInput), field('Название', nameInput)]),
+      field('Команда', commandInput),
+      field('Аргументы (по одному в строке)', argsArea),
+      el('div', { class: 'row' }, [field('Цель {target} (herdr)', targetInput), field('Формат вывода', parserSelect)]),
+      el('label', { class: 'hint-text' }, [enabled, ' показывать в списке рантаймов']),
+      el('p', {
+        class: 'hint-text',
+        text: 'Подстановки: {prompt}, {model}, {projectDir}, {target}. Если {prompt} не указан, запрос добавится последним аргументом.',
+      }),
+    ],
+    footer: [
+      el('button', { class: 'btn', type: 'button', text: 'Отмена', onclick: () => modal.close() }),
+      el('button', {
+        class: 'btn primary',
+        type: 'button',
+        text: 'Сохранить',
+        onclick: async () => {
+          const nextId = (id || idInput.value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+          if (!nextId) return toast('Нужен ID рантайма', 'err');
+          const next = {
+            ...state.runtimes,
+            [nextId]: {
+              ...runtime,
+              name: nameInput.value.trim() || nextId,
+              command: commandInput.value.trim(),
+              args: argsArea.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+              target: targetInput.value.trim(),
+              parser: parserSelect.value,
+              enabled: enabled.checked,
+            },
+          };
+          state.runtimes = await api.runtimes.save(next);
+          state.settings = await api.settings.get();
+          renderRuntimes();
+          modal.close();
+          onDone?.();
+          toast('Рантайм сохранён', 'ok');
+        },
+      }),
+    ],
+  });
+}
+
+async function openRuntimes() {
+  state.runtimes = await api.runtimes.list();
+  const list = el('div', { class: 'list' });
+  const entries = Object.entries(state.runtimes);
+  if (!entries.length) list.append(el('p', { class: 'hint-text', text: 'Рантаймов нет.' }));
+  for (const [id, runtime] of entries) {
+    const badge = el('span', {
+      class: `badge ${runtime.enabled === false ? '' : 'ok'}`,
+      text: runtime.enabled === false ? 'выключен' : 'включён',
+    });
+    list.append(
+      el('div', { class: 'list-item' }, [
+        el('div', {}, [
+          el('div', { class: 'title' }, [runtime.name || id, ' ', badge]),
+          el('div', { class: 'sub', text: [runtime.command, ...(runtime.args || [])].join(' ') || 'команда не задана' }),
+        ]),
+        el('div', { class: 'actions' }, [
+          el('button', {
+            class: 'btn ghost',
+            type: 'button',
+            text: 'Изменить',
+            onclick: () => {
+              modal.close();
+              runtimeForm({ id, runtime, onDone: openRuntimes });
+            },
+          }),
+        ]),
+      ]),
+    );
+  }
+
+  const modal = openModal({
+    title: 'Рантаймы',
+    body: [
+      list,
+      el('p', {
+        class: 'hint-text',
+        text: 'Внешний агент запускается как процесс в папке проекта. Выберите его в списке рядом с моделью и отправьте запрос.',
+      }),
+    ],
+    footer: [
+      el('button', {
+        class: 'btn primary',
+        type: 'button',
+        text: 'Добавить рантайм',
+        onclick: () => {
+          modal.close();
+          runtimeForm({ onDone: openRuntimes });
         },
       }),
     ],
@@ -806,9 +1212,11 @@ function autosize() {
 async function init() {
   state.settings = await api.settings.get();
   state.projectDir = state.settings.projectDir || '';
-  state.model = state.settings.model || 'deepseek-v4.1-flash';
+  state.model = state.settings.activeModel || '';
+  state.runtimes = await api.runtimes.list();
   updateChrome();
   renderModels();
+  renderRuntimes();
   await loadModels();
   await refreshSessions();
   renderAll();
@@ -819,10 +1227,19 @@ async function init() {
   $('#project-btn').addEventListener('click', pickProject);
   $('#settings-btn').addEventListener('click', openSettings);
   $('#send').addEventListener('click', send);
-  $('#stop').addEventListener('click', () => api.chat.stop());
+  $('#stop').addEventListener('click', () => {
+    if (state.liveRuntime) api.runtimes.stop();
+    else api.chat.stop();
+  });
+
   $('#model-select').addEventListener('change', async (event) => {
     state.model = event.target.value;
-    state.settings = await api.settings.save({ model: state.model });
+    state.settings = await api.settings.save({ activeModel: state.model });
+    updateChrome();
+  });
+
+  $('#runtime-select').addEventListener('change', (event) => {
+    state.runtime = event.target.value;
   });
 
   for (const button of document.querySelectorAll('[data-panel]')) {
@@ -830,6 +1247,8 @@ async function init() {
       const panel = button.dataset.panel;
       if (panel === 'agents') openAgents();
       if (panel === 'skills') openSkills();
+      if (panel === 'providers') openProviders();
+      if (panel === 'runtimes') openRuntimes();
       if (panel === 'mcp') openMcp();
       if (panel === 'plugins') openPlugins();
     });

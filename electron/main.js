@@ -5,7 +5,8 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, publicSettings, dataDir } from './lib/config.js';
-import { listModels } from './lib/models.js';
+import { listModels, resolveModel } from './lib/models.js';
+import { startRuntime, describeRuntime } from './lib/runtimes.js';
 import { createSession, deleteSession, getSession, listSessions, saveSession } from './lib/sessions.js';
 import { runAgent } from './lib/agent.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile } from './lib/skills.js';
@@ -42,7 +43,7 @@ function send(window, event) {
 
 function runState(window) {
   const id = window.id;
-  if (!runs.has(id)) runs.set(id, { controller: null, approvals: new Map() });
+  if (!runs.has(id)) runs.set(id, { controller: null, runtime: null, approvals: new Map() });
   return runs.get(id);
 }
 
@@ -89,19 +90,157 @@ ipcMain.handle('settings:get', () => publicSettings());
 
 ipcMain.handle('settings:save', async (_e, patch) => {
   const clean = { ...patch };
-  if (clean.apiKey === '***' || clean.apiKey === '') delete clean.apiKey;
+  delete clean.apiKey;
+  delete clean.baseURL;
+  delete clean.model;
   const next = saveSettings(clean);
   if (patch.mcpServers) await mcp.sync(next.mcpServers || {});
-  return { ...next, apiKey: next.apiKey ? '***' : '', apiKeySet: Boolean(next.apiKey) };
+  return publicSettings();
 });
 
 ipcMain.handle('models:list', async (_e, force) => {
   try {
-    return { ok: true, models: await listModels({ force }) };
+    const { models, errors } = await listModels({ force });
+    return { ok: true, models, errors };
   } catch (err) {
     console.error('[models]', err?.message, err?.cause?.message || '');
     return { ok: false, error: err.message };
   }
+});
+
+// ---------- провайдеры ----------
+
+ipcMain.handle('providers:list', () => publicSettings().providers);
+
+ipcMain.handle('providers:save', async (_e, { id, provider }) => {
+  const key = String(id || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+  if (!key) return { ok: false, error: 'Нужен идентификатор провайдера' };
+  if (!provider?.baseURL) return { ok: false, error: 'Нужен Base URL' };
+
+  const settings = loadSettings();
+  const providers = { ...settings.providers };
+  const previous = providers[key] || {};
+  const nextKey = provider.apiKey && provider.apiKey !== '***' ? provider.apiKey : previous.apiKey || '';
+
+  providers[key] = {
+    name: provider.name || key,
+    baseURL: String(provider.baseURL).replace(/\/$/, ''),
+    apiKey: nextKey,
+    models: (provider.models || []).filter((m) => m?.id),
+  };
+
+  saveSettings({ providers });
+  return { ok: true, providers: publicSettings().providers };
+});
+
+ipcMain.handle('providers:remove', async (_e, id) => {
+  const settings = loadSettings();
+  if (Object.keys(settings.providers).length <= 1) {
+    return { ok: false, error: 'Нельзя удалить последнего провайдера' };
+  }
+  const providers = { ...settings.providers };
+  delete providers[id];
+  const patch = { providers };
+  if (String(settings.activeModel).startsWith(`${id}/`)) {
+    const first = Object.keys(providers)[0];
+    patch.activeModel = `${first}/${providers[first].models?.[0]?.id || 'default'}`;
+  }
+  saveSettings(patch);
+  return { ok: true, providers: publicSettings().providers };
+});
+
+ipcMain.handle('providers:test', async (_e, id) => {
+  const settings = loadSettings();
+  const provider = settings.providers[id];
+  if (!provider) return { ok: false, error: 'Провайдер не найден' };
+  try {
+    const res = await fetch(`${provider.baseURL}/models`, {
+      headers: provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {},
+      signal: AbortSignal.timeout(10_000),
+    });
+    const text = await res.text();
+    if (!res.ok) return { ok: false, status: res.status, error: text.slice(0, 300) };
+    const body = JSON.parse(text);
+    return { ok: true, status: res.status, count: (body.data || []).length };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+// ---------- рантаймы ----------
+
+ipcMain.handle('runtimes:list', () => loadSettings().runtimes || {});
+
+ipcMain.handle('runtimes:save', (_e, runtimes) => {
+  saveSettings({ runtimes });
+  return loadSettings().runtimes;
+});
+
+ipcMain.handle('runtimes:run', async (event, payload) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const state = runState(window);
+  if (state.runtime) return { ok: false, error: 'Рантайм уже выполняется' };
+
+  const settings = loadSettings();
+  const runtime = settings.runtimes?.[payload.runtime];
+  if (!runtime) return { ok: false, error: 'Рантайм не найден' };
+  if (!runtime.command) return { ok: false, error: 'У рантайма не задана команда' };
+
+  const projectDir = payload.projectDir || settings.projectDir;
+  const model = payload.model || settings.activeModel || '';
+  const prompt = String(payload.text || '').trim();
+  if (!prompt) return { ok: false, error: 'Пустой запрос' };
+
+  let session = payload.sessionId ? getSession(payload.sessionId) : null;
+  if (!session) session = createSession({ title: '', model, projectDir });
+  session.projectDir = projectDir;
+  session.model = model;
+  session.messages.push({ role: 'user', content: prompt });
+  if (!session.title || session.title === 'Новый чат') {
+    session.title = prompt.slice(0, 60);
+  }
+  saveSession(session);
+
+  const handle = startRuntime({
+    runtime,
+    prompt,
+    model,
+    projectDir,
+    onData: (text) => send(window, { type: 'runtime:chunk', text }),
+    onExit: ({ code, error, output }) => {
+      state.runtime = null;
+      session.messages.push({
+        role: 'runtime',
+        name: runtime.name || payload.runtime,
+        content: output || '',
+        code,
+      });
+      saveSession(session);
+      send(window, {
+        type: 'runtime:exit',
+        code,
+        error,
+        sessionId: session.id,
+        name: runtime.name || payload.runtime,
+        output: output || '',
+      });
+    },
+  });
+
+  state.runtime = handle;
+  send(window, {
+    type: 'runtime:start',
+    name: runtime.name || payload.runtime,
+    command: describeRuntime(runtime, { prompt, model, projectDir, target: runtime.target || '' }),
+  });
+
+  return { ok: true, sessionId: session.id, title: session.title };
+});
+
+ipcMain.handle('runtimes:stop', (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  runState(window).runtime?.kill();
+  return true;
 });
 
 // ---------- проект ----------
@@ -128,10 +267,19 @@ ipcMain.handle('chat:start', async (event, payload) => {
   if (state.controller) return { ok: false, error: 'Уже выполняется другой запрос' };
 
   const settings = loadSettings();
-  if (!settings.apiKey) return { ok: false, error: 'Не задан API-ключ MAI. Откройте настройки.' };
+  const activeKey = payload.model || settings.activeModel;
+  let resolved;
+  try {
+    resolved = resolveModel(settings, activeKey);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  if (!resolved.provider.apiKey) {
+    return { ok: false, error: `Не задан API-ключ провайдера «${resolved.provider.name}». Откройте панель «Провайдеры».` };
+  }
 
   const projectDir = payload.projectDir || settings.projectDir;
-  const model = payload.model || settings.model;
+  const model = activeKey;
   let session = payload.sessionId ? getSession(payload.sessionId) : null;
   if (!session) {
     session = createSession({ title: '', model, projectDir });
@@ -155,8 +303,9 @@ ipcMain.handle('chat:start', async (event, payload) => {
     try {
       const history = await runAgent({
         settings,
+        provider: resolved.provider,
         projectDir,
-        model,
+        model: resolved.modelId,
         messages: session.messages,
         signal: controller.signal,
         mcp,

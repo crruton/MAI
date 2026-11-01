@@ -10,13 +10,17 @@
 - [x] `AGENTS.md`, навыки, MCP, плагины.
 - [x] Самоперезапуск с `--use-system-ca` для корпоративного TLS.
 - [x] Иконка и ярлык на рабочем столе.
+- [x] Реестр провайдеров: `provider/model` в дропдауне, панель «Провайдеры»,
+      ключи из `.env`, кэш списков моделей.
+- [x] AgentRouter как второй провайдер (`claude-opus-5-5`).
+- [x] Вкладка «Рантаймы»: generic-команда, пресеты OpenCode / herdr / Claude Code /
+      Codex CLI / Gemini CLI, стриминг вывода, «Стоп», парсер JSON-событий OpenCode.
 
 ## Ближайшее
 
-- [ ] Реестр провайдеров: OpenAI, Anthropic (OpenAI-compat), DeepSeek.
-- [ ] `provider/model` в дропдауне и в истории чата.
-- [ ] Вкладка «Рантаймы»: generic-команда + пресеты OpenCode и herdr.
 - [ ] Установщик (electron-builder) и portable-сборка.
+- [ ] Проверка ключа AgentRouter — текущий ключ из `.env` возвращает 401.
+- [ ] Пресеты для DeepSeek harness, Hermes и JEV (пока добавляются как «своя команда»).
 
 ## Дальше
 
