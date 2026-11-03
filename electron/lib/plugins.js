@@ -24,7 +24,12 @@ export async function loadPlugins(projectDir) {
           if (tool?.schema?.function?.name && typeof tool.run === 'function') tools.push(tool);
         }
         if (typeof plugin.transformMessages === 'function') transforms.push(plugin.transformMessages);
-        loaded.push({ name: plugin.name || entry.name.replace(/\.js$/, ''), file, tools: (plugin.tools || []).length });
+        loaded.push({
+          name: plugin.name || entry.name.replace(/\.js$/, ''),
+          file,
+          tools: (plugin.tools || []).length,
+          toolNames: (plugin.tools || []).map((t) => t?.schema?.function?.name).filter(Boolean),
+        });
       } catch (err) {
         loaded.push({ name: entry.name, file, error: err?.message || String(err), tools: 0 });
       }

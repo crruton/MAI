@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { fsTools } from './tools/fs.js';
 import { shellTools } from './tools/shell.js';
 import { skillTools } from './tools/skills.js';
+import { repowiseTools } from './tools/repowise.js';
 import { listSkills, readAgents } from './skills.js';
 
 const BASE_PROMPT = `Ты — MAI Code, агент для программирования на рабочей машине пользователя.
@@ -75,7 +76,8 @@ export async function runAgent({
 
   const client = new OpenAI({ apiKey: provider.apiKey, baseURL: provider.baseURL, maxRetries: 1 });
   const skills = listSkills(projectDir);
-  const tools = [...fsTools, ...shellTools, ...skillTools, ...pluginTools, ...mcp.toolSchemas()];
+  const repoTools = settings.repowise?.enabled ? repowiseTools : [];
+  const tools = [...fsTools, ...shellTools, ...skillTools, ...repoTools, ...pluginTools, ...mcp.toolSchemas()];
 
   const system = systemPrompt({ projectDir, skills, mcpStatus: mcp.status() });
   let history = trimMessages([...messages]);
@@ -161,7 +163,7 @@ export async function runAgent({
         } else {
           const tool = tools.find((t) => t.schema.function.name === call.function.name);
           if (!tool) throw new Error(`Неизвестный инструмент: ${call.function.name}`);
-          result = await tool.run({ projectDir, approve, allowOutsideProject: settings.allowOutsideProject }, args);
+          result = await tool.run({ projectDir, approve, allowOutsideProject: settings.allowOutsideProject, repowise: settings.repowise }, args);
         }
       } catch (err) {
         ok = false;

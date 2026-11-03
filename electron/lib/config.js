@@ -13,6 +13,20 @@ const DEFAULTS = {
   activeModel: '',
   providers: {},
   runtimes: {},
+  infra: {
+    enabled: false,
+    postgresUrl: 'postgres://mai:mai@127.0.0.1:5433/mai',
+    vaultAddr: 'http://127.0.0.1:8200',
+    vaultToken: '',
+    seaweedUrl: 'http://127.0.0.1:8888',
+    embeddingProvider: 'mai',
+    embeddingModel: 'bge-m3',
+    dimension: 1024,
+  },
+  repowise: {
+    enabled: false,
+    distill: true,
+  },
 };
 
 // Модели, которые показываем, если шлюз не отдал /models.
@@ -184,6 +198,18 @@ export function saveSettings(patch) {
     next.providers = providers;
   }
 
+  if (patch.infra) {
+    const previous = current.infra || {};
+    next.infra = { ...previous, ...patch.infra };
+    if (!next.infra.vaultToken || next.infra.vaultToken === '***') {
+      next.infra.vaultToken = previous.vaultToken || '';
+    }
+  }
+
+  if (patch.repowise) {
+    next.repowise = { ...(current.repowise || {}), ...patch.repowise };
+  }
+
   // После миграции на реестр провайдеров старые поля не нужны (и не должны лежать открытым ключом).
   if (next.providers && Object.keys(next.providers).length) {
     delete next.apiKey;
@@ -207,6 +233,11 @@ export function publicSettings() {
     };
   }
   const safe = { ...s, providers };
+  safe.infra = {
+    ...(s.infra || {}),
+    vaultToken: s.infra?.vaultToken ? '***' : '',
+    vaultTokenSet: Boolean(s.infra?.vaultToken),
+  };
   // Старый формат хранил ключ в корне настроек — наружу его не отдаём.
   delete safe.apiKey;
   delete safe.baseURL;

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MAI Code — Доски</title>
+    <link rel="stylesheet" href="board.css" />
+  </head>
+  <body>
+    <div class="board-app">
+      <header class="board-topbar">
+        <div class="board-brand">
+          <div class="brand-mark">M</div>
+          <div class="brand-text">
+            <div class="brand-title">MAI Code</div>
+            <div class="brand-sub" id="board-subtitle">доски проекта</div>
+          </div>
+        </div>
+
+        <nav class="board-tabs" id="board-tabs">
+          <button class="tab" data-board="delivery">Доставка</button>
+          <button class="tab" data-board="architecture">Архитектура</button>
+          <button class="tab" data-board="runners">Рантаймы</button>
+          <button class="tab" data-board="quality">Качество</button>
+          <button class="tab" data-board="storage">Хранилище</button>
+        </nav>
+
+        <div class="board-actions">
+          <button class="project-chip" id="project-chip" title="Сменить папку проекта">
+            <span class="dot"></span>
+            <span id="project-name">Папка не выбрана</span>
+          </button>
+          <button class="btn ghost small" id="refresh-btn" title="Обновить данные">Обновить</button>
+          <button class="btn ghost small" id="main-btn" title="Перейти в главное окно">Чат</button>
+        </div>
+      </header>
+
+      <main class="board-view" id="view">
+        <!-- Заглушка на время загрузки mermaid и модуля доски. -->
+        <div class="board-loading">
+          <div class="board-loading-spinner"></div>
+          <div class="board-loading-title">Загружаю доску…</div>
+          <div class="board-loading-note">Подключаю движок диаграмм и читаю артефакты проекта.</div>
+        </div>
+      </main>
+    </div>
+
+    <div id="modal-root"></div>
+    <div id="toasts"></div>
+
+    <script src="../node_modules/mermaid/dist/mermaid.min.js"></script>
+    <script type="module" src="board.js"></script>
+  </body>
+</html>

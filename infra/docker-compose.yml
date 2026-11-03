@@ -1,0 +1,58 @@
+# Опциональная инфраструктура MAI Code.
+# Приложение работает и без неё — см. docs/STORAGE.md.
+#
+#   docker compose -f infra/docker-compose.yml up -d
+#   docker compose -f infra/docker-compose.yml ps
+#
+# Порты выбраны так, чтобы не пересекаться со стеком CNC (Postgres там на 5432).
+
+name: mai-code
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: mai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mai
+      POSTGRES_PASSWORD: mai
+      POSTGRES_DB: mai
+    ports:
+      - "5433:5432"
+    volumes:
+      - mai-pgdata:/var/lib/postgresql/data
+      - ./init/01-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mai -d mai"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  vault:
+    image: hashicorp/vault:1.18
+    container_name: mai-vault
+    restart: unless-stopped
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${MAI_VAULT_TOKEN:-root}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200:8200"
+    command: server -dev -dev-root-token-id=${MAI_VAULT_TOKEN:-root}
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    container_name: mai-seaweedfs
+    restart: unless-stopped
+    command: server -dir=/data -s3 -s3.port=8333 -filer -filer.port=8888
+    ports:
+      - "9333:9333"
+      - "8888:8888"
+      - "8333:8333"
+    volumes:
+      - mai-seaweed:/data
+
+volumes:
+  mai-pgdata:
+  mai-seaweed:

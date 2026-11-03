@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { dataDir } from './config.js';
 
-function parseFrontmatter(text) {
+function parseFrontmatter(raw) {
+  const text = String(raw || '').replace(/^\uFEFF/, '');
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
   if (!match) return { meta: {}, body: text };
   const meta = {};

@@ -6,6 +6,18 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
  * Держит подключения к MCP-серверам из настроек.
  * Поддержаны два транспорта: локальный процесс (stdio) и HTTP (streamable http).
  */
+function withTimeout(promise, ms, message) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 export class McpManager {
   constructor() {
     this.servers = new Map(); // name -> { status, error, client, tools }
@@ -52,8 +64,8 @@ export class McpManager {
           stderr: 'pipe',
         });
       }
-      await client.connect(transport);
-      const { tools } = await client.listTools();
+      await withTimeout(client.connect(transport), 30_000, 'MCP: нет ответа на initialize за 30 с');
+      const { tools } = await withTimeout(client.listTools(), 15_000, 'MCP: нет списка инструментов за 15 с');
       entry.client = client;
       entry.tools = tools || [];
       entry.status = 'ready';

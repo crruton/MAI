@@ -1245,6 +1245,8 @@ async function init() {
   for (const button of document.querySelectorAll('[data-panel]')) {
     button.addEventListener('click', () => {
       const panel = button.dataset.panel;
+      if (panel === 'boards') api.boards.open('delivery', '');
+      if (panel === 'storage') api.boards.open('storage', '');
       if (panel === 'agents') openAgents();
       if (panel === 'skills') openSkills();
       if (panel === 'providers') openProviders();

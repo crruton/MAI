@@ -24,7 +24,13 @@ export const shellTools = [
     async run(ctx, args) {
       const allowed = await ctx.approve('run_shell', args.command);
       if (!allowed) return 'Пользователь отклонил выполнение команды.';
-      return await execute(args.command, args.cwd || ctx.projectDir);
+      let command = String(args.command || '');
+      // Repowise distill сжимает вывод тестов/установки/гита, сохраняя ошибки.
+      // Сложные shell-конструкции не оборачиваем: distill не заменяет shell.
+      if (ctx.repowise?.distill && command && !/^\s*repowise\b/.test(command) && !/[|&<>]/.test(command)) {
+        command = `repowise distill ${command}`;
+      }
+      return await execute(command, args.cwd || ctx.projectDir);
     },
   },
 ];
