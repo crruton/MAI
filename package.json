@@ -29,6 +29,10 @@
     "dev": "electron . --dev",
     "icon": "node scripts/make-icon.mjs",
     "shortcut": "powershell -ExecutionPolicy Bypass -File ./install-shortcut.ps1",
+    "skills:install": "node scripts/install-skills.mjs",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "pack:tar": "node scripts/make-tar.mjs",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:logs": "docker compose -f infra/docker-compose.yml logs -f --tail=100"
@@ -40,7 +44,8 @@
     "pg": "^8.23.1"
   },
   "devDependencies": {
-    "electron": "^38.0.0"
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
   },
   "allowScripts": {
     "electron@38.8.6": true

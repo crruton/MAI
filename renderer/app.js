@@ -19,6 +19,7 @@ const state = {
   runtime: 'agent',
   runtimes: {},
   renderQueued: false,
+  auth: null,
 };
 
 /* ---------- утилиты ---------- */
@@ -716,6 +717,300 @@ async function openAgents() {
   });
 }
 
+/* ---------- память ---------- */
+
+async function openMemory() {
+  if (!state.projectDir) return toast('Сначала выберите папку проекта', 'err');
+  const data = await api.memory.read(state.projectDir);
+  const projectArea = el('textarea', { rows: '14', placeholder: 'Уроки и решения этого проекта…' });
+  projectArea.value = data.project;
+  const globalArea = el('textarea', { rows: '8', placeholder: 'Общие уроки для всех проектов…' });
+  globalArea.value = data.global;
+
+  const modal = openModal({
+    title: 'Память (memory.md)',
+    body: [
+      el('p', {
+        class: 'hint-text',
+        text: 'Память подмешивается в системный промпт: сначала глобальная, затем проектная. Пишите только подтверждённые уроки.',
+      }),
+      el('p', { class: 'hint-text', text: data.projectFile }),
+      projectArea,
+      el('p', { class: 'hint-text', text: data.globalFile }),
+      globalArea,
+    ],
+    footer: [
+      el('button', {
+        class: 'btn',
+        type: 'button',
+        text: 'Открыть папку',
+        onclick: () => api.showItem(data.projectFile),
+      }),
+      el('button', {
+        class: 'btn primary',
+        type: 'button',
+        text: 'Сохранить',
+        onclick: async () => {
+          try {
+            await api.memory.write(data.projectFile, projectArea.value);
+            await api.memory.write(data.globalFile, globalArea.value);
+            modal.close();
+            toast('Память сохранена', 'ok');
+          } catch (err) {
+            toast(`Память: ${err.message}`, 'err');
+          }
+        },
+      }),
+    ],
+  });
+}
+
+/* ---------- доступ и роли ---------- */
+
+function applyRoleGuard() {
+  const admin = !state.auth || state.auth.role === 'admin';
+  document.body.classList.toggle('role-guest', !admin);
+  for (const panel of ['providers', 'runtimes', 'skills', 'agents', 'memory', 'plugins']) {
+    const button = document.querySelector(`[data-panel="${panel}"]`);
+    if (!button) continue;
+    button.disabled = !admin;
+    button.title = admin ? '' : 'Недоступно для роли guest';
+  }
+  const newProject = $('#new-project-btn');
+  if (newProject) {
+    newProject.disabled = !admin;
+    newProject.title = admin ? 'Создать изолированную песочницу проекта' : 'Создание проектов доступно роли admin';
+  }
+  const projectButton = $('#project-btn');
+  if (projectButton) {
+    projectButton.disabled = !admin;
+    projectButton.title = admin ? 'Сменить папку проекта' : 'Смена проекта доступна роли admin';
+  }
+  const authButton = $('#auth-btn');
+  if (authButton) {
+    const role = state.auth?.role || 'admin';
+    authButton.textContent = `Доступ · ${role}`;
+  }
+}
+
+async function openAuth() {
+  const auth = await api.auth.status();
+  state.auth = auth;
+  applyRoleGuard();
+
+  const issuer = el('input', {
+    value: auth.issuer || '',
+    placeholder: 'https://keycloak.example.com/realms/mai-code',
+  });
+  const clientId = el('input', { value: auth.clientId || 'mai-code-desktop' });
+  const role = el('select', {}, [
+    el('option', { value: 'admin', text: 'admin — полный доступ' }),
+    el('option', { value: 'guest', text: 'guest — только чтение и чат' }),
+  ]);
+  role.value = auth.role || 'admin';
+  const status = el('p', {
+    class: 'hint-text',
+    text: auth.mode === 'keycloak'
+      ? `Keycloak: ${auth.user?.name || 'пользователь'}${auth.user?.email ? ` (${auth.user.email})` : ''}`
+      : `Локальный режим: ${auth.user?.name || 'администратор'}`,
+  });
+
+  const modal = openModal({
+    title: 'Доступ и роли',
+    body: [
+      el('p', {
+        class: 'hint-text',
+        text: 'Локальные роли разграничивают интерфейс, но не защищают данные от владельца машины. Настоящая граница появляется только при входе через Keycloak и серверном режиме.',
+      }),
+      status,
+      el('dl', { class: 'kv' }, [
+        el('dt', { text: 'Режим' }),
+        el('dd', { text: auth.mode === 'keycloak' ? 'Keycloak (OIDC)' : 'локальный' }),
+        el('dt', { text: 'Роль' }),
+        el('dd', { text: auth.role }),
+        el('dt', { text: 'Шифрование токенов' }),
+        el('dd', { text: auth.encryption ? 'доступно (safeStorage)' : 'недоступно' }),
+        el('dt', { text: 'Сессия Keycloak' }),
+        el('dd', { text: auth.loggedIn ? 'активна' : 'нет' }),
+      ]),
+      el('div', { class: 'row' }, [field('Issuer Keycloak', issuer), field('Client ID', clientId)]),
+      el('div', { class: 'row' }, [
+        el('button', {
+          class: 'btn',
+          type: 'button',
+          text: 'Сохранить Keycloak',
+          onclick: async () => {
+            try {
+              state.auth = await api.auth.configure({ issuer: issuer.value.trim(), clientId: clientId.value.trim() });
+              status.textContent = 'Настройки Keycloak сохранены. Теперь нажмите «Войти через Keycloak».';
+              toast('Keycloak настроен', 'ok');
+            } catch (err) {
+              toast(`Доступ: ${err.message}`, 'err');
+            }
+          },
+        }),
+        el('button', {
+          class: 'btn primary',
+          type: 'button',
+          text: 'Войти через Keycloak',
+          onclick: async () => {
+            status.textContent = 'Открываю браузер. Подтвердите вход и вернитесь в приложение…';
+            const res = await api.auth.login();
+            if (!res.ok) {
+              status.textContent = `Не удалось войти: ${res.error}`;
+              toast(`Keycloak: ${res.error}`, 'err');
+              return;
+            }
+            state.auth = res;
+            applyRoleGuard();
+            status.textContent = `Вход выполнен: ${res.user?.name || 'пользователь'} · роль ${res.role}`;
+            toast(`Вход выполнен, роль ${res.role}`, 'ok');
+            modal.close();
+            openAuth();
+          },
+        }),
+        el('button', {
+          class: 'btn ghost',
+          type: 'button',
+          text: 'Выйти',
+          onclick: async () => {
+            state.auth = await api.auth.logout();
+            applyRoleGuard();
+            modal.close();
+            toast('Вы вышли, включён локальный admin', 'ok');
+            openAuth();
+          },
+        }),
+      ]),
+      el('div', { class: 'row' }, [
+        field('Локальная роль', role),
+        el('button', {
+          class: 'btn',
+          type: 'button',
+          text: 'Применить локальную роль',
+          onclick: async () => {
+            try {
+              state.auth = await api.auth.setRole(role.value);
+              applyRoleGuard();
+              modal.close();
+              toast(`Роль: ${state.auth.role}`, 'ok');
+              openAuth();
+            } catch (err) {
+              toast(`Роль: ${err.message}`, 'err');
+            }
+          },
+        }),
+      ]),
+    ],
+    footer: [
+      el('button', {
+        class: 'btn',
+        type: 'button',
+        text: 'Где хранится',
+        onclick: () => toast('%APPDATA%\\mai-code\\auth.json'),
+      }),
+      el('button', { class: 'btn primary', type: 'button', text: 'Закрыть', onclick: () => modal.close() }),
+    ],
+  });
+}
+
+/* ---------- новый проект / песочница ---------- */
+
+async function newProjectModal() {
+  let root = '';
+  try {
+    root = await api.workspace.root();
+  } catch {
+    root = '';
+  }
+
+  const name = el('input', { placeholder: 'например, acme-portal' });
+  const description = el('textarea', { rows: '3', placeholder: 'Одно предложение о проекте' });
+  const parent = el('input', { value: root });
+  const template = el('select', {}, [
+    el('option', { value: 'blank', text: 'Пустой проект' }),
+    el('option', { value: 'service', text: 'Сервис: Node + тесты + Docker + CI' }),
+    el('option', { value: 'agent-app', text: 'Агентское приложение: каркас агента' }),
+  ]);
+  const repoHost = el('select', {}, [
+    el('option', { value: 'none', text: 'Только локальный git' }),
+    el('option', { value: 'github', text: 'GitHub (gh CLI)' }),
+    el('option', { value: 'gitlab', text: 'GitLab (glab CLI)' }),
+    el('option', { value: 'openscion', text: 'OpenScion (сервер SCM)' }),
+  ]);
+  const visibility = el('select', {}, [
+    el('option', { value: 'private', text: 'Приватный' }),
+    el('option', { value: 'public', text: 'Публичный' }),
+  ]);
+
+  const modal = openModal({
+    title: 'Новый проект в песочнице',
+    body: [
+      el('p', {
+        class: 'hint-text',
+        text: 'Проект получит отдельную папку, свой .mai-code, memory.md и загрузки. Глобальные навыки и AGENTS.md остаются общими.',
+      }),
+      el('div', { class: 'row' }, [field('Имя проекта', name), field('Шаблон', template)]),
+      field('Описание', description),
+      field('Где создать (родительская папка)', parent),
+      el('div', { class: 'row' }, [field('Репозиторий', repoHost), field('Доступ', visibility)]),
+      el('p', {
+        class: 'hint-text',
+        text: 'OpenScion — серверная SCM-система, а не git-хостинг. Будет создан локальный git и инструкция по импорту.',
+      }),
+    ],
+    footer: [
+      el('button', { class: 'btn', type: 'button', text: 'Отмена', onclick: () => modal.close() }),
+      el('button', {
+        class: 'btn primary',
+        type: 'button',
+        text: 'Создать',
+        onclick: async () => {
+          if (!name.value.trim()) return toast('Нужно имя проекта', 'err');
+          try {
+            const res = await api.workspace.create({
+              name: name.value.trim(),
+              description: description.value.trim(),
+              parentDir: parent.value.trim() || root,
+              template: template.value,
+              repoHost: repoHost.value,
+              visibility: visibility.value,
+            });
+            if (!res.ok) return toast(res.error || 'Не удалось создать проект', 'err');
+            state.projectDir = res.projectDir;
+            state.settings = await api.settings.get();
+            updateChrome();
+            modal.close();
+            toast(`Проект создан: ${res.projectDir}`, 'ok');
+            if (res.remote?.instructions || res.remote?.url) {
+              openModal({
+                title: 'Проект создан',
+                body: [
+                  el('p', { class: 'hint-text', text: res.projectDir }),
+                  res.remote?.url ? el('p', { text: `Remote: ${res.remote.url}` }) : null,
+                  res.remote?.instructions
+                    ? el('pre', { class: 'hint-text', text: res.remote.instructions })
+                    : el('p', { class: 'hint-text', text: 'Локальный git-репозиторий создан.' }),
+                  el('p', {
+                    class: 'hint-text',
+                    text: res.git?.ok ? 'Начальный коммит создан.' : `git: ${res.git?.error || 'не инициализирован'}`,
+                  }),
+                ].filter(Boolean),
+                footer: [
+                  el('button', { class: 'btn', type: 'button', text: 'Открыть папку', onclick: () => api.showItem(res.projectDir) }),
+                  el('button', { class: 'btn primary', type: 'button', text: 'Готово', onclick: () => document.querySelector('.modal-backdrop')?.remove() }),
+                ],
+              });
+            }
+          } catch (err) {
+            toast(`Проект: ${err.message}`, 'err');
+          }
+        },
+      }),
+    ],
+  });
+}
+
 /* ---------- навыки ---------- */
 
 async function openSkills() {
@@ -1214,7 +1509,13 @@ async function init() {
   state.projectDir = state.settings.projectDir || '';
   state.model = state.settings.activeModel || '';
   state.runtimes = await api.runtimes.list();
+  try {
+    state.auth = await api.auth.status();
+  } catch {
+    state.auth = null;
+  }
   updateChrome();
+  applyRoleGuard();
   renderModels();
   renderRuntimes();
   await loadModels();
@@ -1225,6 +1526,7 @@ async function init() {
 
   $('#new-chat').addEventListener('click', newChat);
   $('#project-btn').addEventListener('click', pickProject);
+  $('#new-project-btn').addEventListener('click', newProjectModal);
   $('#settings-btn').addEventListener('click', openSettings);
   $('#send').addEventListener('click', send);
   $('#stop').addEventListener('click', () => {
@@ -1248,11 +1550,13 @@ async function init() {
       if (panel === 'boards') api.boards.open('delivery', '');
       if (panel === 'storage') api.boards.open('storage', '');
       if (panel === 'agents') openAgents();
+      if (panel === 'memory') openMemory();
       if (panel === 'skills') openSkills();
       if (panel === 'providers') openProviders();
       if (panel === 'runtimes') openRuntimes();
       if (panel === 'mcp') openMcp();
       if (panel === 'plugins') openPlugins();
+      if (panel === 'auth') openAuth();
     });
   }
 

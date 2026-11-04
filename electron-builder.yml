@@ -1,0 +1,62 @@
+appId: ru.mai.code
+productName: MAI Code
+copyright: Copyright © 2026 crruton
+
+directories:
+  output: dist
+  buildResources: assets
+
+files:
+  - electron/**/*
+  - renderer/**/*
+  - assets/**/*
+  - skills/**/*
+  - docs/**/*
+  - package.json
+  - README.md
+  - LICENSE
+  - SECURITY.md
+
+asar: true
+compression: normal
+
+win:
+  icon: assets/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: MAI Code
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+
+linux:
+  icon: assets/icon.png
+  category: Development
+  target:
+    - AppImage
+    - tar.gz
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+mac:
+  icon: assets/icon.png
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+publish:
+  provider: github
+  owner: crruton
+  repo: mai-code
+  releaseType: draft

@@ -1,0 +1,31 @@
+name: mai-code-vpn
+
+# Собственный VPN-хаб на WireGuard.
+# wg-easy даёт веб-панель для выдачи конфигов; сам WireGuard работает в контейнере.
+# Нужен публичный IP или проброс UDP-порта 51820 на роутере.
+
+services:
+  wg-easy:
+    image: ghcr.io/wg-easy/wg-easy:15
+    container_name: mai-code-vpn
+    restart: unless-stopped
+    environment:
+      WG_HOST: ${WG_HOST:?Укажите публичный адрес или домен в WG_HOST}
+      WG_PORT: ${WG_PORT:-51820}
+      WG_DEFAULT_DNS: ${WG_DEFAULT_DNS:-1.1.1.1}
+      WG_ALLOWED_IPS: ${WG_ALLOWED_IPS:-0.0.0.0/0,::/0}
+      PASSWORD_HASH: ${WG_PASSWORD_HASH:?Сгенерируйте bcrypt-хеш и положите в WG_PASSWORD_HASH}
+    ports:
+      - "${WG_PORT:-51820}:51820/udp"
+      - "127.0.0.1:51821:51821/tcp"
+    volumes:
+      - mai_wg:/etc/wireguard
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.src_valid_mark: "1"
+
+volumes:
+  mai_wg:

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MAI Code — десктопный агент для разработки</title>
+    <meta
+      name="description"
+      content="MAI Code — десктопный coding-агент: чат, инструменты, доски архитектуры, навыки, MCP и изолированные песочницы проектов."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="top">
+      <a class="brand" href="./">
+        <span class="logo">M</span>
+        <span>MAI Code</span>
+      </a>
+      <nav>
+        <a href="#features">Возможности</a>
+        <a href="#install">Установка</a>
+        <a href="#limits">Ограничения</a>
+        <a href="https://github.com/crruton/mai-code">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Electron · MAI models · открытый код</p>
+        <h1>Агент, который живёт на вашей машине</h1>
+        <p class="lead">
+          Чат с инструментами, архитектурные доски, навыки, MCP, артефакты и песочницы
+          проектов. Без облачной прослойки: код и ключи остаются локально.
+        </p>
+        <div class="actions">
+          <a class="button primary" href="https://github.com/crruton/mai-code/releases">Скачать</a>
+          <a class="button" href="https://github.com/crruton/mai-code#readme">Документация</a>
+        </div>
+      </section>
+
+      <section id="features" class="grid">
+        <article>
+          <h2>Чат и инструменты</h2>
+          <p>Чтение и правка файлов, grep, shell с подтверждением, субагенты и плагины.</p>
+        </article>
+        <article>
+          <h2>Доски</h2>
+          <p>Delivery, архитектура C1–C4, раннеры, качество и хранилище артефактов.</p>
+        </article>
+        <article>
+          <h2>Схемы и агент схем</h2>
+          <p>Mermaid и PlantUML, экспорт SVG/PNG/PUML/JSON, правка модели диалогом.</p>
+        </article>
+        <article>
+          <h2>Навыки и память</h2>
+          <p>SKILL.md, AGENTS.md и memory.md подмешиваются в системный промпт.</p>
+        </article>
+        <article>
+          <h2>Песочницы</h2>
+          <p>Отдельная папка, git, docs и загрузки на каждый проект при общем harness.</p>
+        </article>
+        <article>
+          <h2>Доступ</h2>
+          <p>Локальные роли admin/guest и вход через Keycloak Device Flow.</p>
+        </article>
+      </section>
+
+      <section id="install" class="panel">
+        <h2>Установка</h2>
+        <pre><code>git clone https://github.com/crruton/mai-code.git
+cd mai-code
+npm.cmd install
+npm.cmd start</code></pre>
+        <p>
+          Готовые сборки — в
+          <a href="https://github.com/crruton/mai-code/releases">GitHub Releases</a>.
+          Инфраструктура, Keycloak и VPN описаны в
+          <a href="https://github.com/crruton/mai-code/blob/main/docs/DEPLOYMENT.md">docs/DEPLOYMENT.md</a>.
+        </p>
+      </section>
+
+      <section id="limits" class="panel warn">
+        <h2>Честные ограничения</h2>
+        <ul>
+          <li>Локальные роли разграничивают интерфейс, но не защищают от владельца машины.</li>
+          <li>Песочницы — это отдельные папки, а не изоляция на уровне ОС.</li>
+          <li>Keycloak, VPN и домен требуют внешней инфраструктуры.</li>
+          <li>Доска Multica локальная: API-синхронизация не подключена.</li>
+          <li>Установщики не подписаны; автообновления нет.</li>
+        </ul>
+      </section>
+    </main>
+
+    <footer>
+      <span>MIT · crruton</span>
+      <a href="https://github.com/crruton/mai-code">Исходники</a>
+    </footer>
+  </body>
+</html>

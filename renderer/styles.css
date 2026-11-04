@@ -104,6 +104,7 @@ button { cursor: pointer; }
   padding: 7px 8px; color: var(--text-dim); text-align: left;
 }
 .project-btn:hover { background: #1d2230; color: var(--text); }
+.project-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .conn { display: flex; align-items: center; gap: 7px; padding: 0 8px; font-size: 11px; color: var(--text-faint); }
 .conn i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
@@ -333,3 +334,5 @@ button { cursor: pointer; }
 ::-webkit-scrollbar-thumb { background: #2a3042; border-radius: 8px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: #3a4258; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+.new-project { width: 100%; justify-content: center; margin-top: 6px; }

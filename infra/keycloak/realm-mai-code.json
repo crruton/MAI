@@ -1,0 +1,60 @@
+{
+  "realm": "mai-code",
+  "enabled": true,
+  "displayName": "MAI Code",
+  "displayNameHtml": "<strong>MAI Code</strong>",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "roles": {
+    "realm": [
+      { "name": "admin", "description": "Полный доступ: провайдеры, рантаймы, навыки, память, создание проектов" },
+      { "name": "guest", "description": "Чат и чтение досок без изменения настроек и файлов проекта" }
+    ]
+  },
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "admin@mai-code.local",
+      "firstName": "Admin",
+      "lastName": "MAI",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "admin", "temporary": false }],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "guest",
+      "enabled": true,
+      "email": "guest@mai-code.local",
+      "firstName": "Guest",
+      "lastName": "MAI",
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "guest", "temporary": false }],
+      "realmRoles": ["guest"]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "mai-code-desktop",
+      "name": "MAI Code Desktop",
+      "description": "Публичный клиент для OIDC Device Authorization Grant",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "true",
+        "pkce.code.challenge.method": "S256"
+      },
+      "redirectUris": ["http://127.0.0.1/*"],
+      "webOrigins": ["+"]
+    }
+  ]
+}

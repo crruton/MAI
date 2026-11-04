@@ -1,0 +1,17 @@
+name: mai-code-keycloak
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: mai-code-keycloak
+    restart: unless-stopped
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-change-me}
+      KC_HTTP_PORT: 8080
+      KC_HOSTNAME_STRICT: "false"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./realm-mai-code.json:/opt/keycloak/data/import/realm-mai-code.json:ro

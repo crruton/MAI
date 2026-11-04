@@ -23,6 +23,18 @@ contextBridge.exposeInMainWorld('mai', {
   project: {
     pick: () => invoke('project:pick'),
   },
+  workspace: {
+    root: () => invoke('workspace:root'),
+    list: () => invoke('workspace:list'),
+    create: (payload) => invoke('workspace:create', payload),
+  },
+  auth: {
+    status: () => invoke('auth:status'),
+    configure: (payload) => invoke('auth:configure', payload),
+    login: () => invoke('auth:login'),
+    logout: () => invoke('auth:logout'),
+    setRole: (role) => invoke('auth:setRole', role),
+  },
   sessions: {
     list: () => invoke('sessions:list'),
     get: (id) => invoke('sessions:get', id),
@@ -42,6 +54,10 @@ contextBridge.exposeInMainWorld('mai', {
   agents: {
     read: (projectDir) => invoke('agents:read', projectDir),
     write: (file, content) => invoke('agents:write', { file, content }),
+  },
+  memory: {
+    read: (projectDir) => invoke('memory:read', projectDir),
+    write: (file, content) => invoke('memory:write', { file, content }),
   },
   skills: {
     list: (projectDir) => invoke('skills:list', projectDir),
@@ -92,6 +108,9 @@ contextBridge.exposeInMainWorld('mai', {
     correction: (payload) => invoke('boards:correction', payload),
     correctionStop: () => invoke('boards:correctionStop'),
     exportView: (payload) => invoke('boards:exportView', payload),
+    exportDiagram: (payload) => invoke('boards:exportDiagram', payload),
+    rasterize: (payload) => invoke('boards:rasterize', payload),
+    diagramChat: (payload) => invoke('boards:diagramChat', payload),
     saveView: (payload) => invoke('boards:saveView', payload),
     onEvent: (handler) => {
       const listener = (_event, data) => handler(data);

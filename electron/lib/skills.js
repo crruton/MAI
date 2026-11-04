@@ -45,6 +45,35 @@ export function listSkills(projectDir) {
   return skills;
 }
 
+/**
+ * Копирует навыки, вложенные в приложение, в глобальную папку пользователя.
+ * Существующие навыки не перезаписываются: пользователь мог их отредактировать.
+ */
+function copyTree(from, to) {
+  fs.mkdirSync(to, { recursive: true });
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    const source = path.join(from, entry.name);
+    const target = path.join(to, entry.name);
+    if (entry.isDirectory()) copyTree(source, target);
+    else fs.writeFileSync(target, fs.readFileSync(source));
+  }
+}
+
+export function installBundledSkills(sourceDir) {
+  if (!sourceDir || !fs.existsSync(sourceDir)) return 0;
+  const target = path.join(dataDir(), 'skills');
+  fs.mkdirSync(target, { recursive: true });
+  let installed = 0;
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const to = path.join(target, entry.name);
+    if (fs.existsSync(to)) continue;
+    copyTree(path.join(sourceDir, entry.name), to);
+    installed += 1;
+  }
+  return installed;
+}
+
 export function createSkill(projectDir, { name, description, body, scope = 'project' }) {
   const slug = String(name || '')
     .trim()
@@ -95,5 +124,36 @@ export function readAgents(projectDir) {
 export function writeAgents(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content, 'utf8');
+  return true;
+}
+
+/* ---------- memory.md ---------- */
+
+export function memoryFiles(projectDir) {
+  return {
+    projectFile: path.join(projectDir || '', '.mai-code', 'memory.md'),
+    globalFile: path.join(dataDir(), 'memory.md'),
+  };
+}
+
+export function readMemory(projectDir) {
+  const files = memoryFiles(projectDir);
+  const result = { project: '', global: '', ...files };
+  try {
+    result.project = fs.readFileSync(files.projectFile, 'utf8');
+  } catch {
+    result.project = '';
+  }
+  try {
+    result.global = fs.readFileSync(files.globalFile, 'utf8');
+  } catch {
+    result.global = '';
+  }
+  return result;
+}
+
+export function writeMemory(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, String(content ?? ''), 'utf8');
   return true;
 }

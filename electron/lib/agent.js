@@ -3,7 +3,7 @@ import { fsTools } from './tools/fs.js';
 import { shellTools } from './tools/shell.js';
 import { skillTools } from './tools/skills.js';
 import { repowiseTools } from './tools/repowise.js';
-import { listSkills, readAgents } from './skills.js';
+import { listSkills, readAgents, readMemory } from './skills.js';
 
 const BASE_PROMPT = `Ты — MAI Code, агент для программирования на рабочей машине пользователя.
 
@@ -18,9 +18,16 @@ const BASE_PROMPT = `Ты — MAI Code, агент для программиро
 
 function systemPrompt({ projectDir, skills, mcpStatus }) {
   const agents = readAgents(projectDir);
+  const memory = readMemory(projectDir);
   const parts = [BASE_PROMPT, `\nРабочая папка проекта: ${projectDir}`];
   if (agents.global.trim()) parts.push(`\n# Глобальные инструкции (AGENTS.md)\n${agents.global.trim()}`);
   if (agents.project.trim()) parts.push(`\n# Инструкции проекта (AGENTS.md)\n${agents.project.trim()}`);
+  if (memory.global.trim()) {
+    parts.push(`\n# Глобальная память (memory.md)\n${memory.global.trim().slice(0, 6000)}`);
+  }
+  if (memory.project.trim()) {
+    parts.push(`\n# Память проекта (memory.md)\n${memory.project.trim().slice(0, 12000)}`);
+  }
   if (skills.length) {
     parts.push(
       `\n# Навыки\nПолный текст навыка загружается инструментом load_skill.\n${skills

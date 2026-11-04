@@ -9,7 +9,7 @@ import { listModels, resolveModel } from './lib/models.js';
 import { startRuntime, describeRuntime } from './lib/runtimes.js';
 import { createSession, deleteSession, getSession, listSessions, saveSession } from './lib/sessions.js';
 import { runAgent } from './lib/agent.js';
-import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile } from './lib/skills.js';
+import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, readMemory, writeMemory, installBundledSkills } from './lib/skills.js';
 import { McpManager } from './lib/mcp.js';
 import { loadPlugins, pluginDirs } from './lib/plugins.js';
 import {
@@ -41,13 +41,22 @@ import { gitStatus, gitDiff, gitHead } from './lib/git.js';
 import { runStage } from './lib/deploy.js';
 import * as infra from './lib/infra.js';
 import * as repowise from './lib/repowise.js';
+import { editDiagram } from './lib/diagram-agent.js';
+import { createWorkspace, listWorkspaces, sandboxRoot } from './lib/workspace.js';
+import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin } from './lib/auth.js';
 
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
 // Флаг --use-system-ca решает проблему, но его нужно передать до старта Node,
 // поэтому при первом запуске приложение перезапускает себя с этим флагом.
 if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !process.env.MAI_CODE_RELAUNCHED) {
-  const child = spawn(process.execPath, [app.getAppPath(), ...process.argv.slice(2)], {
+  // В dev-режиме argv: [electron, путь-к-приложению, ...флаги], в упакованном:
+  // [exe, ...флаги]. Нельзя резать одинаково, иначе упакованное приложение
+  // теряет первый аргумент (например, --remote-debugging-port).
+  const args = process.defaultApp
+    ? [app.getAppPath(), ...process.argv.slice(2)]
+    : process.argv.slice(1);
+  const child = spawn(process.execPath, args, {
     env: {
       ...process.env,
       NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --use-system-ca`.trim(),
@@ -168,6 +177,11 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  try {
+    installBundledSkills(path.join(app.getAppPath(), 'skills'));
+  } catch (err) {
+    console.error('[skills] не удалось установить вложенные навыки:', err?.message || err);
+  }
   createWindow();
   const settings = loadSettings();
   mcp.sync(settings.mcpServers || {}).catch(() => {});
@@ -212,6 +226,9 @@ app.on('before-quit', () => {
 ipcMain.handle('settings:get', () => publicSettings());
 
 ipcMain.handle('settings:save', async (_e, patch) => {
+  if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth) {
+    requireAdmin();
+  }
   const clean = { ...patch };
   delete clean.apiKey;
   delete clean.baseURL;
@@ -220,6 +237,30 @@ ipcMain.handle('settings:save', async (_e, patch) => {
   if (patch.mcpServers) await mcp.sync(next.mcpServers || {});
   return publicSettings();
 });
+
+// ---------- роли и доступ ----------
+
+ipcMain.handle('auth:status', () => authStatus());
+
+ipcMain.handle('auth:configure', (_e, payload) => {
+  requireAdmin();
+  return configureAuth(payload || {});
+});
+
+ipcMain.handle('auth:login', async () => {
+  try {
+    return { ok: true, ...(await loginKeycloak()) };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('auth:logout', () => logout());
+
+// Локальная роль — это переключатель интерфейса, а не граница безопасности.
+// Разрешаем менять её без admin, иначе guest не сможет вернуться назад.
+// В режиме Keycloak роль приходит из токена и здесь не меняется.
+ipcMain.handle('auth:setRole', (_e, role) => setLocalRole(role));
 
 ipcMain.handle('models:list', async (_e, force) => {
   try {
@@ -236,6 +277,7 @@ ipcMain.handle('models:list', async (_e, force) => {
 ipcMain.handle('providers:list', () => publicSettings().providers);
 
 ipcMain.handle('providers:save', async (_e, { id, provider }) => {
+  requireAdmin();
   const key = String(id || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
   if (!key) return { ok: false, error: 'Нужен идентификатор провайдера' };
   if (!provider?.baseURL) return { ok: false, error: 'Нужен Base URL' };
@@ -257,6 +299,7 @@ ipcMain.handle('providers:save', async (_e, { id, provider }) => {
 });
 
 ipcMain.handle('providers:remove', async (_e, id) => {
+  requireAdmin();
   const settings = loadSettings();
   if (Object.keys(settings.providers).length <= 1) {
     return { ok: false, error: 'Нельзя удалить последнего провайдера' };
@@ -295,6 +338,7 @@ ipcMain.handle('providers:test', async (_e, id) => {
 ipcMain.handle('runtimes:list', () => loadSettings().runtimes || {});
 
 ipcMain.handle('runtimes:save', (_e, runtimes) => {
+  requireAdmin();
   saveSettings({ runtimes });
   return loadSettings().runtimes;
 });
@@ -376,10 +420,26 @@ ipcMain.handle('runtimes:stop', (event) => {
 // ---------- проект ----------
 
 ipcMain.handle('project:pick', async () => {
+  requireAdmin();
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (result.canceled || !result.filePaths[0]) return null;
   saveSettings({ projectDir: result.filePaths[0] });
   return result.filePaths[0];
+});
+
+// ---------- песочницы проектов ----------
+
+ipcMain.handle('workspace:root', () => sandboxRoot());
+ipcMain.handle('workspace:list', () => listWorkspaces());
+ipcMain.handle('workspace:create', async (_e, payload) => {
+  requireAdmin();
+  try {
+    const result = createWorkspace(payload || {});
+    saveSettings({ projectDir: result.projectDir });
+    return { ok: true, ...result };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
 });
 
 // ---------- сессии ----------
@@ -506,15 +566,32 @@ ipcMain.handle('agents:read', (_e, projectDir) => {
   return { ...data, projectFile: agentsFile(projectDir), globalFile: globalAgentsFile() };
 });
 
-ipcMain.handle('agents:write', (_e, { file, content }) => writeAgents(file, content));
+ipcMain.handle('agents:write', (_e, { file, content }) => {
+  requireAdmin();
+  return writeAgents(file, content);
+});
+
+// ---------- память ----------
+
+ipcMain.handle('memory:read', (_e, projectDir) => readMemory(projectDir));
+ipcMain.handle('memory:write', (_e, { file, content }) => {
+  requireAdmin();
+  return writeMemory(file, content);
+});
 
 // ---------- навыки ----------
 
 ipcMain.handle('skills:list', (_e, projectDir) =>
   listSkills(projectDir).map(({ name, description, scope, file }) => ({ name, description, scope, file })),
 );
-ipcMain.handle('skills:create', (_e, { projectDir, ...data }) => createSkill(projectDir, data));
-ipcMain.handle('skills:delete', (_e, file) => deleteSkill(file));
+ipcMain.handle('skills:create', (_e, { projectDir, ...data }) => {
+  requireAdmin();
+  return createSkill(projectDir, data);
+});
+ipcMain.handle('skills:delete', (_e, file) => {
+  requireAdmin();
+  return deleteSkill(file);
+});
 
 // ---------- MCP ----------
 
@@ -599,6 +676,7 @@ ipcMain.handle('artifacts:list', (_e, payload) =>
 ipcMain.handle('artifacts:get', (_e, payload) => readArtifact(projectOf(payload), payload.id));
 
 ipcMain.handle('artifacts:save', (_e, payload) => {
+  requireAdmin();
   const projectDir = projectOf(payload);
   const artifact = writeArtifact(projectDir, payload.artifact || {});
   return { ok: true, artifact, stats: artifactStats(projectDir) };
@@ -610,11 +688,15 @@ ipcMain.handle('artifacts:version', (_e, payload) =>
   readVersion(projectOf(payload), payload.id, payload.version),
 );
 
-ipcMain.handle('artifacts:restore', (_e, payload) =>
-  restoreArtifact(projectOf(payload), payload.id, payload.version),
-);
+ipcMain.handle('artifacts:restore', (_e, payload) => {
+  requireAdmin();
+  return restoreArtifact(projectOf(payload), payload.id, payload.version);
+});
 
-ipcMain.handle('artifacts:delete', (_e, payload) => deleteArtifact(projectOf(payload), payload.id));
+ipcMain.handle('artifacts:delete', (_e, payload) => {
+  requireAdmin();
+  return deleteArtifact(projectOf(payload), payload.id);
+});
 
 ipcMain.handle('artifacts:diff', (_e, payload) =>
   diffArtifact(projectOf(payload), payload.id, payload.from, payload.to),
@@ -624,7 +706,10 @@ ipcMain.handle('artifacts:search', (_e, payload) =>
   searchArtifacts(projectOf(payload), payload.query || ''),
 );
 
-ipcMain.handle('artifacts:import', (_e, payload) => importExisting(projectOf(payload)));
+ipcMain.handle('artifacts:import', (_e, payload) => {
+  requireAdmin();
+  return importExisting(projectOf(payload));
+});
 
 ipcMain.handle('artifacts:stats', (_e, payload) => artifactStats(projectOf(payload)));
 
@@ -649,6 +734,7 @@ ipcMain.handle('artifacts:export', async (event, payload) => {
 });
 
 ipcMain.handle('artifacts:applyToFile', (_e, payload) => {
+  requireAdmin();
   const projectDir = projectOf(payload);
   const artifact = readArtifact(projectDir, payload.id);
   const target = artifact.meta?.file;
@@ -668,6 +754,7 @@ ipcMain.handle('boards:load', (_e, payload) => {
 });
 
 ipcMain.handle('boards:save', (_e, payload) => {
+  requireAdmin();
   const projectDir = projectOf(payload);
   const allowed = ['delivery', 'architecture', 'runners', 'quality'];
   if (!allowed.includes(payload.section)) throw new Error('Неизвестная секция доски');
@@ -682,6 +769,7 @@ ipcMain.handle('boards:views', async (_e, payload) => {
 });
 
 ipcMain.handle('boards:baseline', async (_e, payload) => {
+  requireAdmin();
   const projectDir = projectOf(payload);
   return saveBaseline(projectDir, await gitHead(projectDir));
 });
@@ -694,6 +782,7 @@ ipcMain.handle('boards:git', (_e, payload) => gitStatus(projectOf(payload)));
 ipcMain.handle('boards:diff', (_e, payload) => gitDiff(projectOf(payload), payload?.file || ''));
 
 ipcMain.handle('boards:stageRun', (event, payload) => {
+  requireAdmin();
   const window = BrowserWindow.fromWebContents(event.sender);
   const state = runState(window);
   if (state.stage) return { ok: false, error: 'Стадия уже выполняется' };
@@ -772,6 +861,7 @@ ipcMain.handle('boards:clearErrors', () => {
 });
 
 ipcMain.handle('boards:correction', async (event, payload) => {
+  requireAdmin();
   const window = BrowserWindow.fromWebContents(event.sender);
   const state = runState(window);
   if (state.correction) return { ok: false, error: 'Самокоррекция уже выполняется' };
@@ -890,7 +980,144 @@ ipcMain.handle('boards:exportView', async (event, payload) => {
   return { ok: true, file, puml: view.puml };
 });
 
+/**
+ * Скачивание схемы в выбранном формате. Для SVG/PNG рендерер присылает уже
+ * готовые данные, для PUML/JSON main генерирует их из модели.
+ */
+ipcMain.handle('boards:exportDiagram', async (event, payload) => {
+  const projectDir = projectOf(payload);
+  const format = String(payload.format || '').toLowerCase();
+  const allowed = new Set(['svg', 'png', 'puml', 'json']);
+  if (!allowed.has(format)) return { ok: false, error: `Неизвестный формат: ${format}` };
+
+  const { views } = generateViews(projectDir, await gitHead(projectDir));
+  const view = views[payload.view];
+  if (!view) return { ok: false, error: 'Представление не найдено' };
+
+  const safeView = String(payload.view || 'diagram').replace(/[^a-z0-9_-]/gi, '-');
+  const stamp = new Date().toISOString().slice(0, 10);
+  const ext = format === 'json' ? 'json' : format;
+  const filename = `${safeView}-${stamp}.${ext}`;
+  const filters = {
+    svg: [{ name: 'SVG', extensions: ['svg'] }],
+    png: [{ name: 'PNG', extensions: ['png'] }],
+    puml: [{ name: 'PlantUML', extensions: ['puml', 'plantuml'] }],
+    json: [{ name: 'JSON', extensions: ['json'] }],
+  }[format];
+
+  let data = payload.data;
+  if (format === 'puml') data = view.puml || '';
+  if (format === 'json') {
+    if (payload.view === 'openapi') {
+      data = JSON.stringify(view.spec || {}, null, 2);
+    } else {
+      // Для обычных представлений JSON — это снимок модели и исходников схемы,
+      // чтобы файл можно было передать в другой инструмент или сравнить.
+      const boards = loadBoards(projectDir);
+      data = JSON.stringify(
+        {
+          view: payload.view,
+          title: view.title,
+          mermaid: view.mermaid,
+          puml: view.puml,
+          model: boards.architecture?.model || {},
+        },
+        null,
+        2,
+      );
+    }
+  }
+  if (format === 'svg') data = String(data || '');
+  if (format === 'png') {
+    const raw = String(data || '');
+    const base64 = raw.includes(',') ? raw.slice(raw.indexOf(',') + 1) : raw;
+    data = Buffer.from(base64, 'base64');
+  }
+  if (!data) return { ok: false, error: 'Нет данных для сохранения' };
+
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const { canceled, filePath } = await dialog.showSaveDialog(window, {
+    title: 'Скачать схему',
+    defaultPath: path.join(app.getPath('downloads'), filename),
+    filters,
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+
+  if (format === 'png') fs.writeFileSync(filePath, data);
+  else fs.writeFileSync(filePath, data, 'utf8');
+  return { ok: true, file: filePath, format };
+});
+
+/**
+ * Растеризация SVG в PNG через скрытое offscreen-окно.
+ *
+ * Canvas в рендерере «тускнеет» на SVG с foreignObject (Mermaid рисует так
+ * подписи), а nativeImage не декодирует SVG. Offscreen-окно рендерит ту же
+ * разметку Chromium и отдаёт снимок без ограничения tainted canvas.
+ */
+ipcMain.handle('boards:rasterize', async (_e, payload) => {
+  const svg = String(payload?.svg || '');
+  if (!svg.trim()) return { ok: false, error: 'Пустой SVG' };
+  const factor = Math.min(Math.max(Number(payload?.scale) || 2, 1), 3);
+  const baseWidth = Math.max(1, Math.ceil(Number(payload?.width) || 1200));
+  const baseHeight = Math.max(1, Math.ceil(Number(payload?.height) || 800));
+  const width = Math.min(baseWidth * factor, 6000);
+  const height = Math.min(baseHeight * factor, 6000);
+
+  let win;
+  try {
+    win = new BrowserWindow({
+      show: false,
+      width,
+      height,
+      webPreferences: { offscreen: true, contextIsolation: true, sandbox: true },
+    });
+    const html = `<!doctype html><html><head><meta charset="utf-8">
+      <style>
+        html, body { margin: 0; padding: 0; background: #10131b; overflow: hidden; }
+        svg { display: block; width: ${width}px; height: ${height}px; }
+      </style></head><body>${svg}</body></html>`;
+    await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const image = await win.webContents.capturePage();
+    if (image.isEmpty()) return { ok: false, error: 'Снимок получился пустым' };
+    return { ok: true, dataUrl: image.toDataURL(), width, height };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  } finally {
+    win?.destroy();
+  }
+});
+
+ipcMain.handle('boards:diagramChat', async (_e, payload) => {
+  requireAdmin();
+  const settings = loadSettings();
+  let resolved;
+  try {
+    resolved = resolveModel(settings, payload.model || settings.activeModel);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  if (!resolved.provider.apiKey) {
+    return { ok: false, error: `Не задан API-ключ провайдера «${resolved.provider.name}».` };
+  }
+  try {
+    return await editDiagram({
+      provider: resolved.provider,
+      model: resolved.modelId,
+      settings,
+      projectDir: projectOf(payload),
+      view: payload.view,
+      message: String(payload.message || ''),
+      history: Array.isArray(payload.history) ? payload.history : [],
+    });
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
 ipcMain.handle('boards:saveView', (_e, payload) => {
+  requireAdmin();
   const projectDir = projectOf(payload);
   const { views } = generateViews(projectDir, '');
   const view = views[payload.view];

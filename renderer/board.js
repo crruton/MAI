@@ -64,6 +64,8 @@ const state = {
   repowiseStatus: null,
   repowiseOutput: '',
   remoteResults: null,
+  diagramChat: {},
+  diagramBusy: false,
 };
 
 /* ---------- helpers ---------- */
@@ -359,6 +361,11 @@ function bindChrome() {
   $('#view').addEventListener('input', onInput);
   $('#view').addEventListener('change', onChange);
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && event.target?.id === 'diagram-agent-input') {
+      event.preventDefault();
+      sendDiagramAgent();
+      return;
+    }
     if (event.key === 'Escape') {
       const backdrop = $('.modal-backdrop');
       if (backdrop) backdrop.remove();
@@ -544,6 +551,11 @@ function onClick(event) {
     'baseline': () => saveBaseline(),
     'save-view': () => saveView(),
     'export-view': () => exportView(),
+    'diagram-agent-send': () => sendDiagramAgent(),
+    'diagram-agent-clear': () => {
+      delete state.diagramChat[state.openView];
+      render();
+    },
     'copy-mermaid': () => {
       const view = state.viewsData?.views?.[state.openView];
       copyText(state.openView === 'openapi' ? JSON.stringify(view?.spec || {}, null, 2) : view?.mermaid || '');
@@ -635,6 +647,11 @@ function onChange(event) {
   if (kind === 'artifact-kind') {
     state.artifactKind = target.value;
     loadArtifacts();
+  }
+  if (kind === 'export-format') {
+    const format = target.value;
+    target.value = '';
+    if (format) exportDiagram(format);
   }
 }
 
@@ -968,13 +985,45 @@ function architectureDiagrams() {
             <button class="btn small ghost" data-act="toggle-source">${state.showSource ? 'Показать диаграмму' : 'Исходник'}</button>
             <button class="btn small ghost" data-act="copy-mermaid">Копировать</button>
             <button class="btn small" data-act="save-view">В артефакты</button>
-            <button class="btn small" data-act="export-view">${state.openView === 'openapi' ? 'Экспорт .json' : 'Экспорт .puml'}</button>
+            <select class="input diagram-export" data-change="export-format" title="Скачать схему">
+              <option value="">Скачать…</option>
+              ${state.openView === 'openapi'
+                ? '<option value="json">OpenAPI (.json)</option>'
+                : '<option value="svg">SVG</option><option value="png">PNG</option><option value="puml">PlantUML (.puml)</option><option value="json">JSON (модель)</option>'}
+            </select>
           </div>
         </div>
         <div class="diagram" id="diagram"></div>
         ${state.showSource ? `<pre class="source" style="margin-top:12px">${esc(`--- Mermaid ---\n${view?.mermaid || ''}\n\n--- PlantUML ---\n${view?.puml || ''}`)}</pre>` : ''}
+        ${diagramAgentPanel(view)}
       </div>
     </div>`;
+}
+
+function diagramAgentPanel(view) {
+  const history = state.diagramChat[state.openView] || [];
+  const messages = history.length
+    ? history
+        .map(
+          (item) => `<div class="agent-msg ${item.role === 'user' ? 'user' : 'assistant'}">
+            <div class="agent-role">${item.role === 'user' ? 'Вы' : 'Агент схем'}</div>
+            <div class="agent-text">${esc(item.content)}</div>
+          </div>`,
+        )
+        .join('')
+    : `<div class="empty-note" style="padding:10px 0">Напишите, что поправить: «добавь Redis между API и Postgres», «раздели монолит на два контейнера», «покажи таймаут в sequence».</div>`;
+  return `<div class="diagram-agent">
+    <div class="card-head">
+      <h2>Агент схем</h2>
+      <span class="hint">${state.diagramBusy ? 'правлю модель…' : `контекст: ${esc(view?.title || VIEW_NAMES[state.openView])}`}</span>
+    </div>
+    <div class="agent-log" id="diagram-agent-log">${messages}</div>
+    <div class="inline-form">
+      <input class="input" id="diagram-agent-input" placeholder="Что поправить на схеме?" ${state.diagramBusy ? 'disabled' : ''} />
+      <button class="btn primary" data-act="diagram-agent-send" ${state.diagramBusy ? 'disabled' : ''}>Отправить</button>
+      <button class="btn ghost" data-act="diagram-agent-clear" title="Очистить историю">Очистить</button>
+    </div>
+  </div>`;
 }
 
 function paintDiagram() {
@@ -1082,6 +1131,88 @@ async function exportView() {
     else toast(res.error || 'Не удалось экспортировать', 'err');
   } catch (err) {
     toast(err.message, 'err');
+  }
+}
+
+async function exportDiagram(format) {
+  const view = state.viewsData?.views?.[state.openView];
+  if (!view) {
+    toast('Схема ещё не построена', 'err');
+    return;
+  }
+  try {
+    let data = '';
+    if (format === 'svg' || format === 'png') {
+      if (state.openView === 'openapi') {
+        toast('Для OpenAPI доступен формат JSON', 'err');
+        return;
+      }
+      const svg = document.querySelector('#diagram svg');
+      if (!svg) {
+        toast('Диаграмма ещё не отрисована', 'err');
+        return;
+      }
+      const clone = svg.cloneNode(true);
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      const text = new XMLSerializer().serializeToString(clone);
+      if (format === 'svg') {
+        data = text;
+      } else {
+        const rect = svg.getBoundingClientRect();
+        const raster = await api.boards.rasterize({
+          svg: text,
+          scale: 2,
+          width: Math.max(1, Math.ceil(rect.width || 1200)),
+          height: Math.max(1, Math.ceil(rect.height || 800)),
+        });
+        if (!raster.ok) throw new Error(raster.error || 'Не удалось собрать PNG');
+        data = raster.dataUrl;
+      }
+    }
+    const res = await api.boards.exportDiagram({
+      projectDir: state.projectDir,
+      view: state.openView,
+      format,
+      data,
+    });
+    if (res.canceled) return;
+    if (res.ok) toast(`Сохранено: ${res.file}`, 'ok');
+    else toast(res.error || 'Не удалось сохранить', 'err');
+  } catch (err) {
+    toast(`Экспорт: ${err.message}`, 'err');
+  }
+}
+
+async function sendDiagramAgent() {
+  if (state.diagramBusy) return;
+  const input = $('#diagram-agent-input');
+  const message = input?.value.trim();
+  if (!message) return;
+  const view = state.openView;
+  const history = state.diagramChat[view] || [];
+  history.push({ role: 'user', content: message });
+  state.diagramChat[view] = history;
+  state.diagramBusy = true;
+  render();
+  try {
+    const res = await api.boards.diagramChat({
+      projectDir: state.projectDir,
+      view,
+      message,
+      history: history.slice(0, -1),
+      model: state.settings?.activeModel,
+    });
+    if (!res.ok) throw new Error(res.error || 'Агент не ответил');
+    state.diagramChat[view].push({ role: 'assistant', content: res.reply || 'Готово' });
+    state.viewsData = res.views;
+    state.diagramBusy = false;
+    render();
+    toast('Схема обновлена', 'ok');
+  } catch (err) {
+    state.diagramChat[view].push({ role: 'assistant', content: `Ошибка: ${err.message}` });
+    state.diagramBusy = false;
+    render();
+    toast(`Агент схем: ${err.message}`, 'err');
   }
 }
 
