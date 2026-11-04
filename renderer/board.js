@@ -2260,14 +2260,29 @@ async function repowiseQuery(kind) {
     toast('Введите запрос', 'err');
     return;
   }
-  state.repowiseOutput = 'Запрашиваю индекс…';
+  state.repowiseOutput =
+    kind === 'search'
+      ? 'Запрашиваю индекс… Поиск по большому проекту может занять до двух минут.'
+      : 'Запрашиваю индекс…';
   render();
+  // CLI внутри main имеет таймаут 120 с; страховка в UI не даёт вечному лоадеру,
+  // если IPC почему-то не завершится.
+  let timedOut = false;
+  const guard = setTimeout(() => {
+    timedOut = true;
+    state.repowiseOutput = 'Индекс не ответил за две минуты. Проверьте repowise doctor или повторите позже.';
+    render();
+  }, 130_000);
   try {
     const res = await api.repowise[kind]({ projectDir: state.projectDir, question: query, query });
-    state.repowiseOutput = res.output || res.error || '(пусто)';
+    if (!timedOut) state.repowiseOutput = res.output || res.error || '(пусто)';
   } catch (err) {
-    state.repowiseOutput = `Ошибка: ${err.message}`;
-    toast(`Repowise: ${err.message}`, 'err');
+    if (!timedOut) {
+      state.repowiseOutput = `Ошибка: ${err.message}`;
+      toast(`Repowise: ${err.message}`, 'err');
+    }
+  } finally {
+    clearTimeout(guard);
   }
   render();
 }
