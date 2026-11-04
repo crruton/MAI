@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, clipboard } = require('electron');
 
 const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
 
@@ -127,6 +127,13 @@ contextBridge.exposeInMainWorld('mai', {
     connectMcp: (payload) => invoke('repowise:connectMcp', payload),
     serve: (payload) => invoke('repowise:serve', payload),
     stopServe: (payload) => invoke('repowise:stopServe', payload),
+  },
+  clipboard: {
+    // navigator.clipboard на file:// в Electron часто запрещён — используем нативный модуль.
+    writeText: (text) => {
+      clipboard.writeText(String(text ?? ''));
+      return true;
+    },
   },
   openPath: (target) => invoke('app:openPath', target),
   openExternal: (url) => invoke('app:openExternal', url),

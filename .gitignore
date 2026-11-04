@@ -25,3 +25,8 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Repowise local index and generated agent instructions
+.repowise/
+.claude/
+

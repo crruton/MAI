@@ -1269,7 +1269,10 @@ async function init() {
     const copy = event.target.closest('.copy-code');
     if (copy) {
       const code = copy.closest('pre')?.querySelector('code')?.textContent || '';
-      navigator.clipboard.writeText(code).then(() => {
+      const write = api.clipboard?.writeText
+        ? Promise.resolve(api.clipboard.writeText(code))
+        : navigator.clipboard.writeText(code);
+      write.then(() => {
         copy.textContent = 'Скопировано';
         setTimeout(() => (copy.textContent = 'Копировать'), 1500);
       });

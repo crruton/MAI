@@ -193,7 +193,11 @@ function linesHtml(lines) {
 
 async function copyText(text) {
   try {
-    await navigator.clipboard.writeText(text);
+    if (api.clipboard?.writeText) {
+      api.clipboard.writeText(text);
+    } else {
+      await navigator.clipboard.writeText(text);
+    }
     toast('Скопировано', 'ok');
   } catch {
     toast('Не удалось скопировать', 'err');
@@ -1882,12 +1886,17 @@ async function deleteArtifact() {
         type: 'button',
         text: 'Удалить',
         onclick: async () => {
-          await api.artifacts.remove({ projectDir: state.projectDir, id: state.artifact.id });
-          modal.close();
-          state.artifact = null;
-          state.artifactHistory = [];
-          await loadArtifacts();
-          render();
+          try {
+            await api.artifacts.remove({ projectDir: state.projectDir, id: state.artifact.id });
+            modal.close();
+            state.artifact = null;
+            state.artifactHistory = [];
+            await loadArtifacts();
+            render();
+            toast('Артефакт удалён', 'ok');
+          } catch (err) {
+            toast(`Не удалось удалить: ${err.message}`, 'err');
+          }
         },
       }),
     ],
@@ -2107,29 +2116,44 @@ async function syncInfra() {
 }
 
 async function pushSecrets() {
-  const res = await api.infra.pushSecrets();
-  toast(res.ok ? 'Ключи отправлены в Vault' : res.error, res.ok ? 'ok' : 'err');
+  try {
+    const res = await api.infra.pushSecrets();
+    toast(res.ok ? 'Ключи отправлены в Vault' : res.error || 'Не удалось отправить ключи', res.ok ? 'ok' : 'err');
+  } catch (err) {
+    toast(`Vault: ${err.message}`, 'err');
+  }
 }
 
 async function pullSecrets() {
-  const res = await api.infra.pullSecrets();
-  toast(res.ok ? `Загружены провайдеры: ${res.result?.providers?.join(', ') || ''}` : res.error, res.ok ? 'ok' : 'err');
-  if (res.ok) {
-    state.settings = await api.settings.get();
-    render();
+  try {
+    const res = await api.infra.pullSecrets();
+    toast(
+      res.ok ? `Загружены провайдеры: ${res.result?.providers?.join(', ') || ''}` : res.error || 'Не удалось загрузить ключи',
+      res.ok ? 'ok' : 'err',
+    );
+    if (res.ok) {
+      state.settings = await api.settings.get();
+      render();
+    }
+  } catch (err) {
+    toast(`Vault: ${err.message}`, 'err');
   }
 }
 
 async function remoteSearch() {
   const query = $('#infra-query')?.value.trim();
   if (!query) return;
-  const res = await api.infra.search({ projectDir: state.projectDir, query });
-  if (!res.ok) {
-    toast(res.error, 'err');
-    return;
+  try {
+    const res = await api.infra.search({ projectDir: state.projectDir, query });
+    if (!res.ok) {
+      toast(res.error || 'Поиск недоступен', 'err');
+      return;
+    }
+    state.remoteResults = res.result;
+    render();
+  } catch (err) {
+    toast(`Поиск: ${err.message}`, 'err');
   }
-  state.remoteResults = res.result;
-  render();
 }
 
 /* ---------- repowise ---------- */
@@ -2195,33 +2219,39 @@ function storageRepowise() {
 }
 
 async function repowiseAction(action) {
-  if (action === 'install') {
-    toast('Устанавливаю repowise, это может занять несколько минут…');
-    const res = await api.repowise.install();
-    toast(res.ok ? 'Repowise установлен' : `Не удалось: ${String(res.output || res.error || '').slice(0, 300)}`, res.ok ? 'ok' : 'err');
-    state.repowiseOutput = res.output || '';
+  try {
+    if (action === 'install') {
+      toast('Устанавливаю repowise, это может занять несколько минут…');
+      const res = await api.repowise.install();
+      toast(res.ok ? 'Repowise установлен' : `Не удалось: ${String(res.output || res.error || '').slice(0, 300)}`, res.ok ? 'ok' : 'err');
+      state.repowiseOutput = res.output || '';
+      await loadRepowise();
+      return;
+    }
+    if (action === 'mcp') {
+      const res = await api.repowise.connectMcp({ projectDir: state.projectDir });
+      toast(res.ok ? 'MCP repowise подключён' : `MCP: ${res.error || 'не удалось подключить'}`, res.ok ? 'ok' : 'err');
+      state.repowiseOutput = JSON.stringify(res, null, 2);
+      render();
+      return;
+    }
+    if (action === 'serve') {
+      const res = await api.repowise.serve({ projectDir: state.projectDir });
+      state.repowiseOutput = res.output || res.url || '';
+      toast(res.ok ? `Дашборд: ${res.url}` : 'Не удалось запустить дашборд', res.ok ? 'ok' : 'err');
+      render();
+      return;
+    }
+    toast('Выполняю…');
+    const res = await api.repowise[action]({ projectDir: state.projectDir });
+    state.repowiseOutput = res.output || res.error || JSON.stringify(res, null, 2);
+    toast(res.ok ? 'Готово' : `Ошибка: ${String(res.error || res.output || '').slice(0, 200)}`, res.ok ? 'ok' : 'err');
     await loadRepowise();
-    return;
-  }
-  if (action === 'mcp') {
-    const res = await api.repowise.connectMcp({ projectDir: state.projectDir });
-    toast(res.ok ? 'MCP repowise подключён' : `MCP: ${res.error || 'не удалось подключить'}`, res.ok ? 'ok' : 'err');
-    state.repowiseOutput = JSON.stringify(res, null, 2);
+  } catch (err) {
+    state.repowiseOutput = `Ошибка: ${err.message}`;
+    toast(`Repowise: ${err.message}`, 'err');
     render();
-    return;
   }
-  if (action === 'serve') {
-    const res = await api.repowise.serve({ projectDir: state.projectDir });
-    state.repowiseOutput = res.output || res.url || '';
-    toast(res.ok ? `Дашборд: ${res.url}` : 'Не удалось запустить дашборд', res.ok ? 'ok' : 'err');
-    render();
-    return;
-  }
-  toast('Выполняю…');
-  const res = await api.repowise[action]({ projectDir: state.projectDir });
-  state.repowiseOutput = res.output || res.error || JSON.stringify(res, null, 2);
-  toast(res.ok ? 'Готово' : `Ошибка: ${String(res.error || res.output || '').slice(0, 200)}`, res.ok ? 'ok' : 'err');
-  await loadRepowise();
 }
 
 async function repowiseQuery(kind) {
@@ -2232,8 +2262,13 @@ async function repowiseQuery(kind) {
   }
   state.repowiseOutput = 'Запрашиваю индекс…';
   render();
-  const res = await api.repowise[kind]({ projectDir: state.projectDir, question: query, query });
-  state.repowiseOutput = res.output || res.error || '(пусто)';
+  try {
+    const res = await api.repowise[kind]({ projectDir: state.projectDir, question: query, query });
+    state.repowiseOutput = res.output || res.error || '(пусто)';
+  } catch (err) {
+    state.repowiseOutput = `Ошибка: ${err.message}`;
+    toast(`Repowise: ${err.message}`, 'err');
+  }
   render();
 }
 
