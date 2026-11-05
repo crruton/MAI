@@ -1,0 +1,69 @@
+# Локальная Multica для синхронизации задач MAI Code.
+#
+# Это упрощённый шаблон. Официальный и проверяемый способ — клонировать
+# https://github.com/multica-ai/multica и выполнить `make selfhost`.
+# Официальный compose лежит в docker-compose.selfhost.yml и содержит больше
+# сервисов и переменных.
+#
+# Запуск:
+#   docker compose -f infra/multica/docker-compose.yml up -d
+#
+# Web UI:  http://localhost:3000
+# API:     http://localhost:8080
+#
+# Без RESEND_API_KEY код входа печатается в лог backend:
+#   docker logs -f mai-code-multica-backend | Select-String "Verification code"
+
+name: mai-code-multica
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: mai-code-multica-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: multica
+      POSTGRES_USER: multica
+      POSTGRES_PASSWORD: ${MULTICA_DB_PASSWORD:-multica-dev-password}
+    volumes:
+      - multica-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U multica -d multica"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  backend:
+    image: ${MULTICA_BACKEND_IMAGE:-ghcr.io/multica-ai/multica-backend:latest}
+    container_name: mai-code-multica-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${MULTICA_APP_ENV:-development}
+      PORT: "8080"
+      DATABASE_URL: postgres://multica:${MULTICA_DB_PASSWORD:-multica-dev-password}@postgres:5432/multica?sslmode=disable
+      JWT_SECRET: ${MULTICA_JWT_SECRET:-change-me-local-only}
+      FRONTEND_ORIGIN: http://localhost:3000
+      APP_URL: http://localhost:3000
+      MULTICA_DEV_VERIFICATION_CODE: ${MULTICA_DEV_VERIFICATION_CODE:-888888}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      DO_NOT_TRACK: ${DO_NOT_TRACK:-1}
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  web:
+    image: ${MULTICA_WEB_IMAGE:-ghcr.io/multica-ai/multica-web:latest}
+    container_name: mai-code-multica-web
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      REMOTE_API_URL: http://backend:8080
+      APP_URL: http://localhost:3000
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  multica-db:

@@ -44,6 +44,9 @@ import * as repowise from './lib/repowise.js';
 import { editDiagram } from './lib/diagram-agent.js';
 import { createWorkspace, listWorkspaces, sandboxRoot } from './lib/workspace.js';
 import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin } from './lib/auth.js';
+import { listDocs, readDoc, searchDocs } from './lib/docs.js';
+import * as multica from './lib/multica.js';
+import * as sandbox from './lib/container.js';
 
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
@@ -74,6 +77,26 @@ const mcp = new McpManager();
 const runs = new Map(); // windowId -> { controller, approvals: Map }
 
 let mainWindow = null;
+
+/**
+ * MCP-серверы проекта лежат в <проект>/.mai-code/mcp.json и дополняют
+ * глобальные настройки. Проектные записи имеют приоритет.
+ */
+function projectMcpConfig(projectDir) {
+  if (!projectDir) return {};
+  try {
+    const file = path.join(projectDir, '.mai-code', 'mcp.json');
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return data.mcpServers || data || {};
+  } catch {
+    return {};
+  }
+}
+
+function mcpConfigs(projectDir) {
+  const settings = loadSettings();
+  return { ...(settings.mcpServers || {}), ...projectMcpConfig(projectDir || settings.projectDir) };
+}
 
 function send(window, event) {
   if (!window || window.isDestroyed()) return;
@@ -184,7 +207,7 @@ app.whenReady().then(async () => {
   }
   createWindow();
   const settings = loadSettings();
-  mcp.sync(settings.mcpServers || {}).catch(() => {});
+  mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -234,7 +257,7 @@ ipcMain.handle('settings:save', async (_e, patch) => {
   delete clean.baseURL;
   delete clean.model;
   const next = saveSettings(clean);
-  if (patch.mcpServers) await mcp.sync(next.mcpServers || {});
+  if (patch.mcpServers) await mcp.sync(mcpConfigs(next.projectDir));
   return publicSettings();
 });
 
@@ -470,6 +493,24 @@ ipcMain.handle('chat:start', async (event, payload) => {
 
   const projectDir = payload.projectDir || settings.projectDir;
   const model = activeKey;
+
+  // Ревизор опционален: если модель не разрешилась, работаем без него.
+  let reviewer = null;
+  if (settings.reviewer?.enabled) {
+    try {
+      const reviewerKey = settings.reviewer.model || activeKey;
+      const resolvedReviewer = resolveModel(settings, reviewerKey);
+      if (resolvedReviewer.provider.apiKey) {
+        reviewer = {
+          provider: resolvedReviewer.provider,
+          model: resolvedReviewer.modelId,
+          maxRounds: Math.max(0, Math.min(5, Number(settings.reviewer.maxRounds ?? 2))),
+        };
+      }
+    } catch {
+      reviewer = null;
+    }
+  }
   let session = payload.sessionId ? getSession(payload.sessionId) : null;
   if (!session) {
     session = createSession({ title: '', model, projectDir });
@@ -501,6 +542,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
         mcp,
         pluginTools,
         transforms,
+        reviewer,
         emit: (e) => send(window, e),
         approve: (name, summary) =>
           new Promise((resolve) => {
@@ -593,16 +635,50 @@ ipcMain.handle('skills:delete', (_e, file) => {
   return deleteSkill(file);
 });
 
+// ---------- Multica ----------
+
+ipcMain.handle('multica:status', () => multica.status());
+ipcMain.handle('multica:auth', () => multica.authStatus());
+ipcMain.handle('multica:issues', (_e, limit) => multica.listIssues(limit || 30));
+ipcMain.handle('multica:syncDocs', (_e, projectDir) => {
+  requireAdmin();
+  return multica.syncOpenSpec(projectDir || loadSettings().projectDir);
+});
+
+// ---------- Docker-песочницы ----------
+
+ipcMain.handle('sandbox:status', () => sandbox.dockerStatus());
+ipcMain.handle('sandbox:list', () => sandbox.listContainers());
+ipcMain.handle('sandbox:start', (_e, payload) => {
+  requireAdmin();
+  return sandbox.startContainer(payload || {});
+});
+ipcMain.handle('sandbox:stop', (_e, payload) => {
+  requireAdmin();
+  return sandbox.stopContainer(payload?.name, { remove: payload?.remove !== false });
+});
+ipcMain.handle('sandbox:logs', (_e, payload) => sandbox.containerLogs(payload?.name, payload?.lines || 200));
+ipcMain.handle('sandbox:exec', (_e, payload) => {
+  requireAdmin();
+  return sandbox.execInContainer(payload?.name, payload?.command);
+});
+
+// ---------- встроенная документация ----------
+
+ipcMain.handle('docs:list', () => listDocs());
+ipcMain.handle('docs:read', (_e, relative) => readDoc(relative));
+ipcMain.handle('docs:search', (_e, query) => searchDocs(query));
+
 // ---------- MCP ----------
 
 ipcMain.handle('mcp:status', () => mcp.status());
-ipcMain.handle('mcp:sync', async () => {
+ipcMain.handle('mcp:configs', (_e, projectDir) => mcpConfigs(projectDir));
+ipcMain.handle('mcp:sync', async (_e, projectDir) => {
   const settings = loadSettings();
-  return mcp.sync(settings.mcpServers || {});
+  return mcp.sync(mcpConfigs(projectDir || settings.projectDir));
 });
-ipcMain.handle('mcp:connect', async (_e, name) => {
-  const settings = loadSettings();
-  const config = (settings.mcpServers || {})[name];
+ipcMain.handle('mcp:connect', async (_e, name, projectDir) => {
+  const config = mcpConfigs(projectDir)[name];
   if (!config) return { ok: false, error: 'Сервер не найден в настройках' };
   return mcp.connect(name, config);
 });

@@ -1,0 +1,143 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: multica-uploads
+  namespace: mai-code
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multica-backend
+  namespace: mai-code
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: multica-backend
+  template:
+    metadata:
+      labels:
+        app: multica-backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/multica-ai/multica-backend:latest
+          env:
+            - name: APP_ENV
+              value: production
+            - name: PORT
+              value: "8080"
+            - name: DATABASE_URL
+              value: postgres://multica:$(MULTICA_DB_PASSWORD)@multica-db:5432/multica?sslmode=disable
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: mai-code-secrets
+                  key: JWT_SECRET
+            - name: MULTICA_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mai-code-secrets
+                  key: MULTICA_DB_PASSWORD
+            - name: RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mai-code-secrets
+                  key: RESEND_API_KEY
+                  optional: true
+            - name: APP_URL
+              value: https://multica.mai-code.local
+            - name: FRONTEND_ORIGIN
+              value: https://multica.mai-code.local
+            - name: DO_NOT_TRACK
+              value: "1"
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: uploads
+              mountPath: /data/uploads
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: multica-uploads
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: multica-backend
+  namespace: mai-code
+spec:
+  selector:
+    app: multica-backend
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multica-web
+  namespace: mai-code
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: multica-web
+  template:
+    metadata:
+      labels:
+        app: multica-web
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/multica-ai/multica-web:latest
+          env:
+            - name: REMOTE_API_URL
+              value: http://multica-backend:8080
+            - name: APP_URL
+              value: https://multica.mai-code.local
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: multica-web
+  namespace: mai-code
+spec:
+  selector:
+    app: multica-web
+  ports:
+    - port: 3000
+      targetPort: 3000

@@ -64,10 +64,30 @@ contextBridge.exposeInMainWorld('mai', {
     create: (data) => invoke('skills:create', data),
     remove: (file) => invoke('skills:delete', file),
   },
+  docs: {
+    list: () => invoke('docs:list'),
+    read: (relative) => invoke('docs:read', relative),
+    search: (query) => invoke('docs:search', query),
+  },
+  multica: {
+    status: () => invoke('multica:status'),
+    auth: () => invoke('multica:auth'),
+    issues: (limit) => invoke('multica:issues', limit),
+    syncDocs: (projectDir) => invoke('multica:syncDocs', projectDir),
+  },
+  sandbox: {
+    status: () => invoke('sandbox:status'),
+    list: () => invoke('sandbox:list'),
+    start: (payload) => invoke('sandbox:start', payload),
+    stop: (payload) => invoke('sandbox:stop', payload),
+    logs: (payload) => invoke('sandbox:logs', payload),
+    exec: (payload) => invoke('sandbox:exec', payload),
+  },
   mcp: {
     status: () => invoke('mcp:status'),
-    sync: () => invoke('mcp:sync'),
-    connect: (name) => invoke('mcp:connect', name),
+    configs: (projectDir) => invoke('mcp:configs', projectDir),
+    sync: (projectDir) => invoke('mcp:sync', projectDir),
+    connect: (name, projectDir) => invoke('mcp:connect', name, projectDir),
     remove: (name) => invoke('mcp:remove', name),
   },
   plugins: {

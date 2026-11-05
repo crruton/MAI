@@ -33,6 +33,9 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "pack:tar": "node scripts/make-tar.mjs",
+    "pack:offline": "node scripts/make-offline.mjs",
+    "docs:check": "node scripts/check-docs.mjs",
+    "multica:sync": "node scripts/multica-sync.mjs",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
     "infra:logs": "docker compose -f infra/docker-compose.yml logs -f --tail=100"

@@ -18,19 +18,28 @@ npm.cmd start
 ### Установщики
 
 ```powershell
-npm.cmd run dist:win     # NSIS + portable .exe в dist/
-npm.cmd run dist         # текущая платформа
-npm.cmd run pack:tar     # dist/mai-code-<версия>.tar.gz с исходниками
+npm.cmd run dist:win       # NSIS + portable .exe в dist/
+npm.cmd run dist           # текущая платформа
+npm.cmd run pack:offline   # tar.gz с node_modules и Electron (офлайн)
+npm.cmd run pack:tar       # tar.gz с исходниками (нужен npm и сеть)
 ```
+
+| Артефакт | Что внутри | Запуск без Node.js | Размер |
+|---|---|---|---|
+| `dist/win-unpacked/MAI Code.exe` | portable-сборка | да | ~200 МБ |
+| `*-offline-win-x64.tar.gz` | исходники + `node_modules` + Electron | да | сотни МБ |
+| `*.tar.gz` (`pack:tar`) | только исходники | нет | ~0.4 МБ |
 
 Конфигурация — `electron-builder.yml`. Релиз собирается GitHub Actions по тегу `v*`:
 `.github/workflows/release.yml` создаёт черновик релиза с артефактами.
+Контрольные суммы пишутся в `dist/SHA256SUMS.txt`.
 
 ### Ограничения
 
 - Сборка под macOS возможна только на macOS (подпись и notarization не настроены).
 - Установщик не подписан сертификатом: Windows SmartScreen покажет предупреждение.
-- `pack:tar` требует системный `tar` (есть в Windows 10+, Linux, macOS).
+- Автообновления нет: новая версия — новый архив.
+- `pack:tar` и `pack:offline` требуют системный `tar` (есть в Windows 10+, Linux, macOS).
 
 ## 2. Инфраструктура хранения
 
@@ -59,19 +68,24 @@ cd infra/keycloak
 docker compose up -d
 ```
 
+Compose поднимает Keycloak и Postgres. Пользователи хранятся в Postgres, а не в
+H2, поэтому переживают пересоздание контейнера.
+
 Realm `mai-code` импортируется из `realm-mai-code.json`:
 
 - клиент `mai-code-desktop` — публичный, включён Device Authorization Grant и PKCE
   (`S256`): приложение присылает `code_challenge` на шаге device и `code_verifier`
   при обмене кода на токен;
 - роли `admin` и `guest`;
-- тестовые пользователи `admin/admin` и `guest/guest` — пароли по умолчанию,
-  их нужно сменить или удалить пользователей перед продакшеном.
+- пользователи `admin/admin`, `guest/guest` и `letun82` (`letun82@mail.ru`,
+  временный пароль `ChangeMe-letun82!`, роль `admin`).
 
 Первый запуск Keycloak занимает 1–2 минуты: Quarkus собирает приложение и
-инициализирует схему БД. Если контейнер падает с `Database operation failed` и
-`IO Exception ... keycloakdb.mv.db`, удалите контейнер (`docker compose down`) и
-запустите заново — H2-файл мог остаться заблокированным после аварийной остановки.
+инициализирует схему Postgres. Данные лежат в томе `keycloak-db`.
+
+Добавить пользователя: Admin Console → realm `mai-code` → Users → Add user,
+затем Credentials и Role mapping. Подробности и команды `kcadm.sh`:
+`infra/keycloak/README.md`.
 
 В MAI Code откройте «Доступ», укажите issuer:
 
@@ -117,13 +131,35 @@ docker compose up -d
 - Это собственный хаб, а не сервис обхода блокировок. Соблюдайте закон страны,
   где размещён сервер.
 
-## 5. Домен и сайт
+## 5. Домен, DNS и сайт
 
 Статический лендинг лежит в `site/`, публикуется workflow `.github/workflows/pages.yml`.
 Бесплатный вариант — `https://crruton.github.io/mai-code/`. Инструкция по своему
 домену и бесплатным поддоменам — `docs/DOMAIN.md`.
 
-## 6. Песочницы проектов
+Подробно про hosts, A/CNAME, TLS и переезд — `docs/DNS.md`.
+
+## 6. Kubernetes
+
+```powershell
+k3d cluster create mai-code --agents 1 -p "8080:80@loadbalancer"
+kubectl apply -k infra/k8s
+```
+
+Манифесты и бесплатное облако — `docs/KUBERNETES.md`. Секреты создаются
+отдельно, `infra/k8s/secrets.example.yaml` — только шаблон.
+
+## 7. Multica
+
+```powershell
+docker compose -f infra/multica/docker-compose.yml up -d
+npm.cmd run multica:sync
+```
+
+Подробности: `docs/MULTICA.md`. Официальный способ — `make selfhost` в
+репозитории Multica; локальный compose — упрощённый шаблон.
+
+## 8. Песочницы проектов
 
 Кнопка «＋ Новый проект» создаёт папку в `%APPDATA%\mai-code\sandboxes\<slug>`:
 
@@ -133,13 +169,17 @@ docker compose up -d
   по импорту в OpenScion;
 - глобальные навыки, `AGENTS.md` и профили моделей остаются общими.
 
+Панель «Песочницы» запускает Docker-контейнер с папкой проекта в `/workspace`:
+read-only корневая ФС, сброс capabilities, лимиты CPU/RAM, публикация портов.
+Подробности: `docs/SANDBOXES.md`.
+
 OpenScion — серверная SCM-система, а не git-хостинг. MAI Code создаёт локальный git
 и памятку `docs/OPENSCION.md`; сервер и импорт пользователь делает сам.
 
-## 7. Чего пока нет
+## 9. Чего пока нет
 
 - Серверного режима с изоляцией процессов и файловой системы по пользователю.
 - Подписи установщиков и автообновления.
-- Проверенного продакшен-профиля Keycloak и Vault.
+- Проверенного продакшен-профиля Keycloak, Vault и Kubernetes.
 - Автоматического DNS/TLS для домена.
-- Полной синхронизации с Multica: доска локальная.
+- Двусторонней синхронизации с Multica: только OpenSpec → Multica.

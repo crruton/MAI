@@ -4,6 +4,7 @@ import { shellTools } from './tools/shell.js';
 import { skillTools } from './tools/skills.js';
 import { repowiseTools } from './tools/repowise.js';
 import { listSkills, readAgents, readMemory } from './skills.js';
+import { reviewAnswer } from './reviewer.js';
 
 const BASE_PROMPT = `Ты — MAI Code, агент для программирования на рабочей машине пользователя.
 
@@ -77,11 +78,15 @@ export async function runAgent({
   mcp,
   pluginTools = [],
   transforms = [],
+  reviewer = null,
 }) {
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
   if (!provider.apiKey) throw new Error(`Не задан API-ключ провайдера «${provider.name || 'unknown'}»`);
 
   const client = new OpenAI({ apiKey: provider.apiKey, baseURL: provider.baseURL, maxRetries: 1 });
+  const reviewerClient = reviewer?.provider?.baseURL && reviewer?.provider?.apiKey
+    ? new OpenAI({ apiKey: reviewer.provider.apiKey, baseURL: reviewer.provider.baseURL, maxRetries: 1 })
+    : null;
   const skills = listSkills(projectDir);
   const repoTools = settings.repowise?.enabled ? repowiseTools : [];
   const tools = [...fsTools, ...shellTools, ...skillTools, ...repoTools, ...pluginTools, ...mcp.toolSchemas()];
@@ -89,6 +94,8 @@ export async function runAgent({
   const system = systemPrompt({ projectDir, skills, mcpStatus: mcp.status() });
   let history = trimMessages([...messages]);
   const maxIterations = settings.maxIterations || 30;
+  const maxReviewRounds = Number(reviewer?.maxRounds ?? 2);
+  let reviewRound = 0;
 
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
     if (signal.aborted) break;
@@ -154,6 +161,38 @@ export async function runAgent({
     emit({ type: 'assistant', message: assistantMessage });
 
     if (!validCalls.length) {
+      // Ревизор проверяет финальный ответ. При revise причина добавляется
+      // в историю как сообщение пользователя, и цикл продолжается.
+      if (reviewerClient && reviewRound < maxReviewRounds) {
+        const task = [...history].reverse().find((m) => m.role === 'user')?.content || '';
+        reviewRound += 1;
+        emit({ type: 'review:start', round: reviewRound, model: reviewer.model || model });
+        let verdict;
+        try {
+          verdict = await reviewAnswer({
+            client: reviewerClient,
+            model: reviewer.model || model,
+            task,
+            answer: content,
+            signal,
+            temperature: 0,
+          });
+        } catch (err) {
+          verdict = {
+            verdict: 'approve',
+            reason: `Ревизор недоступен: ${err?.message || String(err)}`,
+            instructions: '',
+          };
+        }
+        emit({ type: 'review:result', round: reviewRound, ...verdict });
+        if (verdict.verdict === 'revise') {
+          history.push({
+            role: 'user',
+            content: `[Ревизор, раунд ${reviewRound}] ${verdict.reason}\n\nЧто исправить:\n${verdict.instructions || 'Уточни ответ и проверь результат.'}`,
+          });
+          continue;
+        }
+      }
       emit({ type: 'done', messages: history });
       return history;
     }

@@ -1,17 +1,43 @@
 name: mai-code-keycloak
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mai-code-keycloak-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD:-keycloak-dev-password}
+    volumes:
+      - keycloak-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   keycloak:
     image: quay.io/keycloak/keycloak:26.0
     container_name: mai-code-keycloak
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     command: start-dev --import-realm
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN_USER:-admin}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-change-me}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:-keycloak-dev-password}
       KC_HTTP_PORT: 8080
       KC_HOSTNAME_STRICT: "false"
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
       - ./realm-mai-code.json:/opt/keycloak/data/import/realm-mai-code.json:ro
+
+volumes:
+  keycloak-db:

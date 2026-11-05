@@ -1,5 +1,30 @@
 # Домен для MAI Code
 
+Подробности про DNS, `hosts`, локальные имена и TLS — [DNS.md](DNS.md).
+
+## Локальная разработка
+
+Для локальных сервисов не нужен публичный домен. Достаточно записи в `hosts`:
+
+```
+# C:\Windows\System32\drivers\etc\hosts (нужны права администратора)
+127.0.0.1  mai-code.local
+127.0.0.1  keycloak.mai-code.local
+127.0.0.1  multica.mai-code.local
+127.0.0.1  api.multica.mai-code.local
+```
+
+Ingress в `infra/k8s/ingress.yaml` уже использует `keycloak.mai-code.local` и
+`multica.mai-code.local`. Проверка:
+
+```powershell
+curl.exe -H "Host: keycloak.mai-code.local" http://localhost
+```
+
+`*.local` не резолвится в интернете, поэтому не конфликтует с публикацией.
+Сертификат Let's Encrypt для `.local` не выдаётся: либо отключите TLS в ingress,
+либо используйте самоподписанный сертификат и доверьте его локально.
+
 ## Бесплатно и сразу
 
 ### GitHub Pages

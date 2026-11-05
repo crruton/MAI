@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
 import { envCandidates, readEnvFiles } from './env.js';
+import { RUNTIME_PRESETS } from './runtimes.js';
 
 const DEFAULTS = {
   temperature: 0.3,
@@ -26,6 +27,17 @@ const DEFAULTS = {
   repowise: {
     enabled: false,
     distill: true,
+  },
+  reviewer: {
+    enabled: false,
+    model: '',
+    maxRounds: 2,
+  },
+  multica: {
+    url: 'http://localhost:8080',
+    appUrl: 'http://localhost:3000',
+    workspaceId: '',
+    command: 'multica',
   },
 };
 
@@ -125,24 +137,7 @@ function bootstrapProviders(saved, env) {
 }
 
 function bootstrapRuntimes(saved) {
-  const base = {
-    opencode: {
-      name: 'OpenCode',
-      command: 'opencode',
-      args: ['run', '--format', 'json', '{prompt}'],
-      promptVia: 'arg',
-      parser: 'opencode-json',
-      enabled: true,
-    },
-    herdr: {
-      name: 'herdr',
-      command: 'herdr',
-      args: ['agent', 'prompt', '{target}', '{prompt}', '--wait'],
-      promptVia: 'arg',
-      target: '',
-      enabled: false,
-    },
-  };
+  const base = RUNTIME_PRESETS;
   const runtimes = { ...base, ...(saved.runtimes || {}) };
   // Старые сохранения не знали про parser — дозаполняем из пресета.
   for (const [id, preset] of Object.entries(base)) {

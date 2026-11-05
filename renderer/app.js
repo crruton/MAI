@@ -95,7 +95,7 @@ function activeRuntime() {
 
 /* ---------- модальные окна ---------- */
 
-function openModal({ title, body, footer, small = false, onClose }) {
+function openModal({ title, body, footer, small = false, wide = false, onClose }) {
   const root = $('#modal-root');
   const close = () => {
     backdrop.remove();
@@ -107,7 +107,7 @@ function openModal({ title, body, footer, small = false, onClose }) {
   ]);
   const bodyEl = el('div', { class: 'modal-body' }, body);
   const footEl = el('div', { class: 'modal-foot' }, footer || []);
-  const modal = el('div', { class: `modal${small ? ' small' : ''}` }, [head, bodyEl, footEl]);
+  const modal = el('div', { class: `modal${small ? ' small' : ''}${wide ? ' wide' : ''}` }, [head, bodyEl, footEl]);
   const backdrop = el('div', { class: 'modal-backdrop' }, [modal]);
   backdrop.addEventListener('mousedown', (event) => {
     if (event.target === backdrop) close();
@@ -545,6 +545,17 @@ function handleEvent(event) {
     case 'approval':
       askApproval(event);
       break;
+    case 'review:start':
+      toast(`Ревизор ${event.model || ''} проверяет ответ…`);
+      break;
+    case 'review:result':
+      toast(
+        event.verdict === 'approve'
+          ? `Ревизор: принято${event.reason ? ` — ${event.reason}` : ''}`
+          : `Ревизор: на доработку${event.reason ? ` — ${event.reason}` : ''}`,
+        event.verdict === 'approve' ? 'ok' : 'err',
+      );
+      break;
     case 'done':
       state.messages = event.messages || state.messages;
       state.live = null;
@@ -634,6 +645,18 @@ async function openSettings() {
   const maxIterations = el('input', { type: 'number', min: '1', max: '100', value: settings.maxIterations });
   const outside = el('input', { type: 'checkbox' });
   outside.checked = Boolean(settings.allowOutsideProject);
+  const reviewerEnabled = el('input', { type: 'checkbox' });
+  reviewerEnabled.checked = Boolean(settings.reviewer?.enabled);
+  const reviewerModel = el('input', {
+    value: settings.reviewer?.model || '',
+    placeholder: 'провайдер/модель или пусто — модель агента',
+  });
+  const reviewerRounds = el('input', {
+    type: 'number',
+    min: '0',
+    max: '5',
+    value: settings.reviewer?.maxRounds ?? 2,
+  });
 
   const modal = openModal({
     title: 'Настройки',
@@ -645,6 +668,14 @@ async function openSettings() {
       el('label', { class: 'field' }, [
         el('span', { text: 'Доступ к файлам вне проекта' }),
         el('label', { class: 'hint-text' }, [outside, ' разрешить абсолютные пути вне папки проекта']),
+      ]),
+      el('label', { class: 'field' }, [
+        el('span', { text: 'Ревизор: вторая модель проверяет ответ' }),
+        el('label', { class: 'hint-text' }, [reviewerEnabled, ' включить approve/revise']),
+      ]),
+      el('div', { class: 'row' }, [
+        field('Модель ревизора', reviewerModel),
+        field('Раундов доработки', reviewerRounds),
       ]),
       el('p', {
         class: 'hint-text',
@@ -667,6 +698,11 @@ async function openSettings() {
             temperature: Number(temperature.value),
             maxIterations: Number(maxIterations.value),
             allowOutsideProject: outside.checked,
+            reviewer: {
+              enabled: reviewerEnabled.checked,
+              model: reviewerModel.value.trim(),
+              maxRounds: Math.max(0, Math.min(5, Number(reviewerRounds.value || 0))),
+            },
           });
           updateChrome();
           modal.close();
@@ -770,7 +806,7 @@ async function openMemory() {
 function applyRoleGuard() {
   const admin = !state.auth || state.auth.role === 'admin';
   document.body.classList.toggle('role-guest', !admin);
-  for (const panel of ['providers', 'runtimes', 'skills', 'agents', 'memory', 'plugins']) {
+  for (const panel of ['providers', 'runtimes', 'skills', 'agents', 'memory', 'plugins', 'multica', 'sandbox']) {
     const button = document.querySelector(`[data-panel="${panel}"]`);
     if (!button) continue;
     button.disabled = !admin;
@@ -1343,11 +1379,175 @@ async function openRuntimes() {
   });
 }
 
+/* ---------- встроенная документация (GitBook) ---------- */
+
+function slugHeading(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+async function openDocs(start = 'README.md') {
+  const listing = await api.docs.list();
+  if (!listing.files.length) return toast('Документация не найдена', 'err');
+
+  const sidebar = el('nav', { class: 'docs-sidebar' });
+  const content = el('article', { class: 'docs-content md' });
+  const toc = el('aside', { class: 'docs-toc' });
+  const search = el('input', {
+    class: 'docs-search',
+    type: 'search',
+    placeholder: 'Поиск по документации…',
+  });
+  let current = listing.files.some((f) => f.path === start) ? start : listing.files[0].path;
+
+  const renderSidebar = (items, active) => {
+    sidebar.replaceChildren();
+    const groups = new Map();
+    for (const item of items) {
+      if (!groups.has(item.section)) groups.set(item.section, []);
+      groups.get(item.section).push(item);
+    }
+    for (const [section, docs] of groups) {
+      sidebar.append(el('div', { class: 'docs-group-title', text: section }));
+      for (const doc of docs) {
+        sidebar.append(
+          el('button', {
+            class: `docs-link${doc.path === active ? ' active' : ''}`,
+            type: 'button',
+            title: doc.path,
+            text: doc.title,
+            onclick: () => load(doc.path),
+          }),
+        );
+      }
+    }
+  };
+
+  const renderToc = () => {
+    toc.replaceChildren(el('div', { class: 'docs-group-title', text: 'На этой странице' }));
+    const headings = [...content.querySelectorAll('h1, h2, h3')];
+    if (!headings.length) {
+      toc.append(el('p', { class: 'hint-text', text: 'Нет заголовков' }));
+      return;
+    }
+    for (const heading of headings) {
+      const id = heading.id || slugHeading(heading.textContent);
+      heading.id = id;
+      toc.append(
+        el('a', {
+          class: `docs-toc-link level-${heading.tagName.slice(1)}`,
+          href: `#${id}`,
+          text: heading.textContent,
+          onclick: (event) => {
+            event.preventDefault();
+            heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          },
+        }),
+      );
+    }
+  };
+
+  const load = async (relative) => {
+    current = relative;
+    try {
+      const doc = await api.docs.read(relative);
+      content.innerHTML = renderMarkdown(doc.content);
+      for (const heading of content.querySelectorAll('h1, h2, h3, h4')) {
+        heading.id = slugHeading(heading.textContent);
+      }
+      for (const button of content.querySelectorAll('.copy-code')) {
+        button.addEventListener('click', () => {
+          const code = button.closest('pre')?.querySelector('code')?.textContent || '';
+          api.clipboard.writeText(code);
+          button.textContent = 'Скопировано';
+          setTimeout(() => (button.textContent = 'Копировать'), 1200);
+        });
+      }
+      renderSidebar(listing.files, current);
+      renderToc();
+      content.scrollTop = 0;
+      search.value = '';
+    } catch (err) {
+      toast(`Документ: ${err.message}`, 'err');
+    }
+  };
+
+  let searchSeq = 0;
+  search.addEventListener('input', async () => {
+    const query = search.value.trim();
+    if (query.length < 2) {
+      renderSidebar(listing.files, current);
+      return;
+    }
+    const seq = ++searchSeq;
+    const results = await api.docs.search(query);
+    if (seq !== searchSeq) return;
+    sidebar.replaceChildren(el('div', { class: 'docs-group-title', text: `Найдено: ${results.length}` }));
+    if (!results.length) {
+      sidebar.append(el('p', { class: 'hint-text', text: 'Ничего не найдено' }));
+      return;
+    }
+    for (const result of results) {
+      sidebar.append(
+        el('button', {
+          class: 'docs-link',
+          type: 'button',
+          title: `${result.path}:${result.line}`,
+          onclick: async () => {
+            await load(result.path);
+            toast(`${result.path}, строка ${result.line}`, 'ok');
+          },
+        }, [
+          el('span', { class: 'docs-result-title', text: result.title }),
+          el('span', { class: 'docs-result-snippet', text: result.snippet }),
+        ]),
+      );
+    }
+  });
+
+  const modal = openModal({
+    title: 'Документация MAI Code',
+    wide: true,
+    body: [
+      el('div', { class: 'docs-toolbar' }, [
+        search,
+        el('button', {
+          class: 'btn ghost small',
+          type: 'button',
+          text: 'Открыть папку',
+          onclick: () => api.openPath(listing.root),
+        }),
+      ]),
+      el('div', { class: 'docs-shell' }, [sidebar, content, toc]),
+    ],
+    footer: [
+      el('button', {
+        class: 'btn ghost',
+        type: 'button',
+        text: 'Multica: синхронизировать задачи',
+        onclick: async () => {
+          try {
+            const res = await api.multica.syncDocs();
+            toast(`Multica: создано ${res.created}, обновлено ${res.updated}, пропущено ${res.skipped}`, 'ok');
+          } catch (err) {
+            toast(`Multica: ${err.message}`, 'err');
+          }
+        },
+      }),
+      el('button', { class: 'btn primary', type: 'button', text: 'Закрыть', onclick: () => modal.close() }),
+    ],
+  });
+  await load(current);
+}
+
 /* ---------- MCP ---------- */
 
 async function openMcp() {
   const status = await api.mcp.status();
-  const servers = state.settings.mcpServers || {};
+  const servers = (await api.mcp.configs(state.projectDir)) || {};
   const list = el('div', { class: 'list' });
   const names = new Set([...Object.keys(servers), ...status.map((s) => s.name)]);
   if (!names.size) list.append(el('p', { class: 'hint-text', text: 'MCP-серверы не настроены.' }));
@@ -1372,7 +1572,7 @@ async function openMcp() {
             type: 'button',
             text: 'Подключить',
             onclick: async () => {
-              const res = await api.mcp.connect(name);
+              const res = await api.mcp.connect(name, state.projectDir);
               if (!res.ok) toast(res.error, 'err');
               else toast(`Подключено: ${name}`, 'ok');
               modal.close();
@@ -1423,7 +1623,7 @@ async function openMcp() {
           if (!config.url && !config.command) return toast('Нужна команда или URL', 'err');
           const serversNext = { ...(state.settings.mcpServers || {}), [name.value.trim()]: config };
           state.settings = await api.settings.save({ mcpServers: serversNext });
-          await api.mcp.sync();
+          await api.mcp.sync(state.projectDir);
           modal.close();
           openMcp();
         },
@@ -1479,6 +1679,222 @@ async function openPlugins() {
         onclick: () => {
           modal.close();
           openPlugins();
+        },
+      }),
+    ],
+  });
+}
+
+/* ---------- Multica ---------- */
+
+async function openMultica() {
+  const status = await api.multica.status();
+  const issues = await api.multica.issues(20);
+  const config = status.config || {};
+  const serverUrl = el('input', { value: config.url || 'http://localhost:8080' });
+  const appUrl = el('input', { value: config.appUrl || 'http://localhost:3000' });
+  const workspaceId = el('input', { value: config.workspaceId || '', placeholder: 'workspace id или slug (необязательно)' });
+  const command = el('input', { value: config.command || 'multica' });
+
+  const badge = el('span', {
+    class: `badge ${status.available ? 'ok' : 'err'}`,
+    text: status.available ? `CLI ${status.version || 'найден'}` : 'CLI не найден',
+  });
+  const list = el('div', { class: 'list' });
+  if (!issues.ok) {
+    list.append(el('p', { class: 'hint-text', text: `Задачи: ${issues.error}` }));
+  } else if (!issues.issues.length) {
+    list.append(el('p', { class: 'hint-text', text: 'Задач нет или CLI не авторизован.' }));
+  } else {
+    for (const issue of issues.issues) {
+      list.append(
+        el('div', { class: 'list-item' }, [
+          el('div', {}, [
+            el('div', { class: 'title', text: `${issue.key ? `${issue.key} · ` : ''}${issue.title}` }),
+            el('div', { class: 'sub', text: `${issue.status || 'без статуса'}${issue.priority ? ` · ${issue.priority}` : ''}` }),
+          ]),
+        ]),
+      );
+    }
+  }
+
+  const modal = openModal({
+    title: 'Multica — задачи из OpenSpec',
+    body: [
+      el('div', { class: 'row' }, [field('CLI', command), field('API', serverUrl)]),
+      el('div', { class: 'row' }, [field('Web UI', appUrl), field('Workspace', workspaceId)]),
+      el('p', { class: 'hint-text' }, [badge, ' Синхронизация идёт через официальный CLI: multica issue create/update/list.']),
+      el('p', {
+        class: 'hint-text',
+        text: 'Идемпотентность: в описание задачи пишется маркер OpenSpec. Повторный sync обновляет задачу, а не создаёт дубль.',
+      }),
+      el('div', { class: 'docs-group-title', text: 'Последние задачи' }),
+      list,
+    ],
+    footer: [
+      el('button', {
+        class: 'btn',
+        type: 'button',
+        text: 'Проверить вход',
+        onclick: async () => {
+          const res = await api.multica.auth();
+          toast(res.ok ? res.output : `Multica: ${res.error}`, res.ok ? 'ok' : 'err');
+        },
+      }),
+      el('button', {
+        class: 'btn',
+        type: 'button',
+        text: 'Открыть Web UI',
+        onclick: () => api.openExternal(appUrl.value || 'http://localhost:3000'),
+      }),
+      el('button', {
+        class: 'btn',
+        type: 'button',
+        text: 'Сохранить',
+        onclick: async () => {
+          state.settings = await api.settings.save({
+            multica: {
+              url: serverUrl.value.trim(),
+              appUrl: appUrl.value.trim(),
+              workspaceId: workspaceId.value.trim(),
+              command: command.value.trim() || 'multica',
+            },
+          });
+          toast('Настройки Multica сохранены', 'ok');
+        },
+      }),
+      el('button', {
+        class: 'btn primary',
+        type: 'button',
+        text: 'Синхронизировать OpenSpec',
+        onclick: async () => {
+          try {
+            const res = await api.multica.syncDocs(state.projectDir);
+            modal.close();
+            toast(res.message || `Создано ${res.created}, обновлено ${res.updated}`, 'ok');
+          } catch (err) {
+            toast(`Multica: ${err.message}`, 'err');
+          }
+        },
+      }),
+    ],
+  });
+}
+
+/* ---------- Docker-песочницы ---------- */
+
+async function openSandboxes() {
+  const status = await api.sandbox.status();
+  const listing = await api.sandbox.list();
+  const image = el('input', { value: 'node:22-alpine' });
+  const ports = el('input', { placeholder: '3000:3000, 127.0.0.1:8080:8080' });
+  const network = el('select', {}, [
+    el('option', { value: 'bridge', text: 'bridge — сеть с доступом наружу' }),
+    el('option', { value: 'none', text: 'none — без сети' }),
+  ]);
+  const memory = el('input', { value: '2g' });
+  const cpus = el('input', { value: '2' });
+  const command = el('input', { placeholder: 'необязательно: npm run dev' });
+
+  const list = el('div', { class: 'list' });
+  if (!status.available) {
+    list.append(el('p', { class: 'hint-text', text: `Docker недоступен: ${status.error || 'не запущен'}` }));
+  } else if (!listing.containers.length) {
+    list.append(el('p', { class: 'hint-text', text: 'Контейнеров пока нет.' }));
+  } else {
+    for (const item of listing.containers) {
+      list.append(
+        el('div', { class: 'list-item' }, [
+          el('div', {}, [
+            el('div', { class: 'title' }, [item.name, ' ', el('span', { class: `badge ${item.running ? 'ok' : ''}`, text: item.state })]),
+            el('div', {
+              class: 'sub',
+              text: `${item.image}${item.ports.length ? ` · ${item.ports.join(', ')}` : ''}${item.project ? ` · ${item.project}` : ''}`,
+            }),
+          ]),
+          el('div', { class: 'actions' }, [
+            el('button', {
+              class: 'btn ghost',
+              type: 'button',
+              text: 'Логи',
+              onclick: async () => {
+                try {
+                  const res = await api.sandbox.logs({ name: item.name, lines: 200 });
+                  openModal({
+                    title: `Логи: ${item.name}`,
+                    body: [el('pre', { class: 'terminal', text: res.output || '(пусто)' })],
+                    footer: [el('button', { class: 'btn', type: 'button', text: 'Закрыть', onclick: () => document.querySelector('.modal-backdrop')?.remove() })],
+                  });
+                } catch (err) {
+                  toast(`Логи: ${err.message}`, 'err');
+                }
+              },
+            }),
+            el('button', {
+              class: 'btn ghost',
+              type: 'button',
+              text: 'Остановить',
+              onclick: async () => {
+                try {
+                  await api.sandbox.stop({ name: item.name });
+                  modal.close();
+                  openSandboxes();
+                } catch (err) {
+                  toast(`Остановка: ${err.message}`, 'err');
+                }
+              },
+            }),
+          ]),
+        ]),
+      );
+    }
+  }
+
+  const modal = openModal({
+    title: 'Docker-песочницы',
+    body: [
+      el('p', {
+        class: 'hint-text',
+        text: 'Контейнер изолирует процессы и сеть. Папка проекта монтируется в /workspace. Порты публикуются только явно, по умолчанию на 127.0.0.1.',
+      }),
+      el('div', { class: 'row' }, [field('Образ', image), field('Порты', ports)]),
+      el('div', { class: 'row' }, [field('Сеть', network), field('Память', memory), field('CPU', cpus)]),
+      field('Команда запуска', command),
+      el('p', { class: 'hint-text', text: status.available ? `Docker ${status.version}` : `Docker: ${status.error || 'недоступен'}` }),
+      el('div', { class: 'docs-group-title', text: 'Контейнеры MAI Code' }),
+      list,
+    ],
+    footer: [
+      el('button', {
+        class: 'btn',
+        type: 'button',
+        text: 'Обновить',
+        onclick: () => {
+          modal.close();
+          openSandboxes();
+        },
+      }),
+      el('button', {
+        class: 'btn primary',
+        type: 'button',
+        text: 'Запустить',
+        onclick: async () => {
+          if (!state.projectDir) return toast('Сначала выберите папку проекта', 'err');
+          try {
+            const res = await api.sandbox.start({
+              projectDir: state.projectDir,
+              image: image.value.trim(),
+              ports: ports.value.trim(),
+              network: network.value,
+              memory: memory.value.trim() || '2g',
+              cpus: cpus.value.trim() || '2',
+              command: command.value.trim(),
+            });
+            modal.close();
+            toast(`Контейнер ${res.name} запущен${res.ports.length ? `: ${res.ports.join(', ')}` : ''}`, 'ok');
+          } catch (err) {
+            toast(`Песочница: ${err.message}`, 'err');
+          }
         },
       }),
     ],
@@ -1556,6 +1972,9 @@ async function init() {
       if (panel === 'runtimes') openRuntimes();
       if (panel === 'mcp') openMcp();
       if (panel === 'plugins') openPlugins();
+      if (panel === 'docs') openDocs();
+      if (panel === 'multica') openMultica();
+      if (panel === 'sandbox') openSandboxes();
       if (panel === 'auth') openAuth();
     });
   }
