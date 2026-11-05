@@ -35,8 +35,8 @@
 
 - `README.md` и `docs/BACKLOG.md` отражают фактическое состояние, а не планы.
 - `package.json`: новые скрипты `pack:offline`, `docs:check`, `multica:*`.
-- `pack:offline`: архив собирается как tar и сжимается gzip level 1 в Node —
-  быстрее, чем gzip внутри tar на Windows.
+- `pack:offline`: архив собирается как tar и сжимается gzip level 1. На Windows
+  используется `7za` из кеша electron-builder, иначе — `tar` и `zlib` Node.
 
 ### Fixed
 

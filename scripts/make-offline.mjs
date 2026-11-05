@@ -52,6 +52,25 @@ function copy(source, target) {
   return true;
 }
 
+/** 7za из кеша electron-builder: на Windows он заметно быстрее bsdtar. */
+function find7za() {
+  if (process.platform !== 'win32') return '';
+  const cache = path.join(process.env.LOCALAPPDATA || '', 'electron-builder', 'Cache');
+  try {
+    for (const entry of fs.readdirSync(cache)) {
+      if (!entry.startsWith('7zip@')) continue;
+      const dir = path.join(cache, entry);
+      for (const sub of fs.readdirSync(dir)) {
+        const exe = path.join(dir, sub, 'bin', '7za.exe');
+        if (fs.existsSync(exe)) return exe;
+      }
+    }
+  } catch {
+    /* кеша нет — используем tar */
+  }
+  return '';
+}
+
 if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true });
 fs.mkdirSync(stage, { recursive: true });
 
@@ -118,18 +137,39 @@ if (fs.existsSync(archive)) fs.rmSync(archive);
 const archiveTar = path.join(root, 'dist', `${name}.tar`);
 if (fs.existsSync(archiveTar)) fs.rmSync(archiveTar);
 log('упаковываю tar');
-const tar = spawnSync('tar', ['-cf', archiveTar, '-C', outDir, name], { encoding: 'utf8' });
-if (tar.error || tar.status !== 0) {
-  console.error(tar.error?.message || tar.stderr || `tar завершился с кодом ${tar.status}`);
-  process.exit(1);
+const seven = find7za();
+if (seven) {
+  const tar = spawnSync(seven, ['a', '-ttar', archiveTar, name], {
+    cwd: outDir,
+    encoding: 'utf8',
+    timeout: 0,
+  });
+  if (tar.error || tar.status !== 0) {
+    console.error(tar.error?.message || tar.stderr || `7za tar завершился с кодом ${tar.status}`);
+    process.exit(1);
+  }
+  log('сжимаю gzip (7za, level 1)');
+  const gz = spawnSync(seven, ['a', '-tgzip', '-mx=1', archive, archiveTar], {
+    encoding: 'utf8',
+    timeout: 0,
+  });
+  if (gz.error || gz.status !== 0) {
+    console.error(gz.error?.message || gz.stderr || `7za gzip завершился с кодом ${gz.status}`);
+    process.exit(1);
+  }
+} else {
+  const tar = spawnSync('tar', ['-cf', archiveTar, '-C', outDir, name], { encoding: 'utf8' });
+  if (tar.error || tar.status !== 0) {
+    console.error(tar.error?.message || tar.stderr || `tar завершился с кодом ${tar.status}`);
+    process.exit(1);
+  }
+  log('сжимаю gzip (level 1)');
+  await pipeline(
+    fs.createReadStream(archiveTar),
+    zlib.createGzip({ level: 1 }),
+    fs.createWriteStream(archive),
+  );
 }
-
-log('сжимаю gzip (level 1)');
-await pipeline(
-  fs.createReadStream(archiveTar),
-  zlib.createGzip({ level: 1 }),
-  fs.createWriteStream(archive),
-);
 fs.rmSync(archiveTar, { force: true });
 
 const hash = crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
