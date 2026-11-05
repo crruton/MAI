@@ -93,6 +93,7 @@ export async function runAgent({
 
   const system = systemPrompt({ projectDir, skills, mcpStatus: mcp.status() });
   let history = trimMessages([...messages]);
+  const userTask = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
   const maxIterations = settings.maxIterations || 30;
   const maxReviewRounds = Number(reviewer?.maxRounds ?? 2);
   let reviewRound = 0;
@@ -164,7 +165,7 @@ export async function runAgent({
       // Ревизор проверяет финальный ответ. При revise причина добавляется
       // в историю как сообщение пользователя, и цикл продолжается.
       if (reviewerClient && reviewRound < maxReviewRounds) {
-        const task = [...history].reverse().find((m) => m.role === 'user')?.content || '';
+        const task = String(userTask || '');
         reviewRound += 1;
         emit({ type: 'review:start', round: reviewRound, model: reviewer.model || model });
         let verdict;

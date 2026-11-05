@@ -27,8 +27,13 @@ npm.cmd run pack:tar       # tar.gz с исходниками (нужен npm и
 | Артефакт | Что внутри | Запуск без Node.js | Размер |
 |---|---|---|---|
 | `dist/win-unpacked/MAI Code.exe` | portable-сборка | да | ~200 МБ |
-| `*-offline-win-x64.tar.gz` | исходники + `node_modules` + Electron | да | сотни МБ |
+| `*-offline-win-x64.tar.gz` | исходники + `node_modules` + Electron | да | ~200 МБ |
 | `*.tar.gz` (`pack:tar`) | только исходники | нет | ~0.4 МБ |
+
+Проверено на Windows 10: офлайн-архив распакован в пустую папку, приложение
+запущено с отдельным `--user-data-dir` без `npm` и без сети. EXE из
+`dist/win-unpacked` также запускается. Сборка portable-цели через 7z на этой
+машине занимает больше 15 минут; NSIS-установщик собирается за это время.
 
 Конфигурация — `electron-builder.yml`. Релиз собирается GitHub Actions по тегу `v*`:
 `.github/workflows/release.yml` создаёт черновик релиза с артефактами.

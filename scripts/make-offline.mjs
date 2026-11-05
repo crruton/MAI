@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -113,17 +115,30 @@ certutil -hashfile ${name}.tar.gz SHA256
 fs.writeFileSync(path.join(stage, 'README-OFFLINE.txt'), offlineReadme, 'utf8');
 
 if (fs.existsSync(archive)) fs.rmSync(archive);
-log('упаковываю tar.gz');
-const tar = spawnSync('tar', ['-czf', archive, '-C', outDir, name], { encoding: 'utf8' });
+const archiveTar = path.join(root, 'dist', `${name}.tar`);
+if (fs.existsSync(archiveTar)) fs.rmSync(archiveTar);
+log('упаковываю tar');
+const tar = spawnSync('tar', ['-cf', archiveTar, '-C', outDir, name], { encoding: 'utf8' });
 if (tar.error || tar.status !== 0) {
   console.error(tar.error?.message || tar.stderr || `tar завершился с кодом ${tar.status}`);
   process.exit(1);
 }
 
+log('сжимаю gzip (level 1)');
+await pipeline(
+  fs.createReadStream(archiveTar),
+  zlib.createGzip({ level: 1 }),
+  fs.createWriteStream(archive),
+);
+fs.rmSync(archiveTar, { force: true });
+
 const hash = crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
 const sums = path.join(root, 'dist', 'SHA256SUMS.txt');
-const line = `${hash}  ${path.basename(archive)}\n`;
-fs.appendFileSync(sums, line, 'utf8');
+const fileName = path.basename(archive);
+const previous = fs.existsSync(sums)
+  ? fs.readFileSync(sums, 'utf8').split(/\r?\n/).filter((row) => row && !row.endsWith(`  ${fileName}`))
+  : [];
+fs.writeFileSync(sums, [...previous, `${hash}  ${fileName}`].join('\n') + '\n', 'utf8');
 
 const size = (fs.statSync(archive).size / 1024 / 1024).toFixed(1);
 log(`готово: ${archive} (${size} МБ)`);

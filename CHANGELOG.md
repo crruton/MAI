@@ -19,7 +19,8 @@
 - Multica: локальный docker-compose, синхронизация задач из OpenSpec через
   официальный CLI, панель «Multica» и документация `docs/MULTICA.md`.
 - Docker-песочницы: `electron/lib/container.js`, IPC, панель «Песочницы»,
-  публикация портов, монтирование папки проекта в `/workspace`.
+  публикация портов, монтирование папки проекта в `/workspace`. Проверено на
+  Docker 29.9.2: запуск, порт, список, остановка.
 - Kubernetes: `infra/k8s/` (namespace, Postgres, Keycloak, Multica, ingress, PVC),
   `docs/KUBERNETES.md` с локальным k3d/kind и бесплатным облаком.
 - `docs/DNS.md`: hosts, локальный домен, A/CNAME, TLS и переезд.
@@ -34,6 +35,8 @@
 
 - `README.md` и `docs/BACKLOG.md` отражают фактическое состояние, а не планы.
 - `package.json`: новые скрипты `pack:offline`, `docs:check`, `multica:*`.
+- `pack:offline`: архив собирается как tar и сжимается gzip level 1 в Node —
+  быстрее, чем gzip внутри tar на Windows.
 
 ### Fixed
 

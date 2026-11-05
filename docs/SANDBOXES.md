@@ -73,6 +73,10 @@ docker exec -it mai-code-<slug> sh
 
 ## Проверка
 
+Проверено на Docker 29.9.2: запуск контейнера, публикация `127.0.0.1:18080→80`,
+список контейнеров, логи и остановка. Для проверки использовался образ
+`postgres:17.11-alpine3.24` и команда `sleep 60`.
+
 ```powershell
 docker ps --filter label=mai-code.sandbox=1
 docker logs --tail 100 mai-code-<slug>
