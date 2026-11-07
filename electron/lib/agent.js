@@ -91,6 +91,7 @@ export async function runAgent({
   pluginTools = [],
   transforms = [],
   reviewer = null,
+  permissionMode = '',
 }) {
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
   if (!provider.apiKey) throw new Error(`Не задан API-ключ провайдера «${provider.name || 'unknown'}»`);
@@ -101,7 +102,7 @@ export async function runAgent({
     : null;
   const skills = listSkills(projectDir);
   const repoTools = settings.repowise?.enabled ? repowiseTools : [];
-  const mode = normalizeMode(settings.permissionMode);
+  const mode = normalizeMode(permissionMode || settings.permissionMode);
   const hidden = hiddenToolsForMode(mode);
   const tools = [...fsTools, ...shellTools, ...skillTools, ...repoTools, ...pluginTools, ...mcp.toolSchemas()]
     // В режиме «План» инструменты записи не показываем: модель не должна пытаться.

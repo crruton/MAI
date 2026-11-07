@@ -24,6 +24,10 @@ function check(name, cond, extra = '') {
 
 app.disableHardwareAcceleration();
 
+// Изолируем данные: тест не должен трогать настоящие sessions.json и settings.json.
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-smoke-userdata-'));
+app.setPath('userData', sandbox);
+
 app.whenReady().then(async () => {
   try {
     console.log('\n[1] Загрузка модулей main-процесса');
@@ -55,8 +59,32 @@ app.whenReady().then(async () => {
     check('auto + write_file → allow', permissions.decide({ mode: 'auto', tool: 'write_file' }).action === 'allow');
     check('manual + run_shell → ask', permissions.decide({ mode: 'manual', tool: 'run_shell' }).action === 'ask');
 
-    console.log('\n[4] Вложения внутри Electron');
+    console.log('\n[5] Режим разрешений живёт в сессии');
     const project = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-smoke-'));
+    const sessions = await import('../electron/lib/sessions.js');
+    const s1 = sessions.createSession({ title: 'чат А', model: 'm', projectDir: project, permissionMode: 'plan' });
+    const s2 = sessions.createSession({ title: 'чат Б', model: 'm', projectDir: project, permissionMode: 'auto' });
+    check('режим сохранён в сессии А', sessions.getSession(s1.id)?.permissionMode === 'plan');
+    check('режим сохранён в сессии Б', sessions.getSession(s2.id)?.permissionMode === 'auto');
+    check('режимы независимы', sessions.getSession(s1.id)?.permissionMode !== sessions.getSession(s2.id)?.permissionMode);
+
+    sessions.setSessionMode(s1.id, 'acceptEdits');
+    check('setSessionMode меняет режим', sessions.getSession(s1.id)?.permissionMode === 'acceptEdits');
+    check('соседняя сессия не изменилась', sessions.getSession(s2.id)?.permissionMode === 'auto');
+    check('setSessionMode на чужой id → null', sessions.setSessionMode('нет-такой', 'auto') === null);
+
+    const listed = sessions.listSessions();
+    check('listSessions отдаёт режим', listed.every((s) => 'permissionMode' in s));
+    check('режим в списке верный', listed.find((s) => s.id === s1.id)?.permissionMode === 'acceptEdits');
+
+    const legacy = sessions.createSession({ title: 'старый чат', model: 'm', projectDir: project });
+    check('новая сессия без режима → пустая строка', legacy.permissionMode === '');
+    check(
+      'пустой режим означает «взять из настроек»',
+      permissions.normalizeMode(legacy.permissionMode || 'manual') === 'manual',
+    );
+
+    console.log('\n[6] Вложения внутри Electron');
     const source = path.join(project, 'hello.txt');
     fs.writeFileSync(source, 'привет', 'utf8');
     const saved = attachments.saveFromPaths({ projectDir: project, sessionId: 'smoke', paths: [source] });

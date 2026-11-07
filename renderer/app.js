@@ -269,7 +269,7 @@ const MODE_FALLBACK = [
   { id: 'plan', label: 'План', description: 'Только чтение и план с альтернативами. Файлы не меняются.' },
 ];
 
-function renderModeSelect() {
+async function renderModeSelect() {
   const select = $('#mode-select');
   if (!select) return;
   const modes = state.permissionModes.length ? state.permissionModes : MODE_FALLBACK;
@@ -284,14 +284,30 @@ function renderModeSelect() {
   select.classList.toggle('mode-auto', state.permissionMode === 'auto');
 }
 
+/** Перечитывает режим для текущей сессии (или значение по умолчанию). */
+async function refreshPermissionMode() {
+  try {
+    const result = await api.permissions.modes(state.sessionId);
+    state.permissionMode = result.current;
+    state.permissionModes = result.modes;
+  } catch {
+    state.permissionMode = 'manual';
+    state.permissionModes = MODE_FALLBACK;
+  }
+  renderModeSelect();
+}
+
 async function setPermissionMode(mode) {
-  const result = await api.permissions.set(mode);
+  const result = await api.permissions.set(mode, state.sessionId);
   state.permissionMode = result?.mode || mode;
   renderModeSelect();
   const info = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).find(
     (m) => m.id === state.permissionMode,
   );
-  if (info) toast(`${info.label}: ${info.description}`, 'ok');
+  if (info) {
+    const scope = result?.scope === 'session' ? 'для этого чата' : 'по умолчанию для новых чатов';
+    toast(`${info.label} ${scope}: ${info.description}`, 'ok');
+  }
 }
 
 /* ---------- модальные окна ---------- */
@@ -596,6 +612,7 @@ async function loadSession(id) {
   state.live = null;
   state.liveRuntimes = [];
   clearAttachments();
+  await refreshPermissionMode();
   for (const message of state.messages) {
     if (message.role === 'tool' && message.tool_call_id) {
       state.toolResults[message.tool_call_id] = {
@@ -617,6 +634,7 @@ function newChat() {
   state.live = null;
   state.liveRuntimes = [];
   clearAttachments();
+  refreshPermissionMode();
   renderAll();
   renderSessions();
   $('#input').focus();
@@ -689,6 +707,7 @@ async function send() {
     displayText: display,
     model: state.model,
     projectDir: state.projectDir,
+    permissionMode: state.permissionMode,
   });
   if (!result.ok) {
     toast(result.error, 'err');
@@ -701,6 +720,8 @@ async function send() {
   }
   state.sessionId = result.sessionId;
   await refreshSessions();
+  // Сессия создана — режим теперь принадлежит ей, а не значению по умолчанию.
+  await refreshPermissionMode();
 }
 
 async function sendRuntime(runtime, prompt, display = prompt) {

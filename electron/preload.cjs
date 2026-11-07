@@ -36,8 +36,8 @@ contextBridge.exposeInMainWorld('mai', {
     open: (payload) => invoke('attachments:open', payload),
   },
   permissions: {
-    modes: () => invoke('permissions:modes'),
-    set: (mode) => invoke('permissions:set', mode),
+    modes: (sessionId) => invoke('permissions:modes', sessionId),
+    set: (mode, sessionId) => invoke('permissions:set', { mode, sessionId }),
   },
   workspace: {
     root: () => invoke('workspace:root'),

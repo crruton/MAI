@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, publicSettings, dataDir } from './lib/config.js';
 import { listModels, resolveModel } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime } from './lib/runtimes.js';
-import { createSession, deleteSession, getSession, listSessions, saveSession } from './lib/sessions.js';
+import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode } from './lib/sessions.js';
 import { runAgent } from './lib/agent.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, readMemory, writeMemory, installBundledSkills } from './lib/skills.js';
 import { McpManager } from './lib/mcp.js';
@@ -571,15 +571,34 @@ ipcMain.handle('project:pick', async () => {
 
 // ---------- режимы разрешений ----------
 
-ipcMain.handle('permissions:modes', () => ({
-  current: normalizeMode(loadSettings().permissionMode),
-  modes: PERMISSION_MODES.map((id) => MODE_INFO[id]),
-}));
+/**
+ * Режим живёт в сессии. Если сессии ещё нет (новый чат), отдаём значение
+ * по умолчанию из настроек — его увидит селектор до первого сообщения.
+ */
+ipcMain.handle('permissions:modes', (_e, sessionId) => {
+  const settings = loadSettings();
+  const session = sessionId ? getSession(sessionId) : null;
+  return {
+    current: normalizeMode(session?.permissionMode || settings.permissionMode),
+    fallback: normalizeMode(settings.permissionMode),
+    sessionId: session?.id || null,
+    modes: PERMISSION_MODES.map((id) => MODE_INFO[id]),
+  };
+});
 
-ipcMain.handle('permissions:set', (_e, mode) => {
+/**
+ * Сохраняет режим в сессию. Если сессии нет, запоминаем как значение по
+ * умолчанию: иначе выбор в новом чате потерялся бы до первого сообщения.
+ */
+ipcMain.handle('permissions:set', (_e, payload) => {
+  const { mode, sessionId } = payload || {};
   const next = normalizeMode(mode);
+  if (sessionId) {
+    const session = setSessionMode(sessionId, next);
+    if (session) return { ok: true, mode: next, sessionId: session.id, scope: 'session' };
+  }
   saveSettings({ permissionMode: next });
-  return { ok: true, mode: next };
+  return { ok: true, mode: next, sessionId: null, scope: 'default' };
 });
 
 // ---------- вложения ----------
@@ -719,7 +738,14 @@ ipcMain.handle('chat:start', async (event, payload) => {
   }
   let session = payload.sessionId ? getSession(payload.sessionId) : null;
   if (!session) {
-    session = createSession({ title: '', model, projectDir });
+    // Режим из интерфейса переносим в новую сессию: пользователь выбрал его
+    // до первого сообщения, и выбор не должен потеряться.
+    session = createSession({
+      title: '',
+      model,
+      projectDir,
+      permissionMode: payload.permissionMode ? normalizeMode(payload.permissionMode) : '',
+    });
   }
   session.model = model;
   session.projectDir = projectDir;
@@ -756,8 +782,9 @@ ipcMain.handle('chat:start', async (event, payload) => {
         pluginTools,
         transforms,
         reviewer,
+        permissionMode: session.permissionMode || '',
         emit: (e) => send(window, e),
-        approve: makeApprover(window, state),
+        approve: makeApprover(window, state, session.id),
       });
       session.messages = history;
       saveSession(session);
@@ -786,12 +813,16 @@ ipcMain.handle('chat:start', async (event, payload) => {
 
 /**
  * Создаёт функцию approve для агента с учётом режима разрешений.
- * Режим читается из настроек на каждый вызов: переключение в UI действует сразу.
+ *
+ * Режим берётся из сессии, а если там пусто — из настроек. Значение читается
+ * на каждый вызов, поэтому переключение в интерфейсе действует сразу.
  */
-function makeApprover(window, state) {
+function makeApprover(window, state, sessionId) {
   return (name, summary) => {
     const settings = loadSettings();
-    const decision = decide({ mode: settings.permissionMode, tool: name, guardrails: settings.guardrails });
+    const session = sessionId ? getSession(sessionId) : null;
+    const mode = normalizeMode(session?.permissionMode || settings.permissionMode);
+    const decision = decide({ mode, tool: name, guardrails: settings.guardrails });
     if (decision.action === 'allow') return Promise.resolve(true);
     if (decision.action === 'deny') return Promise.resolve(decision.reason || false);
     return new Promise((resolve) => {
@@ -1218,8 +1249,9 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         mcp,
         pluginTools,
         transforms,
+        permissionMode: session.permissionMode || '',
         emit: (e) => send(window, e),
-        approve: makeApprover(window, state),
+        approve: makeApprover(window, state, session.id),
       });
       session.messages = history;
       saveSession(session);

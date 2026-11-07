@@ -11,11 +11,12 @@ let repowiseAvailable = null;
 function hasRepowise() {
   if (repowiseAvailable !== null) return repowiseAvailable;
   try {
-    const probe = spawnSync('repowise', ['--version'], {
+    // Аргументы не передаём массивом: с shell: true Node выдаёт DEP0190.
+    const probe = spawnSync('repowise --version', {
       encoding: 'utf8',
       timeout: 5000,
       windowsHide: true,
-      shell: process.platform === 'win32',
+      shell: true,
     });
     repowiseAvailable = probe.status === 0;
   } catch {
