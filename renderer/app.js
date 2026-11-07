@@ -102,8 +102,8 @@ function enabledRuntimes() {
 
 /* ---------- вложения ---------- */
 
-const MAX_ATTACHMENT_BYTES = 400 * 1024;
-const MAX_ATTACHMENTS_TOTAL = 1.2 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = 64 * 1024;
+const MAX_ATTACHMENTS_TOTAL = 192 * 1024;
 const MAX_ATTACHMENTS = 10;
 const SECRET_FILE = /^(?:\.env(?:\.[\w.-]+)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|id_rsa|id_dsa|id_ecdsa|id_ed25519|credentials)$/i;
 const SECRET_EXT = /\.(?:pem|key|pfx|p12|jks|keystore)$/i;
@@ -162,7 +162,7 @@ async function addFiles(fileList) {
       break;
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
-      toast(`${file.name}: файл больше 400 КБ`, 'err');
+      toast(`${file.name}: файл больше 64 КБ`, 'err');
       continue;
     }
     if (looksSecret(file.name) && !state.settings?.guardrails?.allowSecrets) {
@@ -171,7 +171,7 @@ async function addFiles(fileList) {
     }
     const total = state.attachments.reduce((sum, item) => sum + item.size, 0);
     if (total + file.size > MAX_ATTACHMENTS_TOTAL) {
-      toast('Суммарный размер вложений больше 1,2 МБ', 'err');
+      toast('Суммарный размер вложений больше 192 КБ', 'err');
       break;
     }
     if (state.attachments.some((item) => item.name === file.name && item.size === file.size)) continue;
