@@ -46,6 +46,16 @@ function systemPrompt({ projectDir, skills, mcpStatus }) {
   return parts.join('\n');
 }
 
+/** Оставляет только поля, допустимые в запросе к провайдеру. */
+function toApiMessage(message) {
+  const out = { role: message.role };
+  if (message.content !== undefined) out.content = message.content;
+  if (message.name) out.name = message.name;
+  if (message.tool_call_id) out.tool_call_id = message.tool_call_id;
+  if (message.tool_calls) out.tool_calls = message.tool_calls;
+  return out;
+}
+
 function trimMessages(messages, limit = 320_000) {
   let total = JSON.stringify(messages).length;
   const copy = [...messages];
@@ -110,7 +120,7 @@ export async function runAgent({
 
     const requestMessages = [
       { role: 'system', content: system },
-      ...history.map(({ reasoning, ...rest }) => rest),
+      ...history.map(toApiMessage),
     ];
     const stream = await client.chat.completions.create(
       {

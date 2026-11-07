@@ -26,6 +26,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+        with:
+          # Включает GitHub Pages (источник — GitHub Actions), если он ещё не
+          # включён в настройках репозитория. Без этого deploy-pages падает.
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

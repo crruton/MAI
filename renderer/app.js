@@ -13,6 +13,7 @@ const state = {
   toolResults: {},
   live: null,
   liveRuntimes: [],
+  attachments: [],
   running: false,
   projectDir: '',
   model: '',
@@ -97,6 +98,83 @@ function enabledRuntimes() {
   return Object.entries(state.runtimes)
     .filter(([, runtime]) => runtime.enabled !== false && runtime.command)
     .map(([id]) => id);
+}
+
+/* ---------- вложения ---------- */
+
+const MAX_ATTACHMENT_BYTES = 400 * 1024;
+const MAX_ATTACHMENTS_TOTAL = 1.2 * 1024 * 1024;
+const MAX_ATTACHMENTS = 10;
+
+function attachmentBlock() {
+  if (!state.attachments.length) return '';
+  const files = state.attachments.map((item) => {
+    const name = item.name.replace(/"/g, "'");
+    return `<file name="${name}">\n${item.content}\n</file>`;
+  });
+  return `\n\n[Прикреплённые файлы: ${state.attachments.map((item) => item.name).join(', ')}]\n${files.join('\n\n')}`;
+}
+
+function renderAttachments() {
+  const box = $('#attachments');
+  if (!box) return;
+  box.replaceChildren();
+  box.hidden = !state.attachments.length;
+  state.attachments.forEach((item, index) => {
+    box.append(
+      el('span', { class: 'attachment-chip' }, [
+        el('span', { class: 'name', text: item.name, title: item.name }),
+        el('span', { class: 'size', text: `${Math.max(1, Math.round(item.size / 1024))} КБ` }),
+        el('button', {
+          type: 'button',
+          text: '×',
+          title: 'Убрать вложение',
+          onclick: () => {
+            state.attachments.splice(index, 1);
+            renderAttachments();
+          },
+        }),
+      ]),
+    );
+  });
+}
+
+function clearAttachments() {
+  state.attachments = [];
+  renderAttachments();
+}
+
+async function addFiles(fileList) {
+  const files = Array.from(fileList || []);
+  for (const file of files) {
+    if (state.attachments.length >= MAX_ATTACHMENTS) {
+      toast(`Можно прикрепить не больше ${MAX_ATTACHMENTS} файлов`, 'err');
+      break;
+    }
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      toast(`${file.name}: файл больше 400 КБ`, 'err');
+      continue;
+    }
+    const total = state.attachments.reduce((sum, item) => sum + item.size, 0);
+    if (total + file.size > MAX_ATTACHMENTS_TOTAL) {
+      toast('Суммарный размер вложений больше 1,2 МБ', 'err');
+      break;
+    }
+    if (state.attachments.some((item) => item.name === file.name && item.size === file.size)) continue;
+    let text = '';
+    try {
+      text = await file.text();
+    } catch {
+      toast(`${file.name}: не удалось прочитать файл`, 'err');
+      continue;
+    }
+    if (text.includes('\u0000')) {
+      toast(`${file.name}: бинарные файлы не поддерживаются`, 'err');
+      continue;
+    }
+    state.attachments.push({ name: file.name, size: file.size, content: text });
+  }
+  renderAttachments();
 }
 
 /* ---------- модальные окна ---------- */
@@ -195,7 +273,7 @@ function hintButton(label, text) {
 function messageNode(message) {
   if (message.role === 'user') {
     return el('div', { class: 'msg msg-user' }, [
-      el('div', { class: 'bubble', text: message.content || '' }),
+      el('div', { class: 'bubble', text: message.display || message.content || '' }),
     ]);
   }
   if (message.role === 'runtime') {
@@ -400,6 +478,7 @@ async function loadSession(id) {
   state.toolResults = {};
   state.live = null;
   state.liveRuntimes = [];
+  clearAttachments();
   for (const message of state.messages) {
     if (message.role === 'tool' && message.tool_call_id) {
       state.toolResults[message.tool_call_id] = {
@@ -420,6 +499,7 @@ function newChat() {
   state.toolResults = {};
   state.live = null;
   state.liveRuntimes = [];
+  clearAttachments();
   renderAll();
   renderSessions();
   $('#input').focus();
@@ -446,7 +526,10 @@ async function send() {
   if (state.running) return;
   const input = $('#input');
   const text = input.value.trim();
-  if (!text) return;
+  const hasFiles = state.attachments.length > 0;
+  if (!text && !hasFiles) return;
+  const display = text || 'Прикреплённые файлы';
+  const prompt = text + attachmentBlock();
 
   const runtime = activeRuntime();
   const multi = state.runtime === '__all__';
@@ -466,17 +549,18 @@ async function send() {
 
   input.value = '';
   autosize();
+  clearAttachments();
 
   if (multi) {
-    await sendRuntimeMany(text);
+    await sendRuntimeMany(prompt, display);
     return;
   }
   if (runtime) {
-    await sendRuntime(runtime, text);
+    await sendRuntime(runtime, prompt, display);
     return;
   }
 
-  state.messages.push({ role: 'user', content: text });
+  state.messages.push({ role: 'user', content: display });
   state.live = { content: '', reasoning: '', tools: [] };
   state.running = true;
   setRunning(true);
@@ -484,7 +568,8 @@ async function send() {
 
   const result = await api.chat.start({
     sessionId: state.sessionId,
-    text,
+    text: prompt,
+    displayText: display,
     model: state.model,
     projectDir: state.projectDir,
   });
@@ -501,8 +586,8 @@ async function send() {
   await refreshSessions();
 }
 
-async function sendRuntime(runtime, text) {
-  state.messages.push({ role: 'user', content: text });
+async function sendRuntime(runtime, prompt, display = prompt) {
+  state.messages.push({ role: 'user', content: display });
   const id = state.runtime;
   state.liveRuntimes = [{ id, name: runtime.name || 'Рантайм', output: '' }];
   state.running = true;
@@ -512,7 +597,8 @@ async function sendRuntime(runtime, text) {
   const result = await api.runtimes.run({
     sessionId: state.sessionId,
     runtime: id,
-    text,
+    text: prompt,
+    displayText: display,
     model: state.model,
     projectDir: state.projectDir,
   });
@@ -530,13 +616,13 @@ async function sendRuntime(runtime, text) {
   await refreshSessions();
 }
 
-async function sendRuntimeMany(text) {
+async function sendRuntimeMany(prompt, display = prompt) {
   const ids = enabledRuntimes();
   if (!ids.length) {
     toast('Нет включённых рантаймов', 'err');
     return;
   }
-  state.messages.push({ role: 'user', content: text });
+  state.messages.push({ role: 'user', content: display });
   state.liveRuntimes = ids.map((id) => ({
     id,
     name: state.runtimes[id]?.name || id,
@@ -549,7 +635,8 @@ async function sendRuntimeMany(text) {
   const result = await api.runtimes.runMany({
     sessionId: state.sessionId,
     runtimes: ids,
-    text,
+    text: prompt,
+    displayText: display,
     model: state.model,
     projectDir: state.projectDir,
   });
@@ -571,7 +658,7 @@ function setRunning(running) {
   $('#send').hidden = running;
   $('#stop').hidden = !running;
   $('#composer-hint').textContent = running
-    ? state.liveRuntime
+    ? state.liveRuntimes.length
       ? 'Рантайм работает…'
       : 'Агент работает…'
     : '';
@@ -2189,6 +2276,24 @@ async function init() {
       send();
     }
   });
+
+  $('#attach').addEventListener('click', () => $('#file-input').click());
+  $('#file-input').addEventListener('change', async (event) => {
+    await addFiles(event.target.files);
+    event.target.value = '';
+  });
+  const composer = $('#composer');
+  composer.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    composer.classList.add('dragover');
+  });
+  composer.addEventListener('dragleave', () => composer.classList.remove('dragover'));
+  composer.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    composer.classList.remove('dragover');
+    await addFiles(event.dataTransfer?.files);
+  });
+  renderAttachments();
 
   $('#messages').addEventListener('click', (event) => {
     const copy = event.target.closest('.copy-code');

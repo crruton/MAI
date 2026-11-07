@@ -389,13 +389,13 @@ ipcMain.handle('runtimes:probe', (_e, payload) => {
   return result;
 });
 
-function runtimeSession(payload, settings, prompt, model, projectDir) {
+function runtimeSession(payload, settings, prompt, model, projectDir, display = prompt) {
   let session = payload.sessionId ? getSession(payload.sessionId) : null;
   if (!session) session = createSession({ title: '', model, projectDir });
   session.projectDir = projectDir;
   session.model = model;
-  session.messages.push({ role: 'user', content: prompt });
-  if (!session.title || session.title === 'Новый чат') session.title = prompt.slice(0, 60);
+  session.messages.push({ role: 'user', content: prompt, display });
+  if (!session.title || session.title === 'Новый чат') session.title = display.slice(0, 60);
   saveSession(session);
   return session;
 }
@@ -416,7 +416,7 @@ ipcMain.handle('runtimes:run', async (event, payload) => {
   const prompt = String(payload.text || '').trim();
   if (!prompt) return { ok: false, error: 'Пустой запрос' };
 
-  const session = runtimeSession(payload, settings, prompt, model, projectDir);
+  const session = runtimeSession(payload, settings, prompt, model, projectDir, payload.displayText || prompt);
   const startedAt = Date.now();
 
   const handle = startRuntime({
@@ -492,7 +492,7 @@ ipcMain.handle('runtimes:runMany', async (event, payload) => {
   const prompt = String(payload.text || '').trim();
   if (!prompt) return { ok: false, error: 'Пустой запрос' };
 
-  const session = runtimeSession(payload, settings, prompt, model, projectDir);
+  const session = runtimeSession(payload, settings, prompt, model, projectDir, payload.displayText || prompt);
   let pending = selected.length;
   const handles = [];
   state.runtimeGroup = handles;
@@ -630,9 +630,10 @@ ipcMain.handle('chat:start', async (event, payload) => {
   session.model = model;
   session.projectDir = projectDir;
   if (payload.text) {
-    session.messages.push({ role: 'user', content: payload.text });
+    const display = payload.displayText || payload.text;
+    session.messages.push({ role: 'user', content: payload.text, display });
     if (!session.title || session.title === 'Новый чат') {
-      session.title = payload.text.trim().slice(0, 60) || 'Новый чат';
+      session.title = display.trim().slice(0, 60) || 'Новый чат';
     }
   }
   saveSession(session);

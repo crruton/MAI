@@ -142,6 +142,12 @@ docker compose up -d
 Бесплатный вариант — `https://crruton.github.io/mai-code/`. Инструкция по своему
 домену и бесплатным поддоменам — `docs/DOMAIN.md`.
 
+Workflow сам включает GitHub Pages (`actions/configure-pages` с
+`enablement: true`), если источник ещё не настроен. Если деплой всё равно
+падает, проверьте: Settings → Pages → Source = **GitHub Actions** и что у
+workflow есть права `pages: write`, `id-token: write`. Файл `site/.nojekyll`
+отключает обработку Jekyll.
+
 Подробно про hosts, A/CNAME, TLS и переезд — `docs/DNS.md`.
 
 ## 6. Kubernetes
