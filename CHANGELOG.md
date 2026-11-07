@@ -30,9 +30,29 @@
 - Ревизор-петля: вторая модель проверяет ответ и возвращает `approve`/`revise`.
 - Keycloak переведён на Postgres, добавлен пользователь `letun82@mail.ru`.
 - Заполнены память, MCP и плагины базового проекта `mai-code`.
+- Guardrails: `electron/lib/guardrails.js` — разрушительные команды, pipe-to-shell,
+  защита `.env`/ключей/.ssh/.npmrc, лимит длины, пользовательские запреты,
+  маскирование секретов. Интеграция в shell, файловые инструменты и деплой.
+- Рантаймы: проверка доступности CLI/образа (`runtimes:probe`), включение и
+  выключение, docker-режим с образом и `/workspace`, параллельный запуск
+  `runtimes:runMany` и пункт «Все включённые (параллельно)».
+- OTLP-экспортёр `electron/lib/telemetry.js`: лог запуска, ошибки и спаны
+  `runtime.run`; настройка telemetry в UI.
+- `infra/observability/`: SeaweedFS S3, Loki 72h, Tempo 72h, Prometheus 72h,
+  Grafana, OTel Collector, Phoenix + Postgres; дашборд и smoke-тест.
+- Harbor: `infra/harbor/harbor.yml.example`, инструкция и `harbor:check`.
+- `scripts/docker-gc.mjs`: очистка старых тегов, dangling-образов, остановленных
+  песочниц и build cache; `npm run docker:gc` / `docker:gc:dry`.
+- Portable-сборка `dist/MAI Code-0.1.0-portable.exe` (store, 517 МБ), проверен
+  запуск; хэш добавлен в `dist/SHA256SUMS.txt`.
 
 ### Changed
 
+- Multica CLI: официальная установка, поиск в `%USERPROFILE%\.multica\bin`,
+  декодирование UTF-8/cp866/cp1251, кнопка «Установить CLI».
+- Документация: `docs/GUARDRAILS.md`, `docs/RUNTIMES.md`,
+  `docs/OBSERVABILITY.md`; обновлены `MULTICA.md`, `PRESETS.md`, `SANDBOXES.md`,
+  `DEPLOYMENT.md`, `SUMMARY.md` и ADR 0011–0014.
 - `README.md` и `docs/BACKLOG.md` отражают фактическое состояние, а не планы.
 - `package.json`: новые скрипты `pack:offline`, `docs:check`, `multica:*`.
 - `pack:offline`: архив собирается как tar и сжимается gzip level 1. На Windows
@@ -42,6 +62,23 @@
 
 - Упакованное приложение при самоперезапуске больше не теряет первый CLI-аргумент.
 - `npm` в PowerShell заменён на `npm.cmd` в инструкциях.
+- Multica CLI больше не считается отсутствующим, если установлен в
+  `%USERPROFILE%\.multica\bin`, но PATH ещё не обновился.
+- Вывод Multica на Windows больше не превращается в «кракозябры»: буфер
+  декодируется как UTF-8, затем cp866/cp1251.
+- `multica issue create/update` не ломается на кириллице и переводах строк:
+  процесс запускается без `shell: true`.
+- Встроенный агент: остальные рантаймы теперь можно включить, а несколько —
+  запустить параллельно; выключенные не выбираются.
+- Kubernetes: `DATABASE_URL` в Multica собирался с пустым паролем, потому что
+  `$(MULTICA_DB_PASSWORD)` раскрывается только для ранее объявленных переменных.
+  Переменная перенесена выше `DATABASE_URL`; живой прогон подтвердил `/healthz`.
+- Kubernetes: readiness-пробы Postgres/Keycloak/Multica получили
+  `timeoutSeconds`, иначе поды мигали `0/1` под нагрузкой.
+- Observability: `minio/mc` больше не доступен (Docker Hub 404, quay 401);
+  бакеты создаются через `weed shell` из образа SeaweedFS.
+- Observability: порты SeaweedFS сдвинуты на `18333/18888/19333`, чтобы не
+  конфликтовать с основным SeaweedFS приложения.
 
 ## [0.1.0] — 2026-11-04
 

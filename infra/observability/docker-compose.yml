@@ -1,0 +1,173 @@
+name: mai-code-observability
+
+# OpenTelemetry-стек MAI Code.
+#
+#   Grafana       http://localhost:3001   admin / OBS_GRAFANA_PASSWORD
+#   Prometheus    http://localhost:9090
+#   Loki          http://localhost:3100
+#   Tempo         http://localhost:3200
+#   Phoenix       http://localhost:6006
+#   OTLP          localhost:4317 (gRPC), localhost:4318 (HTTP)
+#   SeaweedFS S3  http://localhost:18333
+#
+# Порты SeaweedFS сдвинуты (18333/18888/19333), чтобы не конфликтовать с
+# основным SeaweedFS приложения из `infra/docker-compose.yml` (8333/8888/9333).
+#
+# Срок хранения: 72 часа для логов (Loki), трейсов (Tempo) и метрик
+# (Prometheus). Логи и трейсы лежат в SeaweedFS (S3), метрики — в локальном
+# TSDB Prometheus: у Prometheus нет нативного S3-бэкенда.
+
+services:
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.80
+    container_name: mai-code-seaweedfs
+    restart: unless-stopped
+    command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=1024
+    ports:
+      - "127.0.0.1:18333:8333"
+      - "127.0.0.1:18888:8888"
+      - "127.0.0.1:19333:9333"
+    volumes:
+      - seaweedfs-data:/data
+      - ./seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9333/cluster/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:3.80
+    container_name: mai-code-seaweedfs-init
+    depends_on:
+      seaweedfs:
+        condition: service_started
+    # minio/mc больше недоступен в Docker Hub, а quay.io/minio/mc отдаёт 401.
+    # Используем weed shell из того же образа SeaweedFS.
+    entrypoint: >
+      /bin/sh -c "
+      until wget -q -O - http://seaweedfs:9333/cluster/status >/dev/null 2>&1; do sleep 2; done;
+      printf 's3.bucket.create -name=loki\ns3.bucket.create -name=tempo\ns3.bucket.create -name=phoenix\n' | weed shell -master=seaweedfs:9333;
+      echo buckets-ready;
+      "
+    restart: "no"
+
+  loki:
+    image: grafana/loki:3.2.1
+    container_name: mai-code-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/config.yaml
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ./loki-config.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    depends_on:
+      seaweedfs-init:
+        condition: service_completed_successfully
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    container_name: mai-code-tempo
+    restart: unless-stopped
+    command: -config.file=/etc/tempo/tempo.yaml
+    ports:
+      - "127.0.0.1:3200:3200"
+    volumes:
+      - ./tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    depends_on:
+      seaweedfs-init:
+        condition: service_completed_successfully
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: mai-code-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:8889:8889"
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      - tempo
+      - loki
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: mai-code-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=72h
+      - --storage.tsdb.retention.size=10GB
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: mai-code-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${OBS_GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${OBS_GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+
+  phoenix-db:
+    image: postgres:16-alpine
+    container_name: mai-code-phoenix-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: phoenix
+      POSTGRES_USER: phoenix
+      POSTGRES_PASSWORD: ${OBS_PHOENIX_DB_PASSWORD:-phoenix-dev-password}
+    volumes:
+      - phoenix-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U phoenix -d phoenix"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: mai-code-phoenix
+    restart: unless-stopped
+    environment:
+      PHOENIX_PORT: "6006"
+      PHOENIX_HOST: 0.0.0.0
+      PHOENIX_ENABLE_AUTH: "false"
+      PHOENIX_SQL_DATABASE_URL: postgresql://phoenix:${OBS_PHOENIX_DB_PASSWORD:-phoenix-dev-password}@phoenix-db:5432/phoenix
+      # Phoenix сам удаляет старые трейсы; значение в днях.
+      PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: "3"
+    ports:
+      - "127.0.0.1:6006:6006"
+    depends_on:
+      phoenix-db:
+        condition: service_healthy
+
+volumes:
+  seaweedfs-data:
+  loki-data:
+  tempo-data:
+  prometheus-data:
+  grafana-data:
+  phoenix-db:

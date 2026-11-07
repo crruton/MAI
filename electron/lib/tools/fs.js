@@ -1,8 +1,20 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { isSecretPath } from '../guardrails.js';
 
 const MAX_READ_BYTES = 400_000;
 const MAX_OUTPUT = 20_000;
+
+function assertNotSecret(ctx, file, action = 'чтение') {
+  const guardrails = ctx.guardrails || {};
+  if (guardrails.protectSecrets === false || guardrails.allowSecrets) return;
+  if (isSecretPath(file)) {
+    throw new Error(
+      `Guardrails: ${action} секретного файла запрещено (${path.basename(file)}). ` +
+        'Включите «Разрешить доступ к секретам» в настройках, если это осознанно.',
+    );
+  }
+}
 
 function resolveInside(ctx, target) {
   const base = ctx.projectDir || process.cwd();
@@ -51,6 +63,7 @@ export const fsTools = [
     },
     async run(ctx, args) {
       const file = resolveInside(ctx, args.path);
+      assertNotSecret(ctx, file, 'чтение');
       const stat = fs.statSync(file);
       if (stat.size > MAX_READ_BYTES) throw new Error(`Файл слишком большой: ${stat.size} байт`);
       const text = fs.readFileSync(file, 'utf8');
@@ -139,6 +152,7 @@ export const fsTools = [
             continue;
           }
           if (args.include && !entry.name.endsWith(args.include)) continue;
+          if (isSecretPath(full) && !(ctx.guardrails?.allowSecrets)) continue;
           let text = '';
           try {
             const stat = fs.statSync(full);
@@ -174,6 +188,7 @@ export const fsTools = [
     },
     async run(ctx, args) {
       const file = resolveInside(ctx, args.path);
+      assertNotSecret(ctx, file, 'запись');
       const allowed = await ctx.approve('write_file', `Записать файл ${file}`);
       if (!allowed) return 'Пользователь отклонил запись файла.';
       fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -200,6 +215,7 @@ export const fsTools = [
     },
     async run(ctx, args) {
       const file = resolveInside(ctx, args.path);
+      assertNotSecret(ctx, file, 'изменение');
       const text = fs.readFileSync(file, 'utf8');
       const count = text.split(args.old_string).length - 1;
       if (count === 0) return `Фрагмент не найден в ${file}`;

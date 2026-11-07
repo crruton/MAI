@@ -1,0 +1,48 @@
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: info
+
+common:
+  path_prefix: /loki
+  storage:
+    s3:
+      endpoint: seaweedfs:8333
+      bucketnames: loki
+      access_key_id: mai-code
+      secret_access_key: mai-code-secret
+      s3forcepathstyle: true
+      insecure: true
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: s3
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 72h
+  reject_old_samples: true
+  reject_old_samples_max_age: 72h
+  allow_structured_metadata: true
+
+compactor:
+  working_directory: /loki/compactor
+  compaction_interval: 10m
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+  delete_request_store: s3
+
+analytics:
+  reporting_enabled: false

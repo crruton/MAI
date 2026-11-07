@@ -26,3 +26,7 @@ ADR фиксируют решения, которые дорого менять:
 | [0008](0008-kubernetes-i-dns.md) | Kubernetes и DNS как отдельный слой | accepted | 2026-11-04 |
 | [0009](0009-openscion-ne-zamena-git.md) | OpenScion не заменяет локальный git | accepted | 2026-11-04 |
 | [0010](0010-pesochy-kak-papka.md) | Песочница-папка остаётся режимом по умолчанию | accepted | 2026-11-04 |
+| [0011](0011-guardrails.md) | Guardrails встроенного агента | accepted | 2026-11-06 |
+| [0012](0012-observability-otel.md) | Observability на OpenTelemetry | accepted | 2026-11-06 |
+| [0013](0013-vneshnie-rantajmy-v-kontejnerah.md) | Внешние рантаймы в отдельных контейнерах | accepted | 2026-11-06 |
+| [0014](0014-harbor-registry.md) | Harbor как registry, а не среда запуска | accepted | 2026-11-06 |

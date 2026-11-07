@@ -58,6 +58,7 @@ spec:
               command: ["pg_isready", "-U", "keycloak", "-d", "keycloak"]
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 5
           resources:
             requests:
               cpu: 100m
@@ -120,6 +121,7 @@ spec:
               command: ["pg_isready", "-U", "multica", "-d", "multica"]
             initialDelaySeconds: 5
             periodSeconds: 5
+            timeoutSeconds: 5
           resources:
             requests:
               cpu: 100m

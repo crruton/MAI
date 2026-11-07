@@ -7,6 +7,9 @@ contextBridge.exposeInMainWorld('mai', {
     get: () => invoke('settings:get'),
     save: (patch) => invoke('settings:save', patch),
   },
+  telemetry: {
+    status: () => invoke('telemetry:status'),
+  },
   models: (force) => invoke('models:list', force),
   providers: {
     list: () => invoke('providers:list'),
@@ -17,7 +20,9 @@ contextBridge.exposeInMainWorld('mai', {
   runtimes: {
     list: () => invoke('runtimes:list'),
     save: (runtimes) => invoke('runtimes:save', runtimes),
+    probe: (payload) => invoke('runtimes:probe', payload),
     run: (payload) => invoke('runtimes:run', payload),
+    runMany: (payload) => invoke('runtimes:runMany', payload),
     stop: () => invoke('runtimes:stop'),
   },
   project: {
@@ -71,6 +76,7 @@ contextBridge.exposeInMainWorld('mai', {
   },
   multica: {
     status: () => invoke('multica:status'),
+    install: () => invoke('multica:install'),
     auth: () => invoke('multica:auth'),
     issues: (limit) => invoke('multica:issues', limit),
     syncDocs: (projectDir) => invoke('multica:syncDocs', projectDir),

@@ -22,8 +22,11 @@
 | Раздел | Состояние |
 |---|---|
 | Приложение | работает, собрано в `dist/win-unpacked` |
-| Keycloak | конфиг проверен локально, production — нет |
-| Kubernetes | манифесты проверены синтаксически |
+| Keycloak | живой прогон: realm `mai-code`, 3 пользователя, issuer 200 |
+| Multica | живой прогон: CLI v0.8.0, self-host, PAT, issue create/list |
+| Kubernetes | живой прогон k3d: 5 pod'ов, 3 PVC, оба Ingress, Keycloak realm и Multica 200 |
+| Observability | конфигурация стека и smoke-скрипт; живой прогон требует ≥ 8 ГБ RAM |
+| Harbor | проверка условий и шаблон; живой прогон требует ≥ 40 ГБ диска |
 | DNS/домен | инструкция, внешняя настройка |
-| Multica | клиент и compose, нужен запущенный сервер |
+| Guardrails | реализованы и проверены на типовых командах |
 | OpenScion | инструкция, не встроен |

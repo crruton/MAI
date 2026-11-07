@@ -210,7 +210,7 @@ export async function runAgent({
         } else {
           const tool = tools.find((t) => t.schema.function.name === call.function.name);
           if (!tool) throw new Error(`Неизвестный инструмент: ${call.function.name}`);
-          result = await tool.run({ projectDir, approve, allowOutsideProject: settings.allowOutsideProject, repowise: settings.repowise }, args);
+          result = await tool.run({ projectDir, approve, allowOutsideProject: settings.allowOutsideProject, guardrails: settings.guardrails, repowise: settings.repowise }, args);
         }
       } catch (err) {
         ok = false;

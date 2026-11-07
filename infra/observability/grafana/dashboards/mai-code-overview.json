@@ -1,0 +1,70 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "mai-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [{ "expr": "up", "legendFormat": "{{job}}", "refId": "A" }],
+      "title": "Цели Prometheus",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "mai-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum(rate(otelcol_receiver_accepted_spans_total[5m]))",
+          "legendFormat": "spans/s",
+          "refId": "A"
+        }
+      ],
+      "title": "Принятые спаны",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "mai-prometheus" },
+      "fieldConfig": { "defaults": { "unit": "decbytes" }, "overrides": [] },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "id": 3,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum(rate(otelcol_exporter_sent_log_records_total[5m]))",
+          "legendFormat": "logs/s",
+          "refId": "A"
+        }
+      ],
+      "title": "Экспорт логов",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "mai-loki" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 6 },
+      "id": 4,
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" },
+      "targets": [{ "expr": "{job=~\".+\"}", "refId": "A" }],
+      "title": "Логи (Loki)",
+      "type": "logs"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["mai-code", "opentelemetry"],
+  "templating": { "list": [] },
+  "time": { "from": "now-3h", "to": "now" },
+  "timezone": "browser",
+  "title": "MAI Code — Observability",
+  "uid": "mai-code-observability",
+  "version": 1
+}

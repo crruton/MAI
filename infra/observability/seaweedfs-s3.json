@@ -1,0 +1,20 @@
+{
+  "identities": [
+    {
+      "name": "mai-code",
+      "credentials": [
+        {
+          "accessKey": "mai-code",
+          "secretKey": "mai-code-secret"
+        }
+      ],
+      "actions": [
+        "Admin",
+        "Read",
+        "Write",
+        "List",
+        "Tagging"
+      ]
+    }
+  ]
+}

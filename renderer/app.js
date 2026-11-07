@@ -12,7 +12,7 @@ const state = {
   messages: [],
   toolResults: {},
   live: null,
-  liveRuntime: null,
+  liveRuntimes: [],
   running: false,
   projectDir: '',
   model: '',
@@ -89,8 +89,14 @@ function providerOf(key) {
 }
 
 function activeRuntime() {
-  if (state.runtime === 'agent') return null;
+  if (state.runtime === 'agent' || state.runtime === '__all__') return null;
   return state.runtimes[state.runtime] || null;
+}
+
+function enabledRuntimes() {
+  return Object.entries(state.runtimes)
+    .filter(([, runtime]) => runtime.enabled !== false && runtime.command)
+    .map(([id]) => id);
 }
 
 /* ---------- модальные окна ---------- */
@@ -141,7 +147,7 @@ function renderAll() {
   const stick = isNearBottom();
   box.replaceChildren();
 
-  if (!state.messages.length && !state.live && !state.liveRuntime) {
+  if (!state.messages.length && !state.live && !state.liveRuntimes.length) {
     box.append(emptyState());
     return;
   }
@@ -151,7 +157,9 @@ function renderAll() {
     if (node) box.append(node);
   }
   if (state.live) box.append(liveNode());
-  if (state.liveRuntime) box.append(runtimeNode(state.liveRuntime.name, state.liveRuntime.output, null, true));
+  for (const live of state.liveRuntimes) {
+    box.append(runtimeNode(live.name, live.output, null, true));
+  }
   if (stick) box.scrollTop = box.scrollHeight;
 }
 
@@ -339,6 +347,15 @@ function renderRuntimes() {
   const select = $('#runtime-select');
   select.replaceChildren();
   select.append(el('option', { value: 'agent', text: 'Встроенный агент' }));
+  const enabled = enabledRuntimes();
+  if (enabled.length > 1) {
+    select.append(
+      el('option', {
+        value: '__all__',
+        text: `Все включённые (${enabled.length}, параллельно)`,
+      }),
+    );
+  }
   for (const [id, runtime] of Object.entries(state.runtimes)) {
     const disabled = runtime.enabled === false;
     const option = el('option', {
@@ -348,7 +365,10 @@ function renderRuntimes() {
     if (disabled) option.disabled = true;
     select.append(option);
   }
-  if (state.runtime !== 'agent' && !state.runtimes[state.runtime]) state.runtime = 'agent';
+  if (state.runtime !== 'agent' && state.runtime !== '__all__' && !state.runtimes[state.runtime]) {
+    state.runtime = 'agent';
+  }
+  if (state.runtime === '__all__' && enabled.length < 2) state.runtime = 'agent';
   select.value = state.runtime;
 }
 
@@ -379,7 +399,7 @@ async function loadSession(id) {
   if (session.projectDir) state.projectDir = session.projectDir;
   state.toolResults = {};
   state.live = null;
-  state.liveRuntime = null;
+  state.liveRuntimes = [];
   for (const message of state.messages) {
     if (message.role === 'tool' && message.tool_call_id) {
       state.toolResults[message.tool_call_id] = {
@@ -399,7 +419,7 @@ function newChat() {
   state.messages = [];
   state.toolResults = {};
   state.live = null;
-  state.liveRuntime = null;
+  state.liveRuntimes = [];
   renderAll();
   renderSessions();
   $('#input').focus();
@@ -429,7 +449,8 @@ async function send() {
   if (!text) return;
 
   const runtime = activeRuntime();
-  if (!runtime) {
+  const multi = state.runtime === '__all__';
+  if (!runtime && !multi) {
     const provider = providerOf(state.model);
     if (!provider?.apiKeySet) {
       toast(`Нет ключа провайдера «${provider?.name || 'MAI'}»`, 'err');
@@ -446,6 +467,10 @@ async function send() {
   input.value = '';
   autosize();
 
+  if (multi) {
+    await sendRuntimeMany(text);
+    return;
+  }
   if (runtime) {
     await sendRuntime(runtime, text);
     return;
@@ -478,14 +503,15 @@ async function send() {
 
 async function sendRuntime(runtime, text) {
   state.messages.push({ role: 'user', content: text });
-  state.liveRuntime = { name: runtime.name || 'Рантайм', output: '' };
+  const id = state.runtime;
+  state.liveRuntimes = [{ id, name: runtime.name || 'Рантайм', output: '' }];
   state.running = true;
   setRunning(true);
   renderAll();
 
   const result = await api.runtimes.run({
     sessionId: state.sessionId,
-    runtime: state.runtime,
+    runtime: id,
     text,
     model: state.model,
     projectDir: state.projectDir,
@@ -494,7 +520,44 @@ async function sendRuntime(runtime, text) {
   if (!result.ok) {
     toast(result.error, 'err');
     state.running = false;
-    state.liveRuntime = null;
+    state.liveRuntimes = [];
+    setRunning(false);
+    state.messages.pop();
+    renderAll();
+    return;
+  }
+  state.sessionId = result.sessionId;
+  await refreshSessions();
+}
+
+async function sendRuntimeMany(text) {
+  const ids = enabledRuntimes();
+  if (!ids.length) {
+    toast('Нет включённых рантаймов', 'err');
+    return;
+  }
+  state.messages.push({ role: 'user', content: text });
+  state.liveRuntimes = ids.map((id) => ({
+    id,
+    name: state.runtimes[id]?.name || id,
+    output: '',
+  }));
+  state.running = true;
+  setRunning(true);
+  renderAll();
+
+  const result = await api.runtimes.runMany({
+    sessionId: state.sessionId,
+    runtimes: ids,
+    text,
+    model: state.model,
+    projectDir: state.projectDir,
+  });
+
+  if (!result.ok) {
+    toast(result.error, 'err');
+    state.running = false;
+    state.liveRuntimes = [];
     setRunning(false);
     state.messages.pop();
     renderAll();
@@ -576,25 +639,39 @@ function handleEvent(event) {
       if (event.sessionId) state.sessionId = event.sessionId;
       refreshSessions();
       break;
-    case 'runtime:start':
-      if (state.liveRuntime) state.liveRuntime.name = event.name;
+    case 'runtime:start': {
+      const id = event.runtimeId || '__single__';
+      let live = state.liveRuntimes.find((item) => item.id === id);
+      if (!live) {
+        live = { id, name: event.name || 'Рантайм', output: '' };
+        state.liveRuntimes.push(live);
+      }
+      live.name = event.name || live.name;
       scheduleRender();
       break;
-    case 'runtime:chunk':
-      if (state.liveRuntime) {
-        state.liveRuntime.output += event.text;
+    }
+    case 'runtime:chunk': {
+      const id = event.runtimeId || '__single__';
+      const live = state.liveRuntimes.find((item) => item.id === id) || state.liveRuntimes[0];
+      if (live) {
+        live.output += event.text;
         scheduleRender();
       }
       break;
+    }
     case 'runtime:exit': {
-      const name = event.name || state.liveRuntime?.name || 'Рантайм';
-      const output = event.output ?? state.liveRuntime?.output ?? '';
-      state.liveRuntime = null;
-      state.running = false;
-      setRunning(false);
-      state.messages.push({ role: 'runtime', name, content: output, code: event.code });
+      const id = event.runtimeId || '__single__';
+      const index = state.liveRuntimes.findIndex((item) => item.id === id);
+      const live = index >= 0 ? state.liveRuntimes[index] : null;
+      const name = event.name || live?.name || 'Рантайм';
+      const output = event.output ?? live?.output ?? '';
+      if (index >= 0) state.liveRuntimes.splice(index, 1);
+      const remaining = event.pending ?? state.liveRuntimes.length;
+      state.running = remaining > 0;
+      setRunning(state.running);
+      state.messages.push({ role: 'runtime', runtimeId: event.runtimeId || '', name, content: output, code: event.code });
       if (event.sessionId) state.sessionId = event.sessionId;
-      if (event.error) toast(event.error, 'err');
+      if (event.error) toast(`${name}: ${event.error}`, 'err');
       renderAll();
       refreshSessions();
       break;
@@ -657,6 +734,33 @@ async function openSettings() {
     max: '5',
     value: settings.reviewer?.maxRounds ?? 2,
   });
+  const guard = settings.guardrails || {};
+  const guardEnabled = el('input', { type: 'checkbox' });
+  guardEnabled.checked = guard.enabled !== false;
+  const guardDangerous = el('input', { type: 'checkbox' });
+  guardDangerous.checked = guard.blockDangerous !== false;
+  const guardSecrets = el('input', { type: 'checkbox' });
+  guardSecrets.checked = guard.protectSecrets !== false;
+  const guardAllowSecrets = el('input', { type: 'checkbox' });
+  guardAllowSecrets.checked = Boolean(guard.allowSecrets);
+  const guardMaxLength = el('input', {
+    type: 'number',
+    min: '100',
+    max: '20000',
+    value: guard.maxCommandLength ?? 4000,
+  });
+  const guardExtra = el('textarea', {
+    rows: '3',
+    placeholder: 'Дополнительные запреты: по одному регулярному выражению в строке',
+  });
+  guardExtra.value = (guard.extraDeny || []).join('\n');
+  const telemetry = settings.telemetry || {};
+  const telemetryEnabled = el('input', { type: 'checkbox' });
+  telemetryEnabled.checked = Boolean(telemetry.enabled);
+  const telemetryEndpoint = el('input', {
+    value: telemetry.endpoint || 'http://127.0.0.1:4318',
+    placeholder: 'http://127.0.0.1:4318',
+  });
 
   const modal = openModal({
     title: 'Настройки',
@@ -677,6 +781,26 @@ async function openSettings() {
         field('Модель ревизора', reviewerModel),
         field('Раундов доработки', reviewerRounds),
       ]),
+      el('div', { class: 'docs-group-title', text: 'Guardrails' }),
+      el('label', { class: 'hint-text' }, [guardEnabled, ' включить guardrails для встроенного агента']),
+      el('label', { class: 'hint-text' }, [guardDangerous, ' блокировать разрушительные команды (rm -rf /, format, pipe-to-shell и т. п.)']),
+      el('label', { class: 'hint-text' }, [guardSecrets, ' защищать секретные файлы (.env, ключи, .ssh, .npmrc)']),
+      el('label', { class: 'hint-text' }, [guardAllowSecrets, ' разрешить доступ к секретам (осторожно)']),
+      el('div', { class: 'row' }, [
+        field('Максимальная длина команды', guardMaxLength),
+        field('Дополнительные запреты', guardExtra),
+      ]),
+      el('p', {
+        class: 'hint-text',
+        text: 'Guardrails не заменяют песочницу: внешние рантаймы запускаются как отдельные процессы/контейнеры и не проходят эти проверки.',
+      }),
+      el('div', { class: 'docs-group-title', text: 'OpenTelemetry' }),
+      el('label', { class: 'hint-text' }, [telemetryEnabled, ' отправлять логи и трейсы в OTLP-коллектор']),
+      field('OTLP HTTP endpoint', telemetryEndpoint),
+      el('p', {
+        class: 'hint-text',
+        text: 'Локальный стек: npm run obs:up. Grafana — http://localhost:3001, Tempo/Loki — 72 часа.',
+      }),
       el('p', {
         class: 'hint-text',
         text: 'Провайдеры и ключи — в панели «Провайдеры». Настройки лежат в %APPDATA%\\mai-code\\settings.json',
@@ -702,6 +826,19 @@ async function openSettings() {
               enabled: reviewerEnabled.checked,
               model: reviewerModel.value.trim(),
               maxRounds: Math.max(0, Math.min(5, Number(reviewerRounds.value || 0))),
+            },
+            guardrails: {
+              enabled: guardEnabled.checked,
+              blockDangerous: guardDangerous.checked,
+              protectSecrets: guardSecrets.checked,
+              allowSecrets: guardAllowSecrets.checked,
+              maxCommandLength: Math.max(100, Math.min(20000, Number(guardMaxLength.value || 4000))),
+              extraDeny: guardExtra.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+            },
+            telemetry: {
+              enabled: telemetryEnabled.checked,
+              endpoint: telemetryEndpoint.value.trim() || 'http://127.0.0.1:4318',
+              serviceName: 'mai-code',
             },
           });
           updateChrome();
@@ -1276,6 +1413,12 @@ function runtimeForm({ id, runtime = {}, onDone }) {
     el('option', { value: 'opencode-json', text: 'OpenCode JSON-события' }),
   ]);
   parserSelect.value = runtime.parser || '';
+  const modeSelect = el('select', {}, [
+    el('option', { value: 'host', text: 'host — CLI на этой машине' }),
+    el('option', { value: 'docker', text: 'docker — отдельный контейнер' }),
+  ]);
+  modeSelect.value = runtime.mode || 'host';
+  const imageInput = el('input', { placeholder: 'например, ghcr.io/org/agent:latest', value: runtime.image || '' });
   const enabled = el('input', { type: 'checkbox' });
   enabled.checked = runtime.enabled !== false;
 
@@ -1286,10 +1429,15 @@ function runtimeForm({ id, runtime = {}, onDone }) {
       field('Команда', commandInput),
       field('Аргументы (по одному в строке)', argsArea),
       el('div', { class: 'row' }, [field('Цель {target} (herdr)', targetInput), field('Формат вывода', parserSelect)]),
-      el('label', { class: 'hint-text' }, [enabled, ' показывать в списке рантаймов']),
+      el('div', { class: 'row' }, [field('Режим запуска', modeSelect), field('Docker-образ', imageInput)]),
+      el('label', { class: 'hint-text' }, [enabled, ' включить рантайм (показывать в списке и разрешать запуск)']),
       el('p', {
         class: 'hint-text',
         text: 'Подстановки: {prompt}, {model}, {projectDir}, {target}. Если {prompt} не указан, запрос добавится последним аргументом.',
+      }),
+      el('p', {
+        class: 'hint-text',
+        text: 'Docker-режим: папка проекта монтируется в /workspace, сеть bridge, память 2g, CPU 2, cap-drop ALL. Образ должен содержать CLI рантайма.',
       }),
     ],
     footer: [
@@ -1310,6 +1458,8 @@ function runtimeForm({ id, runtime = {}, onDone }) {
               args: argsArea.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
               target: targetInput.value.trim(),
               parser: parserSelect.value,
+              mode: modeSelect.value,
+              image: imageInput.value.trim(),
               enabled: enabled.checked,
             },
           };
@@ -1327,21 +1477,51 @@ function runtimeForm({ id, runtime = {}, onDone }) {
 
 async function openRuntimes() {
   state.runtimes = await api.runtimes.list();
+  const probes = await api.runtimes.probe();
   const list = el('div', { class: 'list' });
   const entries = Object.entries(state.runtimes);
   if (!entries.length) list.append(el('p', { class: 'hint-text', text: 'Рантаймов нет.' }));
   for (const [id, runtime] of entries) {
+    const enabled = runtime.enabled !== false;
+    const probe = probes[id] || {};
     const badge = el('span', {
-      class: `badge ${runtime.enabled === false ? '' : 'ok'}`,
-      text: runtime.enabled === false ? 'выключен' : 'включён',
+      class: `badge ${enabled ? 'ok' : ''}`,
+      text: enabled ? 'включён' : 'выключен',
     });
+    const availability = el('span', {
+      class: `badge ${probe.available ? 'ok' : 'err'}`,
+      text: runtime.mode === 'docker'
+        ? (probe.available ? 'образ есть' : 'образа нет')
+        : (probe.available ? 'CLI найден' : 'CLI не найден'),
+    });
+    const sub = el('div', { class: 'sub' }, [
+      `${runtime.command || 'команда не задана'}${runtime.mode === 'docker' ? ` · docker ${runtime.image || ''}` : ''}`,
+      probe.error ? ` · ${probe.error}` : '',
+    ]);
     list.append(
       el('div', { class: 'list-item' }, [
         el('div', {}, [
-          el('div', { class: 'title' }, [runtime.name || id, ' ', badge]),
-          el('div', { class: 'sub', text: [runtime.command, ...(runtime.args || [])].join(' ') || 'команда не задана' }),
+          el('div', { class: 'title' }, [runtime.name || id, ' ', badge, ' ', availability]),
+          sub,
+          runtime.note ? el('div', { class: 'sub', text: runtime.note }) : null,
         ]),
         el('div', { class: 'actions' }, [
+          el('button', {
+            class: 'btn ghost',
+            type: 'button',
+            text: enabled ? 'Выключить' : 'Включить',
+            onclick: async () => {
+              const next = {
+                ...state.runtimes,
+                [id]: { ...runtime, enabled: !enabled },
+              };
+              state.runtimes = await api.runtimes.save(next);
+              state.settings = await api.settings.get();
+              renderRuntimes();
+              modal.close();
+              openRuntimes();
+            },
+          }),
           el('button', {
             class: 'btn ghost',
             type: 'button',
@@ -1362,7 +1542,11 @@ async function openRuntimes() {
       list,
       el('p', {
         class: 'hint-text',
-        text: 'Внешний агент запускается как процесс в папке проекта. Выберите его в списке рядом с моделью и отправьте запрос.',
+        text: '«Включить» добавляет рантайм в список рядом с моделью. Можно включить несколько: тогда в списке появится «Все включённые» и запрос уйдёт им параллельно. Без этого одновременно выполняется только один рантайм.',
+      }),
+      el('p', {
+        class: 'hint-text',
+        text: 'Режим host запускает CLI на этой машине. Режим docker запускает образ с папкой проекта в /workspace (нужен Docker).',
       }),
     ],
     footer: [
@@ -1724,6 +1908,9 @@ async function openMultica() {
       el('div', { class: 'row' }, [field('CLI', command), field('API', serverUrl)]),
       el('div', { class: 'row' }, [field('Web UI', appUrl), field('Workspace', workspaceId)]),
       el('p', { class: 'hint-text' }, [badge, ' Синхронизация идёт через официальный CLI: multica issue create/update/list.']),
+      status.available
+        ? null
+        : el('p', { class: 'hint-text', text: status.hint || status.error || 'CLI не найден в PATH.' }),
       el('p', {
         class: 'hint-text',
         text: 'Идемпотентность: в описание задачи пишется маркер OpenSpec. Повторный sync обновляет задачу, а не создаёт дубль.',
@@ -1732,6 +1919,21 @@ async function openMultica() {
       list,
     ],
     footer: [
+      status.available
+        ? null
+        : el('button', {
+            class: 'btn',
+            type: 'button',
+            text: 'Установить CLI',
+            onclick: async () => {
+              toast('Устанавливаю Multica CLI через официальный скрипт…', 'ok');
+              const res = await api.multica.install();
+              if (!res.ok) return toast(`Multica: ${res.error}`, 'err');
+              modal.close();
+              toast(res.note || 'CLI установлен', 'ok');
+              openMultica();
+            },
+          }),
       el('button', {
         class: 'btn',
         type: 'button',
@@ -1946,7 +2148,7 @@ async function init() {
   $('#settings-btn').addEventListener('click', openSettings);
   $('#send').addEventListener('click', send);
   $('#stop').addEventListener('click', () => {
-    if (state.liveRuntime) api.runtimes.stop();
+    if (state.liveRuntimes.length) api.runtimes.stop();
     else api.chat.stop();
   });
 

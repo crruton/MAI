@@ -63,6 +63,8 @@ spec:
               port: 8080
             initialDelaySeconds: 20
             periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 12
           volumeMounts:
             - name: realm
               mountPath: /opt/keycloak/data/import

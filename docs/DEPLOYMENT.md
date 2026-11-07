@@ -157,12 +157,14 @@ kubectl apply -k infra/k8s
 ## 7. Multica
 
 ```powershell
-docker compose -f infra/multica/docker-compose.yml up -d
+$env:MULTICA_MODE="with-server"
+irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex
 npm.cmd run multica:sync
 ```
 
-Подробности: `docs/MULTICA.md`. Официальный способ — `make selfhost` в
-репозитории Multica; локальный compose — упрощённый шаблон.
+Подробности: `docs/MULTICA.md`. Для реальной работы используйте официальный
+`docker-compose.selfhost.yml` из `%USERPROFILE%\.multica\server`; локальный
+`infra/multica/docker-compose.yml` — упрощённый шаблон.
 
 ## 8. Песочницы проектов
 
@@ -181,10 +183,47 @@ read-only корневая ФС, сброс capabilities, лимиты CPU/RAM, 
 OpenScion — серверная SCM-система, а не git-хостинг. MAI Code создаёт локальный git
 и памятку `docs/OPENSCION.md`; сервер и импорт пользователь делает сам.
 
-## 9. Чего пока нет
+## 9. Observability
+
+```powershell
+Copy-Item infra/observability/.env.example infra/observability/.env
+npm.cmd run obs:up
+npm.cmd run obs:smoke
+```
+
+Grafana — http://localhost:3001, Prometheus — 9090, Loki — 3100, Tempo — 3200,
+Phoenix — 6006, OTLP — 4317/4318. Логи и трейсы хранятся 72 часа в SeaweedFS.
+Подробности: `docs/OBSERVABILITY.md`.
+
+## 10. Harbor
+
+Harbor — registry для образов, а не среда запуска сервисов. Проверка условий:
+
+```powershell
+npm.cmd run harbor:check
+```
+
+Шаблон конфигурации и установка из WSL2/Git Bash: `infra/harbor/README.md`.
+Требуется ≥ 40 ГБ свободного диска, ≥ 4 ГБ RAM и свободный порт 8088.
+
+## 11. Очистка Docker
+
+```powershell
+npm.cmd run docker:gc:dry
+npm.cmd run docker:gc
+```
+
+Скрипт оставляет два последних тега на репозиторий, удаляет dangling-образы,
+остановленные песочницы и build cache старше 72 часов. Образы, занятые
+контейнерами, не удаляются.
+
+## 12. Чего пока нет
 
 - Серверного режима с изоляцией процессов и файловой системы по пользователю.
 - Подписи установщиков и автообновления.
 - Проверенного продакшен-профиля Keycloak, Vault и Kubernetes.
 - Автоматического DNS/TLS для домена.
 - Двусторонней синхронизации с Multica: только OpenSpec → Multica.
+- Готовых образов с DeepSeek Harness/Hermes для docker-режима рантаймов.
+- Живого прогона Harbor: на проверочной машине было 19,2 ГБ свободного диска
+  вместо рекомендуемых 40 ГБ.

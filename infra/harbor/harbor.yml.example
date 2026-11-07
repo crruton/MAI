@@ -1,0 +1,51 @@
+# Пример harbor.yml для локального Harbor.
+# Скопируйте в harbor.yml рядом с официальным installer и выполните:
+#   sudo ./install.sh
+#
+# Windows: Harbor устанавливается из WSL2 или Git Bash; нативный запуск
+# install.sh в PowerShell не поддерживается.
+
+hostname: localhost
+
+# HTTP-порт. 8088 выбран, чтобы не занимать 80/443 (Keycloak/Multica).
+http:
+  port: 8088
+
+# HTTPS выключен для локального стенда. Для production включите и укажите
+# сертификаты:
+# https:
+#   port: 443
+#   certificate: /your/certificate/path
+#   private_key: /your/private/key/path
+
+harbor_admin_password: Harbor12345
+
+database:
+  password: change-me-db-password
+  max_idle_conns: 100
+  max_open_conns: 900
+
+data_volume: /data/harbor
+
+trivy:
+  ignore_unfixed: false
+  skip_update: false
+  insecure: false
+
+jobservice:
+  max_job_workers: 10
+
+notification:
+  webhook_job_max_retry: 3
+
+chartmuseum:
+  enabled: false
+
+log:
+  level: info
+  local:
+    rotate_count: 50
+    rotate_size: 200M
+    location: /var/log/harbor
+
+_version: 2.13.0

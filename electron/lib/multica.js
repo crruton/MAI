@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadSettings } from './config.js';
 import { listChanges, taskMarker } from './openspec.js';
@@ -19,20 +22,80 @@ function command() {
   return String(settings.multica?.command || 'multica').trim() || 'multica';
 }
 
-function run(args, { timeout = 45_000, cwd } = {}) {
-  const result = spawnSync(command(), args, {
-    cwd,
+/**
+ * Официальный установщик добавляет `%USERPROFILE%\.multica\bin` в PATH, но
+ * уже запущенный процесс (и Explorer до перезапуска) этого PATH не видит.
+ * Поэтому ищем CLI и по стандартным местам установки, а не только в PATH.
+ */
+export function resolveCommand(name = command()) {
+  const raw = String(name || '').trim();
+  if (!raw) return '';
+  if (path.isAbsolute(raw) || raw.includes('\\') || raw.includes('/')) {
+    return fs.existsSync(raw) ? raw : '';
+  }
+  const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', [raw], {
     encoding: 'utf8',
-    timeout,
-    shell: process.platform === 'win32',
+    timeout: 10_000,
     windowsHide: true,
   });
-  if (result.error) throw new Error(result.error.message);
-  if (result.status !== 0) {
-    const message = (result.stderr || result.stdout || '').trim();
-    throw new Error(message || `multica завершился с кодом ${result.status}`);
+  const first = String(probe.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (probe.status === 0 && first) return first;
+
+  const candidates = [
+    path.join(os.homedir(), '.multica', 'bin', process.platform === 'win32' ? `${raw}.exe` : raw),
+    path.join(os.homedir(), '.multica', 'bin', raw),
+  ];
+  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
+    candidates.push(path.join(process.env.LOCALAPPDATA, 'Programs', 'multica', `${raw}.exe`));
   }
-  return (result.stdout || '').trim();
+  return candidates.find((candidate) => fs.existsSync(candidate)) || '';
+}
+
+/**
+ * cmd.exe на Windows печатает системные ошибки в OEM-кодировке (cp866),
+ * а сам multica — в UTF-8. Поэтому декодируем буфер: сначала строгий UTF-8,
+ * затем cp866/cp1251. Иначе в интерфейсе появляются «кракозябры».
+ */
+export function decodeOutput(buffer) {
+  if (!Buffer.isBuffer(buffer)) return String(buffer ?? '');
+  const attempts = ['utf-8', 'cp866', 'windows-1251'];
+  for (const encoding of attempts) {
+    try {
+      return new TextDecoder(encoding, { fatal: true }).decode(buffer);
+    } catch {
+      /* пробуем следующую кодировку */
+    }
+  }
+  return buffer.toString('utf8');
+}
+
+function runRaw(executable, args, options = {}) {
+  return spawnSync(executable, args, {
+    cwd: options.cwd,
+    encoding: 'buffer',
+    timeout: options.timeout ?? 45_000,
+    input: options.input,
+    // shell:false обязателен: описания задач содержат переводы строк и
+    // кириллицу, а cmd.exe искажает их и ломает аргументы.
+    shell: false,
+    windowsHide: true,
+    env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
+  });
+}
+
+function run(args, { timeout = 45_000, cwd } = {}) {
+  const executable = resolveCommand() || command();
+  const result = runRaw(executable, args, { timeout, cwd });
+  if (result.error) throw new Error(decodeOutput(result.error.message));
+  const stdout = decodeOutput(result.stdout).trim();
+  const stderr = decodeOutput(result.stderr).trim();
+  if (result.status !== 0) {
+    throw new Error(stderr || stdout || `multica завершился с кодом ${result.status}`);
+  }
+  return stdout;
 }
 
 function json(args, options) {
@@ -43,34 +106,45 @@ function json(args, options) {
   return JSON.parse(text);
 }
 
+export function probeCommand(name = command()) {
+  const resolved = resolveCommand(name);
+  return { available: Boolean(resolved), path: resolved, output: resolved };
+}
+
 export function status() {
   const settings = loadSettings();
   const config = settings.multica || {};
-  let available = false;
-  let version = '';
-  try {
-    const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', [command()], {
-      encoding: 'utf8',
-      timeout: 10_000,
-      shell: process.platform === 'win32',
-      windowsHide: true,
-    });
-    available = probe.status === 0;
-    if (available) {
-      version = run(['--version'], { timeout: 10_000 }).split(/\r?\n/)[0];
-    }
-  } catch (err) {
+  const probe = probeCommand();
+  if (!probe.available) {
     return {
       available: false,
       version: '',
-      error: err.message,
-      config: { url: config.url || 'http://localhost:8080', appUrl: config.appUrl || 'http://localhost:3000' },
+      error: `CLI «${command()}» не найден в PATH`,
+      hint: 'Установите официальный CLI кнопкой «Установить CLI» в этой панели или командой: irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex',
+      config: {
+        url: config.url || 'http://localhost:8080',
+        appUrl: config.appUrl || 'http://localhost:3000',
+        workspaceId: config.workspaceId || '',
+        command: command(),
+      },
     };
   }
+  let version = '';
+  let error = '';
+  try {
+    version = run(['version'], { timeout: 15_000 }).split(/\r?\n/)[0];
+  } catch (err) {
+    try {
+      version = run(['--version'], { timeout: 15_000 }).split(/\r?\n/)[0];
+    } catch {
+      error = err.message;
+    }
+  }
   return {
-    available,
+    available: true,
     version,
-    error: available ? '' : `CLI «${command()}» не найден в PATH`,
+    path: probe.path,
+    error,
     config: {
       url: config.url || 'http://localhost:8080',
       appUrl: config.appUrl || 'http://localhost:3000',
@@ -78,6 +152,27 @@ export function status() {
       command: command(),
     },
   };
+}
+
+/** Устанавливает официальный CLI через скрипт multica (только Windows). */
+export function installCli() {
+  if (process.platform !== 'win32') {
+    return { ok: false, error: 'Автоустановка реализована для Windows. Используйте brew install multica-ai/tap/multica.' };
+  }
+  const script = [
+    '$ErrorActionPreference = "Stop";',
+    'irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex',
+  ].join(' ');
+  const result = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    encoding: 'buffer',
+    timeout: 10 * 60 * 1000,
+    windowsHide: true,
+    env: { ...process.env, NO_COLOR: '1' },
+  });
+  const output = `${decodeOutput(result.stdout || Buffer.alloc(0))}${decodeOutput(result.stderr || Buffer.alloc(0))}`.trim();
+  if (result.error) return { ok: false, error: decodeOutput(result.error.message), output };
+  if (result.status !== 0) return { ok: false, error: `Установщик завершился с кодом ${result.status}`, output };
+  return { ok: true, output: output.slice(-8000), note: 'CLI установлен в %USERPROFILE%\\.multica\\bin. Перезапустите приложение, если PATH ещё не обновился.' };
 }
 
 export function authStatus() {

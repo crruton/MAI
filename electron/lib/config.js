@@ -3,12 +3,19 @@ import path from 'node:path';
 import { app } from 'electron';
 import { envCandidates, readEnvFiles } from './env.js';
 import { RUNTIME_PRESETS } from './runtimes.js';
+import { DEFAULT_GUARDRAILS } from './guardrails.js';
 
 const DEFAULTS = {
   temperature: 0.3,
   maxIterations: 30,
   autoApproveShell: false,
   allowOutsideProject: false,
+  guardrails: DEFAULT_GUARDRAILS,
+  telemetry: {
+    enabled: false,
+    endpoint: 'http://127.0.0.1:4318',
+    serviceName: 'mai-code',
+  },
   projectDir: '',
   theme: 'dark',
   activeModel: '',
@@ -138,7 +145,13 @@ function bootstrapProviders(saved, env) {
 
 function bootstrapRuntimes(saved) {
   const base = RUNTIME_PRESETS;
-  const runtimes = { ...base, ...(saved.runtimes || {}) };
+  const runtimes = {};
+  for (const [id, preset] of Object.entries(base)) {
+    runtimes[id] = { ...preset, args: [...(preset.args || [])] };
+  }
+  for (const [id, runtime] of Object.entries(saved.runtimes || {})) {
+    runtimes[id] = { ...(runtimes[id] || {}), ...runtime };
+  }
   // Старые сохранения не знали про parser — дозаполняем из пресета.
   for (const [id, preset] of Object.entries(base)) {
     if (runtimes[id] && !runtimes[id].parser && preset.parser) runtimes[id].parser = preset.parser;
@@ -162,6 +175,8 @@ export function loadSettings() {
     ...saved,
     providers,
     runtimes: bootstrapRuntimes(saved),
+    guardrails: { ...DEFAULT_GUARDRAILS, ...(saved.guardrails || {}) },
+    telemetry: { ...DEFAULTS.telemetry, ...(saved.telemetry || {}) },
   };
 
   if (!settings.projectDir) {
@@ -203,6 +218,14 @@ export function saveSettings(patch) {
 
   if (patch.repowise) {
     next.repowise = { ...(current.repowise || {}), ...patch.repowise };
+  }
+
+  if (patch.guardrails) {
+    next.guardrails = { ...(current.guardrails || DEFAULT_GUARDRAILS), ...patch.guardrails };
+  }
+
+  if (patch.telemetry) {
+    next.telemetry = { ...(current.telemetry || DEFAULTS.telemetry), ...patch.telemetry };
   }
 
   // После миграции на реестр провайдеров старые поля не нужны (и не должны лежать открытым ключом).

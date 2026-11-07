@@ -1,7 +1,8 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const MAX_OUTPUT = 300_000;
 const TIMEOUT_MS = 30 * 60 * 1000;
+const FORWARD_ENV = ['DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'MAI_API_KEY', 'GEMINI_API_KEY'];
 
 function winQuote(value) {
   const text = String(value ?? '');
@@ -23,8 +24,77 @@ export function buildCommand(runtime, vars) {
 }
 
 export function describeRuntime(runtime, vars) {
-  const { command, args } = buildCommand(runtime, vars);
+  const { command, args } = runtime.mode === 'docker'
+    ? buildDockerCommand(runtime, vars, vars.projectDir)
+    : buildCommand(runtime, vars);
   return [command, ...args].map((part) => (/\s/.test(part) ? `"${part}"` : part)).join(' ');
+}
+
+/** Собирает `docker run` для рантайма, который должен жить в контейнере. */
+export function buildDockerCommand(runtime, vars, projectDir) {
+  const image = String(runtime.image || '').trim();
+  if (!image) throw new Error('Для режима docker укажите образ (image)');
+  const inner = buildCommand(runtime, vars);
+  const args = [
+    'run',
+    '--rm',
+    '--init',
+    '--network',
+    runtime.network || 'bridge',
+    '--memory',
+    runtime.memory || '2g',
+    '--cpus',
+    runtime.cpus || '2',
+    '--pids-limit',
+    '512',
+    '--security-opt',
+    'no-new-privileges',
+    '--cap-drop',
+    'ALL',
+    '--tmpfs',
+    '/tmp:rw,exec,nosuid,size=256m',
+    '--volume',
+    `${projectDir}:/workspace`,
+    '--workdir',
+    '/workspace',
+  ];
+  for (const name of runtime.forwardEnv || FORWARD_ENV) {
+    if (process.env[name]) args.push('--env', name);
+  }
+  args.push(image, inner.command, ...inner.args);
+  return { command: 'docker', args };
+}
+
+/** Проверяет, доступна ли команда рантайма (и образ для docker-режима). */
+export function probeRuntime(runtime) {
+  const command = String(runtime?.command || '').trim();
+  if (runtime?.mode === 'docker') {
+    const image = String(runtime.image || '').trim();
+    if (!image) return { available: false, error: 'Не задан образ для docker-режима' };
+    const docker = spawnSync('docker', ['image', 'inspect', image, '--format', '{{.Id}}'], {
+      encoding: 'utf8',
+      timeout: 20_000,
+      windowsHide: true,
+    });
+    if (docker.error) return { available: false, error: docker.error.message };
+    if (docker.status !== 0) {
+      return { available: false, error: `Образ ${image} не найден локально. Выполните: docker pull ${image}` };
+    }
+    return { available: true, path: `docker:${image}`, version: String(docker.stdout || '').trim().slice(0, 19) };
+  }
+  if (!command) return { available: false, error: 'Команда не задана' };
+  const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', [command], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    shell: process.platform === 'win32',
+    windowsHide: true,
+  });
+  const pathLine = String(probe.stdout || '').split(/\r?\n/).map((s) => s.trim()).find(Boolean) || '';
+  if (probe.error) return { available: false, error: probe.error.message };
+  if (probe.status !== 0 || !pathLine) {
+    return { available: false, error: `CLI «${command}» не найден в PATH` };
+  }
+  return { available: true, path: pathLine, version: '' };
 }
 
 /** OpenCode в неинтерактивном режиме печатает JSON-события — вытаскиваем текст. */
@@ -64,7 +134,16 @@ function opencodeParser() {
  * Возвращает объект с kill() и promise завершения.
  */
 export function startRuntime({ runtime, prompt, model, projectDir, onData, onExit }) {
-  const { command, args } = buildCommand(runtime, { prompt, model, projectDir, target: runtime.target || '' });
+  let spec;
+  try {
+    spec = runtime.mode === 'docker'
+      ? buildDockerCommand(runtime, { prompt, model, projectDir, target: runtime.target || '' }, projectDir || process.cwd())
+      : buildCommand(runtime, { prompt, model, projectDir, target: runtime.target || '' });
+  } catch (err) {
+    onExit({ code: -1, error: err.message });
+    return { kill() {} };
+  }
+  const { command, args } = spec;
 
   if (!command) {
     onExit({ code: -1, error: 'Не задана команда рантайма' });
@@ -140,6 +219,7 @@ export const RUNTIME_PRESETS = {
     promptVia: 'arg',
     parser: 'opencode-json',
     enabled: true,
+    mode: 'host',
   },
   herdr: {
     name: 'herdr',
@@ -148,6 +228,7 @@ export const RUNTIME_PRESETS = {
     promptVia: 'arg',
     target: '',
     enabled: false,
+    mode: 'host',
   },
   claude: {
     name: 'Claude Code',
@@ -155,6 +236,7 @@ export const RUNTIME_PRESETS = {
     args: ['-p', '{prompt}'],
     promptVia: 'arg',
     enabled: false,
+    mode: 'host',
   },
   codex: {
     name: 'Codex CLI',
@@ -162,6 +244,7 @@ export const RUNTIME_PRESETS = {
     args: ['exec', '{prompt}'],
     promptVia: 'arg',
     enabled: false,
+    mode: 'host',
   },
   gemini: {
     name: 'Gemini CLI',
@@ -169,6 +252,7 @@ export const RUNTIME_PRESETS = {
     args: ['-p', '{prompt}'],
     promptVia: 'arg',
     enabled: false,
+    mode: 'host',
   },
   dsh: {
     name: 'DeepSeek Harness',
@@ -176,6 +260,7 @@ export const RUNTIME_PRESETS = {
     args: ['run', '{prompt}'],
     promptVia: 'arg',
     enabled: false,
+    mode: 'host',
     note: 'Требует DEEPSEEK_API_KEY и профиль dsh. Команду уточните под версию CLI.',
   },
   hermes: {
@@ -184,6 +269,7 @@ export const RUNTIME_PRESETS = {
     args: ['-p', '{prompt}'],
     promptVia: 'arg',
     enabled: false,
+    mode: 'host',
     note: 'Nous Research Hermes CLI. Модель задаётся в конфигурации Hermes.',
   },
   jev: {
@@ -192,6 +278,7 @@ export const RUNTIME_PRESETS = {
     args: ['{prompt}'],
     promptVia: 'arg',
     enabled: false,
+    mode: 'host',
     note: 'Локальный JEV CLI. Проверьте имя команды в своей установке.',
   },
   custom: {
@@ -200,5 +287,6 @@ export const RUNTIME_PRESETS = {
     args: ['{prompt}'],
     promptVia: 'arg',
     enabled: false,
+    mode: 'host',
   },
 };

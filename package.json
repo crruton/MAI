@@ -38,7 +38,13 @@
     "multica:sync": "node scripts/multica-sync.mjs",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
-    "infra:logs": "docker compose -f infra/docker-compose.yml logs -f --tail=100"
+    "infra:logs": "docker compose -f infra/docker-compose.yml logs -f --tail=100",
+    "docker:gc": "node scripts/docker-gc.mjs --build-cache",
+    "docker:gc:dry": "node scripts/docker-gc.mjs --dry-run",
+    "obs:up": "docker compose -f infra/observability/docker-compose.yml up -d",
+    "obs:down": "docker compose -f infra/observability/docker-compose.yml down",
+    "obs:smoke": "node scripts/otel-smoke.mjs",
+    "harbor:check": "node scripts/harbor-check.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.0",

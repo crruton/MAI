@@ -17,31 +17,47 @@ Multica — self-hosted workspace, где задачи назначаются AI
 
 ## Локальный запуск
 
-Официальный способ:
+Официальный установщик для Windows:
 
 ```powershell
-git clone https://github.com/multica-ai/multica.git
-cd multica
-make selfhost
+# Только CLI
+irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex
+
+# CLI + self-hosted сервер
+$env:MULTICA_MODE="with-server"
+irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex
 ```
 
-Либо в этом репозитории:
+Установщик кладёт CLI в `%USERPROFILE%\.multica\bin` и добавляет эту папку в
+пользовательский PATH. Уже запущенное приложение PATH не видит: перезапустите
+MAI Code или нажмите **Установить CLI** в панели Multica (после установки
+приложение ищет CLI и в `%USERPROFILE%\.multica\bin`).
+
+Сервер разворачивается официальным compose-файлом:
 
 ```powershell
-docker compose -f infra/multica/docker-compose.yml up -d
+cd $env:USERPROFILE\.multica\server
+Copy-Item .env.example .env
+# задайте JWT_SECRET, POSTGRES_PASSWORD и свободные порты
+docker compose -f docker-compose.selfhost.yml up -d
 ```
 
-Сервисы:
+В этом репозитории есть упрощённый `infra/multica/docker-compose.yml` для
+демонстрации, но для реальной работы используйте официальный
+`docker-compose.selfhost.yml`.
 
-| Что | Адрес |
-|---|---|
-| Web UI | http://localhost:3000 |
-| API | http://localhost:8080 |
+Сервисы (значения по умолчанию; порты можно изменить в `.env`):
 
-Без `RESEND_API_KEY` код входа печатается в лог backend:
+| Что | Переменная | Адрес |
+|---|---|---|
+| Web UI | `FRONTEND_PORT` | http://localhost:3000 |
+| API | `PORT` / `BACKEND_PORT` | http://localhost:8080 |
+
+Без `RESEND_API_KEY` код входа можно взять из базы self-host:
 
 ```powershell
-docker logs -f mai-code-multica-backend | Select-String "Verification code"
+docker exec multica-postgres-1 psql -U multica -d multica -tAc `
+  "select code from verification_code order by created_at desc limit 1;"
 ```
 
 Для детерминированного локального входа задайте `APP_ENV=development` и
@@ -52,22 +68,18 @@ docker logs -f mai-code-multica-backend | Select-String "Verification code"
 ```powershell
 multica config set server_url http://localhost:8080
 multica config set app_url http://localhost:3000
-multica login
-multica daemon start
+multica login          # браузерный OAuth
+# или вход по PAT:
+multica login --token mul_...
+multica auth status
 multica issue list --limit 20
 ```
 
-## Синхронизация
+`multica setup self-host --server-url ... --app-url ...` делает то же самое
+интерактивно. Если браузер недоступен, создайте PAT: Web UI → **Settings →
+Tokens** → **Create token**, затем `multica login --token mul_...`.
 
-В приложении: панель **Multica** → **Синхронизировать OpenSpec**.
-
-Или из терминала:
-
-```powershell
-npm.cmd run multica:sync
-```
-
-Настройки (`%APPDATA%\mai-code\settings.json`):
+В приложении настройки Multica:
 
 ```json
 {
@@ -80,12 +92,31 @@ npm.cmd run multica:sync
 }
 ```
 
+## Синхронизация
+
+В приложении: панель **Multica** → **Синхронизировать OpenSpec**.
+
+Или из терминала:
+
+```powershell
+npm.cmd run multica:sync
+```
+
 ## Почему CLI, а не REST
 
 Multica — Go-сервер с REST API, но публичная документация описывает CLI
 (`multica issue create/list/update`). Внутренний REST может меняться между
 версиями. Клиент `electron/lib/multica.js` изолирован: если появится стабильный
 API, заменить нужно только этот файл.
+
+## Проверено в этой среде
+
+- CLI v0.8.0 установлен официальным скриптом.
+- Self-host backend и frontend подняты официальным compose; `/health` — 200.
+- Вход по PAT, `multica auth status`, `multica issue create`, `multica issue list`
+  выполнены успешно.
+- Кириллица в выводе больше не превращается в «кракозябры»: клиент декодирует
+  буфер как UTF-8, затем cp866/cp1251.
 
 ## Ограничения
 
@@ -97,6 +128,8 @@ API, заменить нужно только этот файл.
 - Локальная Multica и MAI Code не обмениваются вложениями и комментариями.
 - Телеметрия Multica включена по умолчанию; отключается `DO_NOT_TRACK=1`
   на backend.
+- Без PAT или браузерного OAuth доска недоступна; API-ключи и пароли в
+  настройках не хранятся.
 
 ## Формат задач (ASD-STE100)
 

@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, publicSettings, dataDir } from './lib/config.js';
 import { listModels, resolveModel } from './lib/models.js';
-import { startRuntime, describeRuntime } from './lib/runtimes.js';
+import { startRuntime, describeRuntime, probeRuntime } from './lib/runtimes.js';
 import { createSession, deleteSession, getSession, listSessions, saveSession } from './lib/sessions.js';
 import { runAgent } from './lib/agent.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, readMemory, writeMemory, installBundledSkills } from './lib/skills.js';
@@ -39,6 +39,8 @@ import {
 } from './lib/boards.js';
 import { gitStatus, gitDiff, gitHead } from './lib/git.js';
 import { runStage } from './lib/deploy.js';
+import { checkCommand, redactSecrets } from './lib/guardrails.js';
+import { emitLog, emitSpan, telemetryStatus } from './lib/telemetry.js';
 import * as infra from './lib/infra.js';
 import * as repowise from './lib/repowise.js';
 import { editDiagram } from './lib/diagram-agent.js';
@@ -107,7 +109,7 @@ function send(window, event) {
 
 function runState(window) {
   const id = window.id;
-  if (!runs.has(id)) runs.set(id, { controller: null, runtime: null, stage: null, correction: null, approvals: new Map() });
+  if (!runs.has(id)) runs.set(id, { controller: null, runtime: null, runtimeGroup: null, stage: null, correction: null, approvals: new Map() });
   return runs.get(id);
 }
 
@@ -124,11 +126,12 @@ function logError(entry) {
     } catch {
       all = [];
     }
-    all.push({ at: new Date().toISOString(), ...entry });
+    all.push({ at: new Date().toISOString(), ...entry, message: redactSecrets(entry?.message || '') });
     fs.writeFileSync(file, JSON.stringify(all.slice(-500), null, 2), 'utf8');
   } catch {
     /* журнал ошибок не должен ломать приложение */
   }
+  emitLog(entry?.message || 'error', { severity: 'ERROR', attributes: { source: entry?.source || 'app', ...entry } });
 }
 
 const boardWindows = new Map(); // board -> BrowserWindow
@@ -207,6 +210,7 @@ app.whenReady().then(async () => {
   }
   createWindow();
   const settings = loadSettings();
+  emitLog('MAI Code запущен', { attributes: { platform: process.platform, version: app.getVersion() } });
   mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -236,6 +240,14 @@ app.on('before-quit', () => {
     } catch {
       /* уже завершено */
     }
+    for (const handle of state.runtimeGroup || []) {
+      try {
+        handle.kill();
+      } catch {
+        /* уже завершено */
+      }
+    }
+    state.runtimeGroup = null;
   }
   try {
     repowise.stopAll();
@@ -247,9 +259,10 @@ app.on('before-quit', () => {
 // ---------- настройки ----------
 
 ipcMain.handle('settings:get', () => publicSettings());
+ipcMain.handle('telemetry:status', () => telemetryStatus());
 
 ipcMain.handle('settings:save', async (_e, patch) => {
-  if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth) {
+  if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth || patch.guardrails || patch.telemetry) {
     requireAdmin();
   }
   const clean = { ...patch };
@@ -366,14 +379,36 @@ ipcMain.handle('runtimes:save', (_e, runtimes) => {
   return loadSettings().runtimes;
 });
 
+ipcMain.handle('runtimes:probe', (_e, payload) => {
+  const runtimes = loadSettings().runtimes || {};
+  const ids = payload?.runtime ? [payload.runtime] : Object.keys(runtimes);
+  const result = {};
+  for (const id of ids) {
+    if (runtimes[id]) result[id] = probeRuntime(runtimes[id]);
+  }
+  return result;
+});
+
+function runtimeSession(payload, settings, prompt, model, projectDir) {
+  let session = payload.sessionId ? getSession(payload.sessionId) : null;
+  if (!session) session = createSession({ title: '', model, projectDir });
+  session.projectDir = projectDir;
+  session.model = model;
+  session.messages.push({ role: 'user', content: prompt });
+  if (!session.title || session.title === 'Новый чат') session.title = prompt.slice(0, 60);
+  saveSession(session);
+  return session;
+}
+
 ipcMain.handle('runtimes:run', async (event, payload) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   const state = runState(window);
-  if (state.runtime) return { ok: false, error: 'Рантайм уже выполняется' };
+  if (state.runtime || state.runtimeGroup?.length) return { ok: false, error: 'Рантайм уже выполняется' };
 
   const settings = loadSettings();
   const runtime = settings.runtimes?.[payload.runtime];
   if (!runtime) return { ok: false, error: 'Рантайм не найден' };
+  if (runtime.enabled === false) return { ok: false, error: 'Рантайм выключен. Включите его в панели «Рантаймы».' };
   if (!runtime.command) return { ok: false, error: 'У рантайма не задана команда' };
 
   const projectDir = payload.projectDir || settings.projectDir;
@@ -381,26 +416,26 @@ ipcMain.handle('runtimes:run', async (event, payload) => {
   const prompt = String(payload.text || '').trim();
   if (!prompt) return { ok: false, error: 'Пустой запрос' };
 
-  let session = payload.sessionId ? getSession(payload.sessionId) : null;
-  if (!session) session = createSession({ title: '', model, projectDir });
-  session.projectDir = projectDir;
-  session.model = model;
-  session.messages.push({ role: 'user', content: prompt });
-  if (!session.title || session.title === 'Новый чат') {
-    session.title = prompt.slice(0, 60);
-  }
-  saveSession(session);
+  const session = runtimeSession(payload, settings, prompt, model, projectDir);
+  const startedAt = Date.now();
 
   const handle = startRuntime({
     runtime,
     prompt,
     model,
     projectDir,
-    onData: (text) => send(window, { type: 'runtime:chunk', text }),
+    onData: (text) => send(window, { type: 'runtime:chunk', runtimeId: payload.runtime, text }),
     onExit: ({ code, error, output }) => {
       state.runtime = null;
+      emitSpan('runtime.run', {
+        startMs: startedAt,
+        endMs: Date.now(),
+        attributes: { runtime: payload.runtime, mode: runtime.mode || 'host', code },
+        error: error || '',
+      });
       session.messages.push({
         role: 'runtime',
+        runtimeId: payload.runtime,
         name: runtime.name || payload.runtime,
         content: output || '',
         code,
@@ -415,6 +450,7 @@ ipcMain.handle('runtimes:run', async (event, payload) => {
       }
       send(window, {
         type: 'runtime:exit',
+        runtimeId: payload.runtime,
         code,
         error,
         sessionId: session.id,
@@ -427,6 +463,7 @@ ipcMain.handle('runtimes:run', async (event, payload) => {
   state.runtime = handle;
   send(window, {
     type: 'runtime:start',
+    runtimeId: payload.runtime,
     name: runtime.name || payload.runtime,
     command: describeRuntime(runtime, { prompt, model, projectDir, target: runtime.target || '' }),
   });
@@ -434,9 +471,84 @@ ipcMain.handle('runtimes:run', async (event, payload) => {
   return { ok: true, sessionId: session.id, title: session.title };
 });
 
+/** Параллельный запуск нескольких включённых рантаймов на один запрос. */
+ipcMain.handle('runtimes:runMany', async (event, payload) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const state = runState(window);
+  if (state.runtime || state.runtimeGroup?.length) return { ok: false, error: 'Рантайм уже выполняется' };
+
+  const settings = loadSettings();
+  const ids = Array.isArray(payload?.runtimes) ? payload.runtimes : [];
+  const selected = [];
+  for (const id of ids) {
+    const runtime = settings.runtimes?.[id];
+    if (!runtime || runtime.enabled === false || !runtime.command) continue;
+    selected.push({ id, runtime });
+  }
+  if (!selected.length) return { ok: false, error: 'Нет включённых рантаймов с командой' };
+
+  const projectDir = payload.projectDir || settings.projectDir;
+  const model = payload.model || settings.activeModel || '';
+  const prompt = String(payload.text || '').trim();
+  if (!prompt) return { ok: false, error: 'Пустой запрос' };
+
+  const session = runtimeSession(payload, settings, prompt, model, projectDir);
+  let pending = selected.length;
+  const handles = [];
+  state.runtimeGroup = handles;
+
+  for (const { id, runtime } of selected) {
+    const name = runtime.name || id;
+    const startedAt = Date.now();
+    send(window, {
+      type: 'runtime:start',
+      runtimeId: id,
+      name,
+      command: describeRuntime(runtime, { prompt, model, projectDir, target: runtime.target || '' }),
+    });
+    const handle = startRuntime({
+      runtime,
+      prompt,
+      model,
+      projectDir,
+      onData: (text) => send(window, { type: 'runtime:chunk', runtimeId: id, text }),
+      onExit: ({ code, error, output }) => {
+        emitSpan('runtime.run', {
+          startMs: startedAt,
+          endMs: Date.now(),
+          attributes: { runtime: id, mode: runtime.mode || 'host', code, parallel: true },
+          error: error || '',
+        });
+        session.messages.push({ role: 'runtime', runtimeId: id, name, content: output || '', code });
+        saveSession(session);
+        if (error || (code !== 0 && code !== null)) {
+          logError({ source: 'runtime', runtime: id, message: error || `Рантайм завершился с кодом ${code}` });
+        }
+        pending -= 1;
+        if (pending <= 0) state.runtimeGroup = null;
+        send(window, {
+          type: 'runtime:exit',
+          runtimeId: id,
+          code,
+          error,
+          sessionId: session.id,
+          name,
+          output: output || '',
+          pending: Math.max(0, pending),
+        });
+      },
+    });
+    handles.push(handle);
+  }
+
+  return { ok: true, sessionId: session.id, title: session.title, runtimes: selected.map((s) => s.id) };
+});
+
 ipcMain.handle('runtimes:stop', (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
-  runState(window).runtime?.kill();
+  const state = runState(window);
+  state.runtime?.kill();
+  for (const handle of state.runtimeGroup || []) handle.kill();
   return true;
 });
 
@@ -638,6 +750,10 @@ ipcMain.handle('skills:delete', (_e, file) => {
 // ---------- Multica ----------
 
 ipcMain.handle('multica:status', () => multica.status());
+ipcMain.handle('multica:install', () => {
+  requireAdmin();
+  return multica.installCli();
+});
 ipcMain.handle('multica:auth', () => multica.authStatus());
 ipcMain.handle('multica:issues', (_e, limit) => multica.listIssues(limit || 30));
 ipcMain.handle('multica:syncDocs', (_e, projectDir) => {
@@ -870,6 +986,9 @@ ipcMain.handle('boards:stageRun', (event, payload) => {
 
   const command = payload.command || stage.command;
   if (!command) return { ok: false, error: 'Не задана команда стадии' };
+
+  const guard = checkCommand(command, { guardrails: loadSettings().guardrails });
+  if (!guard.allowed) return { ok: false, error: `Guardrails: ${guard.reason}` };
 
   stage.status = 'running';
   stage.lastRunAt = new Date().toISOString();

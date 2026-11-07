@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { checkCommand } from '../guardrails.js';
 
 const MAX_OUTPUT = 24_000;
 const TIMEOUT_MS = 180_000;
@@ -22,6 +23,10 @@ export const shellTools = [
       },
     },
     async run(ctx, args) {
+      const check = checkCommand(args.command, { guardrails: ctx.guardrails });
+      if (!check.allowed) {
+        return `Guardrails заблокировали команду: ${check.reason}`;
+      }
       const allowed = await ctx.approve('run_shell', args.command);
       if (!allowed) return 'Пользователь отклонил выполнение команды.';
       let command = String(args.command || '');

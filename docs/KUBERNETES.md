@@ -16,18 +16,61 @@ infra/k8s/
   kustomization.yaml
 ```
 
-Манифесты проверены синтаксически, **не на живом кластере**. Это шаблон, а не
-готовый production-профиль.
+Манифесты проверены на живом кластере k3d (k3s v1.35.5): namespace, секрет,
+PVC, Keycloak с realm `mai-code`, Multica backend/web и оба Ingress поднялись.
+
+## Проверено на живом кластере
+
+Окружение: Windows 10, Docker Desktop 29.9.2, k3d v5.9.0, k3s v1.35.5.
+
+```powershell
+k3d cluster create mai-code --servers 1 --agents 0 --no-lb --no-rollback --wait
+kubectl create namespace mai-code
+kubectl -n mai-code create secret generic mai-code-secrets `
+  --from-literal=POSTGRES_PASSWORD=change-me `
+  --from-literal=KEYCLOAK_ADMIN_PASSWORD=change-me `
+  --from-literal=KEYCLOAK_DB_PASSWORD=change-me `
+  --from-literal=MULTICA_DB_PASSWORD=change-me `
+  --from-literal=JWT_SECRET=change-me `
+  --from-literal=RESEND_API_KEY= `
+  --from-literal=MULTICA_DEV_VERIFICATION_CODE=
+kubectl apply -k infra/k8s
+kubectl -n mai-code get pods,pvc,ingress
+```
+
+Результат: 5 pod'ов `Running`, 3 PVC `Bound`, оба Ingress получили адрес.
+Проверка через `kubectl port-forward -n kube-system svc/traefik 18080:80`:
+
+| Запрос | Код |
+|---|---|
+| `Host: keycloak.mai-code.local` → `/realms/master` | 200 |
+| `Host: keycloak.mai-code.local` → `/realms/mai-code` | 200 |
+| `Host: api.multica.mai-code.local` → `/healthz` | 200 |
+| `Host: multica.mai-code.local` → `/` | 200 |
+
+Уроки живого прогона:
+
+- `$(MULTICA_DB_PASSWORD)` в `DATABASE_URL` раскрывается только если переменная
+  объявлена **раньше** в списке `env`. Иначе backend падает с ошибкой пароля.
+- Keycloak на 1 vCPU стартует несколько минут (Quarkus augmentation + импорт
+  realm). Readiness-проба должна иметь `timeoutSeconds` и запас
+  `failureThreshold`, иначе pod мигает `0/1`.
+- На Docker Desktop адрес узла `172.22.0.3` с хоста недоступен: Ingress
+  проверяется через port-forward на `svc/traefik`, а не напрямую.
 
 ## Локальный кластер
 
 ### k3d
 
 ```powershell
-k3d cluster create mai-code --agents 1 -p "8080:80@loadbalancer" -p "8443:443@loadbalancer"
+k3d cluster create mai-code --servers 1 --agents 0 --no-lb --wait
 kubectl apply -k infra/k8s
 kubectl -n mai-code get pods -w
 ```
+
+`--no-lb` экономит память на слабой машине. Ingress всё равно работает через
+Traefik внутри кластера; снаружи — `kubectl port-forward -n kube-system
+svc/traefik 18080:80`.
 
 ### kind
 
@@ -109,7 +152,8 @@ Let's Encrypt не выдаёт сертификаты для `.local`. В ло�
 - Образы Keycloak/Multica используют теги `latest` или конкретные версии; перед
   production зафиксируйте digest.
 - Ресурсы (requests/limits) — примерные.
-- Локальный кластер не проверялся в этой среде.
+- Кластер проверялся на Docker Desktop с 1 server и без load balancer; это
+  smoke-проверка, а не production-профиль.
 
 ## Проверка манифестов без кластера
 
