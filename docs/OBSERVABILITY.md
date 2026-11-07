@@ -90,10 +90,33 @@ trace по ID. Если Tempo не отвечает:
 docker compose -f infra/observability/docker-compose.yml logs tempo otel-collector loki
 ```
 
+### Результат живого прогона (2026-11-07)
+
+Стек поднят на Docker 29.9.2, все 8 образов скачаны. Проверено:
+
+| Проверка | Результат |
+|---|---|
+| Grafana `/api/health` | 200 |
+| Prometheus `/-/ready` | 200 |
+| Loki `/ready` | 200, запрос `{service_name="mai-code-smoke"}` вернул лог smoke-теста |
+| Tempo `/ready` | 200, trace `e1d0567de06cdb2f5abcbe147cce27be` найден по ID |
+| OTLP `:4318` | traces 200, logs 200 |
+| SeaweedFS | бакеты `loki`, `tempo`, `phoenix`; в `tempo` появились данные |
+| Phoenix | контейнер запущен, но HTTP на `:6006` не отвечает (см. ниже) |
+
+Phoenix на образе `arizephoenix/phoenix:latest` (v21.0.0) запускается, но
+процесс `phoenix.server.main serve` уходит в 80–90 % CPU и не открывает порт,
+логи пустые. Добавлен `PYTHONUNBUFFERED=1`, чтобы увидеть вывод при следующем
+запуске. Остальной стек от Phoenix не зависит: трейсы и логи идут в Tempo/Loki.
+
 ### Уроки запуска
 
 - `minio/mc` больше недоступен в Docker Hub, а `quay.io/minio/mc` отдаёт 401.
   Бакеты создаёт `seaweedfs-init` через `weed shell` из образа SeaweedFS.
+- `seaweedfs-init` должен не просто дождаться master, а **проверить, что бакеты
+  реально созданы**. Иначе на свежем volume Tempo падает с
+  `The specified bucket does not exist`. Скрипт создаёт бакеты в цикле и
+  проверяет `s3.bucket.list`; при неудаче контейнер завершается с кодом 1.
 - Порты SeaweedFS сдвинуты на `18333/18888/19333`, иначе конфликт с основным
   SeaweedFS приложения.
 - Стек тяжёлый: при 5,9 ГБ RAM его нельзя поднимать одновременно с локальным

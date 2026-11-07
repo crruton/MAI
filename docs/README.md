@@ -25,7 +25,7 @@
 | Keycloak | живой прогон: realm `mai-code`, 3 пользователя, issuer 200 |
 | Multica | живой прогон: CLI v0.8.0, self-host, PAT, issue create/list |
 | Kubernetes | живой прогон k3d: 5 pod'ов, 3 PVC, оба Ingress, Keycloak realm и Multica 200 |
-| Observability | конфигурация стека и smoke-скрипт; живой прогон требует ≥ 8 ГБ RAM |
+| Observability | живой прогон: Grafana/Prometheus/Loki/Tempo/OTLP 200, smoke-trace найден; Phoenix пока не отвечает |
 | Harbor | проверка условий и шаблон; живой прогон требует ≥ 40 ГБ диска |
 | DNS/домен | инструкция, внешняя настройка |
 | Guardrails | реализованы и проверены на типовых командах |

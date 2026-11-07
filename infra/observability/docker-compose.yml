@@ -47,8 +47,19 @@ services:
     entrypoint: >
       /bin/sh -c "
       until wget -q -O - http://seaweedfs:9333/cluster/status >/dev/null 2>&1; do sleep 2; done;
-      printf 's3.bucket.create -name=loki\ns3.bucket.create -name=tempo\ns3.bucket.create -name=phoenix\n' | weed shell -master=seaweedfs:9333;
-      echo buckets-ready;
+      i=0;
+      while [ $$i -lt 20 ]; do
+        printf 's3.bucket.create -name=loki\ns3.bucket.create -name=tempo\ns3.bucket.create -name=phoenix\n' | weed shell -master=seaweedfs:9333 >/dev/null 2>&1 || true;
+        list=$$(printf 's3.bucket.list\n' | weed shell -master=seaweedfs:9333 2>/dev/null || true);
+        if echo \"$$list\" | grep -q loki && echo \"$$list\" | grep -q tempo && echo \"$$list\" | grep -q phoenix; then
+          echo buckets-ready;
+          exit 0;
+        fi;
+        i=$$((i+1));
+        sleep 3;
+      done;
+      echo buckets-not-ready >&2;
+      exit 1;
       "
     restart: "no"
 
@@ -152,6 +163,8 @@ services:
     container_name: mai-code-phoenix
     restart: unless-stopped
     environment:
+      # Без этого логи Python буферизуются и `docker logs` пустой.
+      PYTHONUNBUFFERED: "1"
       PHOENIX_PORT: "6006"
       PHOENIX_HOST: 0.0.0.0
       PHOENIX_ENABLE_AUTH: "false"
