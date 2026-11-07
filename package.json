@@ -39,6 +39,7 @@
     "test:permissions": "node scripts/test-permissions.mjs && node scripts/test-permissions-integration.mjs",
     "test:shell": "node scripts/test-shell.mjs",
     "test:electron": "electron scripts/smoke-electron.mjs",
+    "test:ui": "electron scripts/test-ui.mjs",
     "test:attachments": "node scripts/test-attachments.mjs",
     "multica:sync": "node scripts/multica-sync.mjs",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
