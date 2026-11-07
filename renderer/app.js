@@ -105,6 +105,16 @@ function enabledRuntimes() {
 const MAX_ATTACHMENT_BYTES = 400 * 1024;
 const MAX_ATTACHMENTS_TOTAL = 1.2 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
+const SECRET_FILE = /^(?:\.env(?:\.[\w.-]+)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|id_rsa|id_dsa|id_ecdsa|id_ed25519|credentials)$/i;
+const SECRET_EXT = /\.(?:pem|key|pfx|p12|jks|keystore)$/i;
+const SAFE_ENV = /^\.env\.(?:example|sample|template|dist)$/i;
+
+function looksSecret(name) {
+  const base = String(name || '').split(/[\\/]/).pop();
+  if (SAFE_ENV.test(base)) return false;
+  if (SECRET_FILE.test(base) || SECRET_EXT.test(base)) return true;
+  return /(?:^|[\\/])\.ssh(?:[\\/]|$)/i.test(name);
+}
 
 function attachmentBlock() {
   if (!state.attachments.length) return '';
@@ -153,6 +163,10 @@ async function addFiles(fileList) {
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
       toast(`${file.name}: файл больше 400 КБ`, 'err');
+      continue;
+    }
+    if (looksSecret(file.name) && !state.settings?.guardrails?.allowSecrets) {
+      toast(`${file.name}: секретные файлы прикреплять нельзя (guardrails)`, 'err');
       continue;
     }
     const total = state.attachments.reduce((sum, item) => sum + item.size, 0);
