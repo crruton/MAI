@@ -8,7 +8,8 @@ import { DEFAULT_GUARDRAILS } from './guardrails.js';
 const DEFAULTS = {
   temperature: 0.3,
   maxIterations: 30,
-  autoApproveShell: false,
+  // Режим разрешений: auto | manual | acceptEdits | plan (см. lib/permissions.js).
+  permissionMode: 'manual',
   allowOutsideProject: false,
   guardrails: DEFAULT_GUARDRAILS,
   telemetry: {

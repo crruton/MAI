@@ -16,6 +16,13 @@ files:
   - README.md
   - LICENSE
   - SECURITY.md
+  # Карты исходников, типы и тесты не нужны в рантайме.
+  - "!node_modules/**/*.map"
+  - "!node_modules/**/*.ts"
+  - "!node_modules/**/*.md"
+  - "!node_modules/**/{test,tests,__tests__,example,examples,doc,docs}/**"
+  - "!node_modules/**/.github/**"
+  - "!node_modules/**/{.eslintrc*,.prettierrc*,tsconfig*.json,.editorconfig}"
 
 asar: true
 compression: normal

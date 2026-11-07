@@ -190,7 +190,9 @@ export const fsTools = [
       const file = resolveInside(ctx, args.path);
       assertNotSecret(ctx, file, 'запись');
       const allowed = await ctx.approve('write_file', `Записать файл ${file}`);
-      if (!allowed) return 'Пользователь отклонил запись файла.';
+      // approve возвращает true или строку с причиной отказа. Строка truthy,
+      // поэтому сравниваем строго: иначе отказ в режиме «План» не сработает.
+      if (allowed !== true) return typeof allowed === 'string' ? allowed : 'Пользователь отклонил запись файла.';
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, args.content ?? '', 'utf8');
       return `Записано: ${file} (${(args.content || '').length} символов)`;
@@ -221,8 +223,7 @@ export const fsTools = [
       if (count === 0) return `Фрагмент не найден в ${file}`;
       if (count > 1) return `Фрагмент встречается ${count} раз — уточните old_string`;
       const allowed = await ctx.approve('edit_file', `Изменить файл ${file}`);
-      if (!allowed) return 'Пользователь отклонил изменение файла.';
-      fs.writeFileSync(file, text.replace(args.old_string, args.new_string), 'utf8');
+      if (allowed !== true) return typeof allowed === 'string' ? allowed : 'Пользователь отклонил изменение файла.';      fs.writeFileSync(file, text.replace(args.old_string, args.new_string), 'utf8');
       return `Изменено: ${file}`;
     },
   },

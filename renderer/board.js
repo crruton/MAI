@@ -209,7 +209,6 @@ async function copyText(text) {
 /* ---------- загрузка ---------- */
 
 async function boot() {
-  initMermaid();
   bindChrome();
   const settings = await api.settings.get();
   state.settings = settings;
@@ -1319,6 +1318,30 @@ async function deleteAdr(id) {
 /* ---------- mermaid ---------- */
 
 let mermaidSeq = 0;
+let mermaidLoading = null;
+
+/**
+ * Грузит mermaid при первом обращении к диаграмме.
+ * Скрипт весит ~5 МБ, поэтому не подключаем его на старте доски.
+ */
+function ensureMermaid() {
+  if (window.mermaid) return Promise.resolve(window.mermaid);
+  mermaidLoading ??= new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = '../node_modules/mermaid/dist/mermaid.min.js';
+    script.onload = () => {
+      initMermaid();
+      resolve(window.mermaid || null);
+    };
+    script.onerror = () => {
+      mermaidLoading = null;
+      reject(new Error('Не удалось загрузить mermaid'));
+    };
+    document.head.append(script);
+  });
+  return mermaidLoading;
+}
+
 function initMermaid() {
   if (!window.mermaid) return;
   try {
@@ -1346,6 +1369,11 @@ async function renderMermaidInto(node, text) {
   if (!text) {
     node.innerHTML = '<div class="empty-note">Пустая диаграмма</div>';
     return;
+  }
+  try {
+    await ensureMermaid();
+  } catch {
+    /* ниже покажем исходник */
   }
   if (!window.mermaid) {
     node.innerHTML = `<div class="fallback"><p class="muted">Mermaid не загрузился, показываю исходник.</p><pre class="source">${esc(text)}</pre></div>`;

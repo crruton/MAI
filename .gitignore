@@ -30,3 +30,6 @@ desktop.ini
 .repowise/
 .claude/
 
+# Вложения сессий: копии пользовательских файлов, не для репозитория
+.mai-code/uploads/
+

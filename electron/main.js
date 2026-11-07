@@ -49,7 +49,8 @@ import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, require
 import { listDocs, readDoc, searchDocs } from './lib/docs.js';
 import * as multica from './lib/multica.js';
 import * as sandbox from './lib/container.js';
-
+import { saveFromPaths, saveImage, uploadsRoot, removeSessionUploads, adoptDraftUploads } from './lib/attachments.js';
+import { decide, normalizeMode, MODE_INFO, PERMISSION_MODES } from './lib/permissions.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
 // Флаг --use-system-ca решает проблему, но его нужно передать до старта Node,
@@ -167,6 +168,8 @@ function openBoardWindow(board, focus = '') {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      spellcheck: false,
+      backgroundThrottling: true,
     },
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'board.html'), { query: { board, focus } });
@@ -193,6 +196,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      spellcheck: false,
+      backgroundThrottling: true,
     },
   });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
@@ -394,6 +399,8 @@ function runtimeSession(payload, settings, prompt, model, projectDir, display = 
   if (!session) session = createSession({ title: '', model, projectDir });
   session.projectDir = projectDir;
   session.model = model;
+  const adopted = adoptDraftUploads(projectDir, session.id);
+  if (adopted) prompt = String(prompt).split(adopted.from).join(adopted.to);
   session.messages.push({ role: 'user', content: prompt, display });
   if (!session.title || session.title === 'Новый чат') session.title = display.slice(0, 60);
   saveSession(session);
@@ -562,6 +569,89 @@ ipcMain.handle('project:pick', async () => {
   return result.filePaths[0];
 });
 
+// ---------- режимы разрешений ----------
+
+ipcMain.handle('permissions:modes', () => ({
+  current: normalizeMode(loadSettings().permissionMode),
+  modes: PERMISSION_MODES.map((id) => MODE_INFO[id]),
+}));
+
+ipcMain.handle('permissions:set', (_e, mode) => {
+  const next = normalizeMode(mode);
+  saveSettings({ permissionMode: next });
+  return { ok: true, mode: next };
+});
+
+// ---------- вложения ----------
+
+ipcMain.handle('attachments:add', (_e, payload) => {
+  try {
+    const { projectDir, sessionId, paths } = payload || {};
+    return { ok: true, ...saveFromPaths({ projectDir, sessionId, paths }) };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err), entries: [], errors: [] };
+  }
+});
+
+ipcMain.handle('attachments:addImage', (_e, payload) => {
+  try {
+    const { projectDir, sessionId, name, dataUrl } = payload || {};
+    return { ok: true, entry: saveImage({ projectDir, sessionId, name, dataUrl }) };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('attachments:pick', async (_e, payload) => {
+  const { projectDir, sessionId } = payload || {};
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    title: 'Прикрепить файлы',
+    filters: [
+      { name: 'Все файлы', extensions: ['*'] },
+      { name: 'Документы', extensions: ['pdf', 'docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'txt', 'md', 'csv'] },
+      { name: 'Архивы', extensions: ['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'xz'] },
+      { name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'] },
+    ],
+  });
+  if (result.canceled || !result.filePaths.length) return { ok: true, entries: [], errors: [] };
+  try {
+    return { ok: true, ...saveFromPaths({ projectDir, sessionId, paths: result.filePaths }) };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err), entries: [], errors: [] };
+  }
+});
+
+ipcMain.handle('attachments:remove', (_e, payload) => {
+  const { projectDir, path: target } = payload || {};
+  if (!projectDir || !target) return { ok: false, error: 'нет пути' };
+  const full = path.resolve(projectDir, target);
+  const rel = path.relative(uploadsRoot(projectDir), full);
+  // Удалять можно только внутри папки вложений: иначе агент сотрёт файлы проекта.
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    return { ok: false, error: 'путь вне папки вложений' };
+  }
+  try {
+    fs.rmSync(full, { recursive: true, force: true });
+    fs.rmSync(`${full}.txt`, { force: true });
+    fs.rmSync(`${full}.index.txt`, { force: true });
+    fs.rmSync(`${full}.extracted`, { recursive: true, force: true });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('attachments:open', async (_e, payload) => {
+  const { projectDir, path: target } = payload || {};
+  if (!projectDir || !target) return false;
+  const full = path.resolve(projectDir, target);
+  const rel = path.relative(projectDir, full);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  await shell.openPath(full);
+  return true;
+});
+
 // ---------- песочницы проектов ----------
 
 ipcMain.handle('workspace:root', () => sandboxRoot());
@@ -582,7 +672,11 @@ ipcMain.handle('workspace:create', async (_e, payload) => {
 ipcMain.handle('sessions:list', () => listSessions());
 ipcMain.handle('sessions:get', (_e, id) => getSession(id));
 ipcMain.handle('sessions:create', (_e, data) => createSession(data || {}));
-ipcMain.handle('sessions:delete', (_e, id) => deleteSession(id));
+ipcMain.handle('sessions:delete', (_e, id) => {
+  const session = getSession(id);
+  if (session?.projectDir) removeSessionUploads(session.projectDir, id);
+  return deleteSession(id);
+});
 
 // ---------- чат ----------
 
@@ -629,6 +723,12 @@ ipcMain.handle('chat:start', async (event, payload) => {
   }
   session.model = model;
   session.projectDir = projectDir;
+  // Вложения прикрепляют до создания сессии, поэтому они лежат в `draft`.
+  // Переносим их в папку сессии и правим пути в тексте запроса.
+  const adopted = adoptDraftUploads(projectDir, session.id);
+  if (adopted && payload.text) {
+    payload.text = String(payload.text).split(adopted.from).join(adopted.to);
+  }
   if (payload.text) {
     const display = payload.displayText || payload.text;
     session.messages.push({ role: 'user', content: payload.text, display });
@@ -657,12 +757,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
         transforms,
         reviewer,
         emit: (e) => send(window, e),
-        approve: (name, summary) =>
-          new Promise((resolve) => {
-            const id = crypto.randomUUID();
-            state.approvals.set(id, resolve);
-            send(window, { type: 'approval', id, name, summary });
-          }),
+        approve: makeApprover(window, state),
       });
       session.messages = history;
       saveSession(session);
@@ -688,6 +783,24 @@ ipcMain.handle('chat:start', async (event, payload) => {
 
   return { ok: true, sessionId: session.id, title: session.title };
 });
+
+/**
+ * Создаёт функцию approve для агента с учётом режима разрешений.
+ * Режим читается из настроек на каждый вызов: переключение в UI действует сразу.
+ */
+function makeApprover(window, state) {
+  return (name, summary) => {
+    const settings = loadSettings();
+    const decision = decide({ mode: settings.permissionMode, tool: name, guardrails: settings.guardrails });
+    if (decision.action === 'allow') return Promise.resolve(true);
+    if (decision.action === 'deny') return Promise.resolve(decision.reason || false);
+    return new Promise((resolve) => {
+      const id = crypto.randomUUID();
+      state.approvals.set(id, resolve);
+      send(window, { type: 'approval', id, name, summary });
+    });
+  };
+}
 
 /** Закрывает висящие подтверждения отказом, иначе инструмент ждёт клика вечно. */
 function denyApprovals(state) {
@@ -1106,12 +1219,7 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         pluginTools,
         transforms,
         emit: (e) => send(window, e),
-        approve: (name, summary) =>
-          new Promise((resolve) => {
-            const id = crypto.randomUUID();
-            state.approvals.set(id, resolve);
-            send(window, { type: 'approval', id, name, summary });
-          }),
+        approve: makeApprover(window, state),
       });
       session.messages = history;
       saveSession(session);

@@ -21,6 +21,8 @@ const state = {
   runtimes: {},
   renderQueued: false,
   auth: null,
+  permissionMode: 'manual',
+  permissionModes: [],
 };
 
 /* ---------- утилиты ---------- */
@@ -102,28 +104,47 @@ function enabledRuntimes() {
 
 /* ---------- вложения ---------- */
 
-const MAX_ATTACHMENT_BYTES = 64 * 1024;
-const MAX_ATTACHMENTS_TOTAL = 192 * 1024;
-const MAX_ATTACHMENTS = 10;
-const SECRET_FILE = /^(?:\.env(?:\.[\w.-]+)?|\.npmrc|\.pypirc|\.netrc|\.git-credentials|id_rsa|id_dsa|id_ecdsa|id_ed25519|credentials)$/i;
-const SECRET_EXT = /\.(?:pem|key|pfx|p12|jks|keystore)$/i;
-const SAFE_ENV = /^\.env\.(?:example|sample|template|dist)$/i;
+const MAX_ATTACHMENTS = 20;
 
-function looksSecret(name) {
-  const base = String(name || '').split(/[\\/]/).pop();
-  if (SAFE_ENV.test(base)) return false;
-  if (SECRET_FILE.test(base) || SECRET_EXT.test(base)) return true;
-  return /(?:^|[\\/])\.ssh(?:[\\/]|$)/i.test(name);
-}
-
+/**
+ * Вложения не вставляются в промпт. Файл копируется в `.mai-code/uploads/<сессия>/`,
+ * а в контекст уходит манифест с путями. Агент читает файл инструментами
+ * read_file и grep, поэтому размер файла не ограничен размером контекста.
+ */
 function attachmentBlock() {
   if (!state.attachments.length) return '';
-  const files = state.attachments.map((item) => {
-    const name = item.name.replace(/"/g, "'");
-    return `<file name="${name}">\n${item.content}\n</file>`;
+  const lines = state.attachments.map((item) => {
+    const parts = [`- ${item.name} (${formatSize(item.size)}, ${item.kind})`, `путь: ${item.path}`];
+    if (item.textPath) parts.push(`извлечённый текст: ${item.textPath}`);
+    if (item.meta?.extracted) parts.push(`распаковано в: ${item.meta.extracted}`);
+    if (item.meta?.lines) parts.push(`строк: ${item.meta.lines}`);
+    if (item.meta?.pages) parts.push(`страниц: ~${item.meta.pages}`);
+    if (item.meta?.sheets) parts.push(`листов: ${item.meta.sheets}`);
+    if (item.meta?.slides) parts.push(`слайдов: ${item.meta.slides}`);
+    if (item.meta?.entries) parts.push(`файлов в архиве: ${item.meta.entries}`);
+    if (item.note) parts.push(`примечание: ${item.note}`);
+    return parts.join('\n  ');
   });
-  return `\n\n[Прикреплённые файлы: ${state.attachments.map((item) => item.name).join(', ')}]\n${files.join('\n\n')}`;
+  return `\n\n[Вложения: ${state.attachments.length}. Файлы лежат в проекте, читай их через read_file и grep.]\n${lines.join('\n')}`;
 }
+
+function formatSize(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} МБ`;
+  if (value >= 1024) return `${Math.round(value / 1024)} КБ`;
+  return `${value} Б`;
+}
+
+const KIND_LABEL = {
+  text: 'текст',
+  image: 'изображение',
+  pdf: 'PDF',
+  docx: 'Word',
+  xlsx: 'таблица',
+  pptx: 'презентация',
+  archive: 'архив',
+  binary: 'двоичный',
+};
 
 function renderAttachments() {
   const box = $('#attachments');
@@ -131,21 +152,23 @@ function renderAttachments() {
   box.replaceChildren();
   box.hidden = !state.attachments.length;
   state.attachments.forEach((item, index) => {
-    box.append(
-      el('span', { class: 'attachment-chip' }, [
-        el('span', { class: 'name', text: item.name, title: item.name }),
-        el('span', { class: 'size', text: `${Math.max(1, Math.round(item.size / 1024))} КБ` }),
-        el('button', {
-          type: 'button',
-          text: '×',
-          title: 'Убрать вложение',
-          onclick: () => {
-            state.attachments.splice(index, 1);
-            renderAttachments();
-          },
-        }),
-      ]),
-    );
+    const label = KIND_LABEL[item.kind] || item.kind;
+    const chip = el('span', { class: 'attachment-chip', title: item.note || item.path }, [
+      el('span', { class: 'name', text: item.name }),
+      el('span', { class: 'size', text: `${formatSize(item.size)} · ${label}` }),
+      el('button', {
+        type: 'button',
+        text: '×',
+        title: 'Убрать вложение',
+        onclick: async () => {
+          state.attachments.splice(index, 1);
+          renderAttachments();
+          await api.attachments.remove({ projectDir: state.projectDir, path: item.path });
+        },
+      }),
+    ]);
+    if (item.note) chip.classList.add('warn');
+    box.append(chip);
   });
 }
 
@@ -154,41 +177,121 @@ function clearAttachments() {
   renderAttachments();
 }
 
-async function addFiles(fileList) {
-  const files = Array.from(fileList || []);
-  for (const file of files) {
+/** Добавляет уже сохранённые записи манифеста в состояние. */
+function pushEntries(entries) {
+  for (const entry of entries || []) {
     if (state.attachments.length >= MAX_ATTACHMENTS) {
       toast(`Можно прикрепить не больше ${MAX_ATTACHMENTS} файлов`, 'err');
       break;
     }
-    if (file.size > MAX_ATTACHMENT_BYTES) {
-      toast(`${file.name}: файл больше 64 КБ`, 'err');
+    if (state.attachments.some((item) => item.path === entry.path)) continue;
+    state.attachments.push(entry);
+  }
+  renderAttachments();
+}
+
+/** Прикрепляет файлы по путям на диске (drag&drop, выбор в диалоге). */
+async function addPaths(paths) {
+  const list = (paths || []).filter(Boolean);
+  if (!list.length) return;
+  if (!state.projectDir) {
+    toast('Сначала выберите папку проекта', 'err');
+    return;
+  }
+  const result = await api.attachments.add({
+    projectDir: state.projectDir,
+    sessionId: state.sessionId,
+    paths: list,
+  });
+  if (!result.ok) {
+    toast(result.error || 'Не удалось прикрепить файлы', 'err');
+    return;
+  }
+  for (const error of result.errors || []) toast(error, 'err');
+  pushEntries(result.entries);
+}
+
+/** Прикрепляет файлы из буфера обмена или перетаскиванием без пути. */
+async function addBlobs(files) {
+  for (const file of Array.from(files || [])) {
+    if (!file.type?.startsWith('image/')) {
+      toast(`${file.name}: перетащите файл из проводника или выберите через скрепку`, 'err');
       continue;
     }
-    if (looksSecret(file.name) && !state.settings?.guardrails?.allowSecrets) {
-      toast(`${file.name}: секретные файлы прикреплять нельзя (guardrails)`, 'err');
-      continue;
-    }
-    const total = state.attachments.reduce((sum, item) => sum + item.size, 0);
-    if (total + file.size > MAX_ATTACHMENTS_TOTAL) {
-      toast('Суммарный размер вложений больше 192 КБ', 'err');
-      break;
-    }
-    if (state.attachments.some((item) => item.name === file.name && item.size === file.size)) continue;
-    let text = '';
-    try {
-      text = await file.text();
-    } catch {
+    const dataUrl = await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+    });
+    if (!dataUrl) {
       toast(`${file.name}: не удалось прочитать файл`, 'err');
       continue;
     }
-    if (text.includes('\u0000')) {
-      toast(`${file.name}: бинарные файлы не поддерживаются`, 'err');
+    const result = await api.attachments.addImage({
+      projectDir: state.projectDir,
+      sessionId: state.sessionId,
+      name: file.name,
+      dataUrl,
+    });
+    if (!result.ok) {
+      toast(result.error || 'Не удалось прикрепить изображение', 'err');
       continue;
     }
-    state.attachments.push({ name: file.name, size: file.size, content: text });
+    pushEntries([result.entry]);
   }
-  renderAttachments();
+}
+
+/** Открывает системный диалог выбора файлов. */
+async function pickAttachments() {
+  if (!state.projectDir) {
+    toast('Сначала выберите папку проекта', 'err');
+    return;
+  }
+  const result = await api.attachments.pick({
+    projectDir: state.projectDir,
+    sessionId: state.sessionId,
+  });
+  if (!result.ok) {
+    toast(result.error || 'Не удалось прикрепить файлы', 'err');
+    return;
+  }
+  for (const error of result.errors || []) toast(error, 'err');
+  pushEntries(result.entries);
+}
+
+/* ---------- режимы разрешений ---------- */
+
+const MODE_FALLBACK = [
+  { id: 'auto', label: 'Авто', description: 'Агент сам решает, что можно делать. Опасные команды блокируют guardrails.' },
+  { id: 'manual', label: 'Вручную', description: 'Спрашивать перед каждой правкой файла и каждой командой.' },
+  { id: 'acceptEdits', label: 'Принимать правки', description: 'Правки файлов применяются без вопросов, команды требуют подтверждения.' },
+  { id: 'plan', label: 'План', description: 'Только чтение и план с альтернативами. Файлы не меняются.' },
+];
+
+function renderModeSelect() {
+  const select = $('#mode-select');
+  if (!select) return;
+  const modes = state.permissionModes.length ? state.permissionModes : MODE_FALLBACK;
+  select.replaceChildren();
+  for (const mode of modes) {
+    select.append(el('option', { value: mode.id, text: mode.label, title: mode.description || '' }));
+  }
+  select.value = state.permissionMode;
+  const info = modes.find((m) => m.id === state.permissionMode);
+  select.title = info?.description || 'Режим разрешений';
+  select.classList.toggle('mode-plan', state.permissionMode === 'plan');
+  select.classList.toggle('mode-auto', state.permissionMode === 'auto');
+}
+
+async function setPermissionMode(mode) {
+  const result = await api.permissions.set(mode);
+  state.permissionMode = result?.mode || mode;
+  renderModeSelect();
+  const info = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).find(
+    (m) => m.id === state.permissionMode,
+  );
+  if (info) toast(`${info.label}: ${info.description}`, 'ok');
 }
 
 /* ---------- модальные окна ---------- */
@@ -2229,6 +2332,14 @@ async function init() {
   state.model = state.settings.activeModel || '';
   state.runtimes = await api.runtimes.list();
   try {
+    const modes = await api.permissions.modes();
+    state.permissionMode = modes.current;
+    state.permissionModes = modes.modes;
+  } catch {
+    state.permissionMode = 'manual';
+    state.permissionModes = MODE_FALLBACK;
+  }
+  try {
     state.auth = await api.auth.status();
   } catch {
     state.auth = null;
@@ -2237,6 +2348,7 @@ async function init() {
   applyRoleGuard();
   renderModels();
   renderRuntimes();
+  renderModeSelect();
   await loadModels();
   await refreshSessions();
   renderAll();
@@ -2247,6 +2359,7 @@ async function init() {
   $('#project-btn').addEventListener('click', pickProject);
   $('#new-project-btn').addEventListener('click', newProjectModal);
   $('#settings-btn').addEventListener('click', openSettings);
+  $('#mode-select').addEventListener('change', (event) => setPermissionMode(event.target.value));
   $('#send').addEventListener('click', send);
   $('#stop').addEventListener('click', () => {
     if (state.liveRuntimes.length) api.runtimes.stop();
@@ -2291,11 +2404,7 @@ async function init() {
     }
   });
 
-  $('#attach').addEventListener('click', () => $('#file-input').click());
-  $('#file-input').addEventListener('change', async (event) => {
-    await addFiles(event.target.files);
-    event.target.value = '';
-  });
+  $('#attach').addEventListener('click', () => pickAttachments());
   const composer = $('#composer');
   composer.addEventListener('dragover', (event) => {
     event.preventDefault();
@@ -2305,7 +2414,19 @@ async function init() {
   composer.addEventListener('drop', async (event) => {
     event.preventDefault();
     composer.classList.remove('dragover');
-    await addFiles(event.dataTransfer?.files);
+    // Electron отдаёт настоящие пути файлов: так работает любой размер и архив.
+    const paths = Array.from(event.dataTransfer?.files || [])
+      .map((file) => api.pathForFile?.(file) || '')
+      .filter(Boolean);
+    if (paths.length) await addPaths(paths);
+    else await addBlobs(event.dataTransfer?.files);
+  });
+  $('#input').addEventListener('paste', async (event) => {
+    const items = Array.from(event.clipboardData?.items || []);
+    const images = items.filter((item) => item.kind === 'file' && item.type.startsWith('image/'));
+    if (!images.length) return;
+    event.preventDefault();
+    await addBlobs(images.map((item) => item.getAsFile()).filter(Boolean));
   });
   renderAttachments();
 

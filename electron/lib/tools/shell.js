@@ -1,8 +1,28 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { checkCommand } from '../guardrails.js';
 
 const MAX_OUTPUT = 24_000;
 const TIMEOUT_MS = 180_000;
+
+// repowise может быть не установлен. Проверяем один раз и кешируем результат,
+// иначе каждая команда получает префикс и падает с «не является внутренней командой».
+let repowiseAvailable = null;
+
+function hasRepowise() {
+  if (repowiseAvailable !== null) return repowiseAvailable;
+  try {
+    const probe = spawnSync('repowise', ['--version'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      windowsHide: true,
+      shell: process.platform === 'win32',
+    });
+    repowiseAvailable = probe.status === 0;
+  } catch {
+    repowiseAvailable = false;
+  }
+  return repowiseAvailable;
+}
 
 export const shellTools = [
   {
@@ -28,11 +48,11 @@ export const shellTools = [
         return `Guardrails заблокировали команду: ${check.reason}`;
       }
       const allowed = await ctx.approve('run_shell', args.command);
-      if (!allowed) return 'Пользователь отклонил выполнение команды.';
+      if (allowed !== true) return typeof allowed === 'string' ? allowed : 'Пользователь отклонил выполнение команды.';
       let command = String(args.command || '');
       // Repowise distill сжимает вывод тестов/установки/гита, сохраняя ошибки.
       // Сложные shell-конструкции не оборачиваем: distill не заменяет shell.
-      if (ctx.repowise?.distill && command && !/^\s*repowise\b/.test(command) && !/[|&<>]/.test(command)) {
+      if (ctx.repowise?.distill && command && !/^\s*repowise\b/.test(command) && !/[|&<>]/.test(command) && hasRepowise()) {
         command = `repowise distill ${command}`;
       }
       return await execute(command, args.cwd || ctx.projectDir);

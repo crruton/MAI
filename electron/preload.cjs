@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, clipboard } = require('electron');
+const { contextBridge, ipcRenderer, clipboard, webUtils } = require('electron');
 
 const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
 
@@ -27,6 +27,17 @@ contextBridge.exposeInMainWorld('mai', {
   },
   project: {
     pick: () => invoke('project:pick'),
+  },
+  attachments: {
+    add: (payload) => invoke('attachments:add', payload),
+    addImage: (payload) => invoke('attachments:addImage', payload),
+    pick: (payload) => invoke('attachments:pick', payload),
+    remove: (payload) => invoke('attachments:remove', payload),
+    open: (payload) => invoke('attachments:open', payload),
+  },
+  permissions: {
+    modes: () => invoke('permissions:modes'),
+    set: (mode) => invoke('permissions:set', mode),
   },
   workspace: {
     root: () => invoke('workspace:root'),
@@ -181,6 +192,14 @@ contextBridge.exposeInMainWorld('mai', {
     },
   },
   openPath: (target) => invoke('app:openPath', target),
+  // В Electron 38 у File больше нет свойства path: путь даёт только webUtils.
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file) || '';
+    } catch {
+      return '';
+    }
+  },
   openExternal: (url) => invoke('app:openExternal', url),
   showItem: (target) => invoke('app:showItem', target),
   focusMain: () => invoke('app:focusMain'),

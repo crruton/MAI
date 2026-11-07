@@ -5,6 +5,7 @@ import { skillTools } from './tools/skills.js';
 import { repowiseTools } from './tools/repowise.js';
 import { listSkills, readAgents, readMemory } from './skills.js';
 import { reviewAnswer } from './reviewer.js';
+import { hiddenToolsForMode, modePrompt, normalizeMode } from './permissions.js';
 
 const BASE_PROMPT = `Ты — MAI Code, агент для программирования на рабочей машине пользователя.
 
@@ -17,10 +18,11 @@ const BASE_PROMPT = `Ты — MAI Code, агент для программиро
 - После изменений проверяй результат (тесты, сборка, линтер), если это возможно.
 - Не коммить в git и не удалять данные без явной просьбы.`;
 
-function systemPrompt({ projectDir, skills, mcpStatus }) {
+function systemPrompt({ projectDir, skills, mcpStatus, mode }) {
   const agents = readAgents(projectDir);
   const memory = readMemory(projectDir);
   const parts = [BASE_PROMPT, `\nРабочая папка проекта: ${projectDir}`];
+  parts.push(`\n${modePrompt(mode)}`);
   if (agents.global.trim()) parts.push(`\n# Глобальные инструкции (AGENTS.md)\n${agents.global.trim()}`);
   if (agents.project.trim()) parts.push(`\n# Инструкции проекта (AGENTS.md)\n${agents.project.trim()}`);
   if (memory.global.trim()) {
@@ -99,9 +101,13 @@ export async function runAgent({
     : null;
   const skills = listSkills(projectDir);
   const repoTools = settings.repowise?.enabled ? repowiseTools : [];
-  const tools = [...fsTools, ...shellTools, ...skillTools, ...repoTools, ...pluginTools, ...mcp.toolSchemas()];
+  const mode = normalizeMode(settings.permissionMode);
+  const hidden = hiddenToolsForMode(mode);
+  const tools = [...fsTools, ...shellTools, ...skillTools, ...repoTools, ...pluginTools, ...mcp.toolSchemas()]
+    // В режиме «План» инструменты записи не показываем: модель не должна пытаться.
+    .filter((t) => !hidden.has(t.schema?.function?.name));
 
-  const system = systemPrompt({ projectDir, skills, mcpStatus: mcp.status() });
+  const system = systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode });
   let history = trimMessages([...messages]);
   const userTask = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
   const maxIterations = settings.maxIterations || 30;
