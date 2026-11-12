@@ -13,14 +13,27 @@
 #
 # Без RESEND_API_KEY код входа печатается в лог backend:
 #   docker logs -f mai-code-multica-backend | Select-String "Verification code"
+#
+# Лимиты памяти обязательны: без них стек занимает всю RAM машины.
+# См. docs/DEPLOYMENT.md, раздел 11.
 
 name: mai-code-multica
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   postgres:
     image: pgvector/pgvector:pg17
     container_name: mai-code-multica-db
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+    logging: *logging
     environment:
       POSTGRES_DB: multica
       POSTGRES_USER: multica
@@ -37,6 +50,10 @@ services:
     image: ${MULTICA_BACKEND_IMAGE:-ghcr.io/multica-ai/multica-backend:latest}
     container_name: mai-code-multica-backend
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+    logging: *logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,6 +74,10 @@ services:
     image: ${MULTICA_WEB_IMAGE:-ghcr.io/multica-ai/multica-web:latest}
     container_name: mai-code-multica-web
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    logging: *logging
     depends_on:
       - backend
     environment:

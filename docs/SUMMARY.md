@@ -8,6 +8,7 @@
 - [Провайдеры и рантаймы](PROVIDERS.md)
 - [Рантаймы: активация и параллельный запуск](RUNTIMES.md)
 - [Пресеты: DeepSeek Harness, Hermes, JEV](PRESETS.md)
+- [Голосовой ввод через MAS](MAS.md)
 
 ## Работа с проектом
 

@@ -1,10 +1,23 @@
 name: mai-code-keycloak
 
+# Лимиты памяти обязательны: Keycloak на JVM без них забирает всю RAM машины.
+# См. docs/DEPLOYMENT.md, раздел 11.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: mai-code-keycloak-db
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    logging: *logging
     environment:
       POSTGRES_DB: keycloak
       POSTGRES_USER: keycloak
@@ -21,6 +34,10 @@ services:
     image: quay.io/keycloak/keycloak:26.0
     container_name: mai-code-keycloak
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 512
+    logging: *logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -34,6 +51,8 @@ services:
       KC_DB_PASSWORD: ${KC_DB_PASSWORD:-keycloak-dev-password}
       KC_HTTP_PORT: 8080
       KC_HOSTNAME_STRICT: "false"
+      # JVM видит лимит контейнера и не резервирует память под весь хост.
+      JAVA_OPTS_APPEND: -XX:MaxRAMPercentage=70 -XX:+UseSerialGC
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

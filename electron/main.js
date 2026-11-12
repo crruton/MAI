@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, publicSettings, dataDir } from './lib/config.js';
+import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime } from './lib/runtimes.js';
 import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode } from './lib/sessions.js';
@@ -78,6 +79,9 @@ if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !proc
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mcp = new McpManager();
 const runs = new Map(); // windowId -> { controller, approvals: Map }
+
+/** Сколько ждём ответа на подтверждение, прежде чем отменить действие. */
+const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
 
 let mainWindow = null;
 
@@ -265,6 +269,21 @@ app.on('before-quit', () => {
 
 ipcMain.handle('settings:get', () => publicSettings());
 ipcMain.handle('telemetry:status', () => telemetryStatus());
+
+// ---------- MAS: распознавание речи ----------
+
+ipcMain.handle('mas:status', () => masStatus());
+
+ipcMain.handle('mas:config', () => {
+  const config = masConfig();
+  return { enabled: config.enabled, url: config.url, model: config.model, tokenSet: Boolean(config.token) };
+});
+
+ipcMain.handle('mas:transcribe', async (_e, payload) => {
+  const wav = payload?.wav;
+  if (!wav || !wav.byteLength) throw new Error('Пустая запись');
+  return masTranscribe({ wav: Buffer.from(wav), model: payload?.model });
+});
 
 ipcMain.handle('settings:save', async (_e, patch) => {
   if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth || patch.guardrails || patch.telemetry) {
@@ -827,7 +846,18 @@ function makeApprover(window, state, sessionId) {
     if (decision.action === 'deny') return Promise.resolve(decision.reason || false);
     return new Promise((resolve) => {
       const id = crypto.randomUUID();
-      state.approvals.set(id, resolve);
+      // Таймаут обязателен: если окно потеряло событие или пользователь закрыл
+      // модалку, промис иначе не резолвится никогда и прогон висит вечно.
+      const timer = setTimeout(() => {
+        if (!state.approvals.has(id)) return;
+        state.approvals.delete(id);
+        send(window, { type: 'approval:expired', id, name });
+        resolve('Подтверждение не получено за 10 минут — действие отменено.');
+      }, APPROVAL_TIMEOUT_MS);
+      state.approvals.set(id, (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      });
       send(window, { type: 'approval', id, name, summary });
     });
   };
@@ -847,13 +877,14 @@ ipcMain.handle('chat:stop', (event) => {
   return true;
 });
 
-ipcMain.handle('chat:approval', (event, { id, allow }) => {
+ipcMain.handle('chat:approval', (event, { id, allow } = {}) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   const state = runState(window);
   const resolve = state.approvals.get(id);
   if (resolve) {
     state.approvals.delete(id);
-    resolve(Boolean(allow));
+    // allow === undefined означает «модалку закрыли без ответа» — это отказ.
+    resolve(allow === true);
   }
   return true;
 });

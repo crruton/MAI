@@ -23,6 +23,7 @@ const state = {
   auth: null,
   permissionMode: 'manual',
   permissionModes: [],
+  approvalOpen: false,
 };
 
 /* ---------- утилиты ---------- */
@@ -833,6 +834,10 @@ function handleEvent(event) {
     case 'approval':
       askApproval(event);
       break;
+    case 'approval:expired':
+      state.approvalOpen = false;
+      toast('Подтверждение истекло — действие отменено', 'err');
+      break;
     case 'review:start':
       toast(`Ревизор ${event.model || ''} проверяет ответ…`);
       break;
@@ -907,6 +912,21 @@ function handleEvent(event) {
 }
 
 function askApproval(event) {
+  // Второе подтверждение не должно открываться поверх первого: нижняя модалка
+  // осталась бы без ответа, и её промис не резолвился бы никогда.
+  if (state.approvalOpen) {
+    api.chat.approve(event.id, false);
+    toast('Предыдущее подтверждение ещё открыто — новое действие отклонено', 'err');
+    return;
+  }
+  state.approvalOpen = true;
+  let answered = false;
+  const answer = (allow) => {
+    if (answered) return;
+    answered = true;
+    state.approvalOpen = false;
+    api.chat.approve(event.id, allow);
+  };
   const body = [
     el('p', { text: 'Агент просит разрешение на действие:' }),
     el('div', { class: 'approve-args', text: event.summary }),
@@ -916,13 +936,15 @@ function askApproval(event) {
     title: 'Подтверждение',
     body,
     small: true,
+    // Закрытие крестиком или кликом по фону — это отказ, а не «пусть висит».
+    onClose: () => answer(false),
     footer: [
       el('button', {
         class: 'btn',
         type: 'button',
         text: 'Отклонить',
         onclick: () => {
-          api.chat.approve(event.id, false);
+          answer(false);
           modal.close();
         },
       }),
@@ -931,7 +953,7 @@ function askApproval(event) {
         type: 'button',
         text: 'Разрешить',
         onclick: () => {
-          api.chat.approve(event.id, true);
+          answer(true);
           modal.close();
         },
       }),
@@ -986,6 +1008,31 @@ async function openSettings() {
     value: telemetry.endpoint || 'http://127.0.0.1:4318',
     placeholder: 'http://127.0.0.1:4318',
   });
+  const mas = settings.mas || {};
+  const masEnabled = el('input', { type: 'checkbox' });
+  masEnabled.checked = mas.enabled !== false;
+  const masUrl = el('input', {
+    value: mas.url || 'http://127.0.0.1:8765',
+    placeholder: 'http://127.0.0.1:8765',
+  });
+  const masModel = el('input', {
+    value: mas.model || 'gigaam-v3-e2e-ctc',
+    placeholder: 'gigaam-v3-e2e-ctc',
+  });
+  const masToken = el('input', {
+    value: '',
+    placeholder: mas.tokenSet ? 'токен сохранён — оставьте пусто' : 'автоматически из %APPDATA%\\MAS\\api-token',
+  });
+  const masCheck = el('button', {
+    class: 'btn',
+    type: 'button',
+    text: 'Проверить связь',
+    onclick: async () => {
+      const status = await api.mas.status();
+      if (status.ok) toast(`MAS ${status.version}: связь есть, модель ${status.model}`, 'ok');
+      else toast(status.error || 'MAS недоступен', 'error');
+    },
+  });
 
   const modal = openModal({
     title: 'Настройки',
@@ -1026,6 +1073,14 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Локальный стек: npm run obs:up. Grafana — http://localhost:3001, Tempo/Loki — 72 часа.',
       }),
+      el('div', { class: 'docs-group-title', text: 'MAS — распознавание речи' }),
+      el('label', { class: 'hint-text' }, [masEnabled, ' кнопка микрофона отправляет запись в локальный MAS']),
+      el('div', { class: 'row' }, [field('Адрес MAS', masUrl), field('Модель', masModel)]),
+      el('div', { class: 'row' }, [field('Токен', masToken), masCheck]),
+      el('p', {
+        class: 'hint-text',
+        text: 'MAS слушает только 127.0.0.1. Токен лежит в %APPDATA%\\MAS\\api-token и подхватывается сам.',
+      }),
       el('p', {
         class: 'hint-text',
         text: 'Провайдеры и ключи — в панели «Провайдеры». Настройки лежат в %APPDATA%\\mai-code\\settings.json',
@@ -1064,6 +1119,12 @@ async function openSettings() {
               enabled: telemetryEnabled.checked,
               endpoint: telemetryEndpoint.value.trim() || 'http://127.0.0.1:4318',
               serviceName: 'mai-code',
+            },
+            mas: {
+              enabled: masEnabled.checked,
+              url: masUrl.value.trim() || 'http://127.0.0.1:8765',
+              model: masModel.value.trim() || 'gigaam-v3-e2e-ctc',
+              token: masToken.value.trim(),
             },
           });
           updateChrome();
@@ -2337,6 +2398,203 @@ async function pickProject() {
   updateChrome();
 }
 
+/* ---------- голосовой ввод через MAS ---------- */
+
+const voice = {
+  recording: false,
+  busy: false,
+  context: null,
+  stream: null,
+  source: null,
+  processor: null,
+  sink: null,
+  chunks: [],
+  startedAt: 0,
+  ticker: null,
+};
+
+function setMicState(kind) {
+  const button = $('#mic');
+  if (!button) return;
+  button.classList.toggle('recording', kind === 'recording');
+  button.classList.toggle('busy', kind === 'busy');
+  button.disabled = kind === 'busy';
+  button.setAttribute('aria-pressed', kind === 'recording' ? 'true' : 'false');
+  button.title =
+    kind === 'recording'
+      ? 'Идёт запись: нажмите, чтобы распознать'
+      : 'Голосовой ввод (MAS): нажмите, продиктуйте задачу, нажмите ещё раз';
+}
+
+function writeAscii(view, offset, text) {
+  for (let index = 0; index < text.length; index += 1) {
+    view.setUint8(offset + index, text.charCodeAt(index));
+  }
+}
+
+/** Собирает WAV из кусков float32. Частота — какую дал AudioContext. */
+function encodeWav(chunks, sampleRate) {
+  const frames = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const buffer = new ArrayBuffer(44 + frames * 2);
+  const view = new DataView(buffer);
+  writeAscii(view, 0, 'RIFF');
+  view.setUint32(4, 36 + frames * 2, true);
+  writeAscii(view, 8, 'WAVE');
+  writeAscii(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, 'data');
+  view.setUint32(40, frames * 2, true);
+  let offset = 44;
+  for (const chunk of chunks) {
+    for (let index = 0; index < chunk.length; index += 1) {
+      const value = Math.max(-1, Math.min(1, chunk[index]));
+      view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+      offset += 2;
+    }
+  }
+  return new Uint8Array(buffer);
+}
+
+/** Вставляет текст в позицию курсора и не съедает уже набранное. */
+function insertIntoInput(text) {
+  const input = $('#input');
+  const clean = String(text || '').trim();
+  if (!clean) return false;
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? start;
+  const before = input.value.slice(0, start);
+  const after = input.value.slice(end);
+  const glue = before && !/\s$/.test(before) ? ' ' : '';
+  const tail = after && !/^\s/.test(after) ? ' ' : '';
+  input.value = `${before}${glue}${clean}${tail}${after}`;
+  const caret = (before + glue + clean).length;
+  input.setSelectionRange(caret, caret);
+  input.focus();
+  autosize();
+  return true;
+}
+
+async function startVoice() {
+  if (voice.recording || voice.busy) return;
+
+  const status = await api.mas.status().catch((error) => ({ ok: false, error: error?.message || String(error) }));
+  if (!status.ok) {
+    toast(status.error || 'MAS недоступен', 'error');
+    return;
+  }
+
+  try {
+    voice.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (error) {
+    toast(`Нет доступа к микрофону: ${error?.message || error}`, 'error');
+    return;
+  }
+
+  try {
+    voice.context = new AudioContext();
+    voice.source = voice.context.createMediaStreamSource(voice.stream);
+    voice.processor = voice.context.createScriptProcessor(4096, 1, 1);
+    // Тишина в выход: иначе микрофон слышно в колонках.
+    voice.sink = voice.context.createGain();
+    voice.sink.gain.value = 0;
+    voice.chunks = [];
+    voice.processor.onaudioprocess = (event) => {
+      voice.chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+    };
+    voice.source.connect(voice.processor);
+    voice.processor.connect(voice.sink);
+    voice.sink.connect(voice.context.destination);
+  } catch (error) {
+    stopTracks();
+    toast(`Не удалось начать запись: ${error?.message || error}`, 'error');
+    return;
+  }
+
+  voice.recording = true;
+  voice.startedAt = Date.now();
+  setMicState('recording');
+  voice.ticker = setInterval(() => {
+    const seconds = ((Date.now() - voice.startedAt) / 1000).toFixed(0);
+    $('#mic').title = `Идёт запись ${seconds} с: нажмите, чтобы распознать`;
+  }, 1000);
+}
+
+function stopTracks() {
+  try {
+    voice.processor?.disconnect();
+    voice.source?.disconnect();
+    voice.sink?.disconnect();
+  } catch {
+    /* уже отключено */
+  }
+  try {
+    voice.stream?.getTracks().forEach((track) => track.stop());
+  } catch {
+    /* уже остановлено */
+  }
+  try {
+    voice.context?.close();
+  } catch {
+    /* уже закрыт */
+  }
+  if (voice.ticker) clearInterval(voice.ticker);
+  voice.ticker = null;
+  voice.processor = null;
+  voice.source = null;
+  voice.sink = null;
+  voice.stream = null;
+  voice.context = null;
+}
+
+async function stopVoice() {
+  if (!voice.recording) return;
+  voice.recording = false;
+  const sampleRate = voice.context?.sampleRate || 48000;
+  const chunks = voice.chunks;
+  const seconds = (Date.now() - voice.startedAt) / 1000;
+  stopTracks();
+  voice.chunks = [];
+
+  if (seconds < 0.6) {
+    setMicState('');
+    toast('Слишком короткая запись: удерживайте кнопку и говорите дольше', 'error');
+    return;
+  }
+
+  setMicState('busy');
+  try {
+    const wav = encodeWav(chunks, sampleRate);
+    const result = await api.mas.transcribe({ wav });
+    if (!result.text) {
+      toast('MAS не разобрал речь: попробуйте ближе к микрофону', 'error');
+      return;
+    }
+    insertIntoInput(result.text);
+    toast(`Распознано за ${(result.elapsedMs / 1000).toFixed(1)} с`, 'ok');
+  } catch (error) {
+    toast(error?.message || String(error), 'error');
+  } finally {
+    setMicState('');
+  }
+}
+
+function toggleVoice() {
+  if (voice.busy) return;
+  if (voice.recording) {
+    stopVoice();
+  } else {
+    startVoice();
+  }
+}
+
 /* ---------- ввод ---------- */
 
 function autosize() {
@@ -2382,6 +2640,7 @@ async function init() {
   $('#settings-btn').addEventListener('click', openSettings);
   $('#mode-select').addEventListener('change', (event) => setPermissionMode(event.target.value));
   $('#send').addEventListener('click', send);
+  $('#mic').addEventListener('click', toggleVoice);
   $('#stop').addEventListener('click', () => {
     if (state.liveRuntimes.length) api.runtimes.stop();
     else api.chat.stop();

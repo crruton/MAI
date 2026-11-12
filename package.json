@@ -47,6 +47,8 @@
     "infra:logs": "docker compose -f infra/docker-compose.yml logs -f --tail=100",
     "docker:gc": "node scripts/docker-gc.mjs --build-cache",
     "docker:gc:dry": "node scripts/docker-gc.mjs --dry-run",
+    "docker:mem": "node scripts/docker-mem.mjs",
+    "docker:mem:check": "node scripts/docker-mem.mjs --check",
     "obs:up": "docker compose -f infra/observability/docker-compose.yml up -d",
     "obs:down": "docker compose -f infra/observability/docker-compose.yml down",
     "obs:smoke": "node scripts/otel-smoke.mjs",

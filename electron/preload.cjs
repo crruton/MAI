@@ -107,6 +107,11 @@ contextBridge.exposeInMainWorld('mai', {
     connect: (name, projectDir) => invoke('mcp:connect', name, projectDir),
     remove: (name) => invoke('mcp:remove', name),
   },
+  mas: {
+    status: () => invoke('mas:status'),
+    config: () => invoke('mas:config'),
+    transcribe: (payload) => invoke('mas:transcribe', payload),
+  },
   plugins: {
     list: (projectDir) => invoke('plugins:list', projectDir),
     openFolder: (projectDir) => invoke('plugins:openFolder', projectDir),

@@ -16,12 +16,25 @@ name: mai-code-observability
 # Срок хранения: 72 часа для логов (Loki), трейсов (Tempo) и метрик
 # (Prometheus). Логи и трейсы лежат в SeaweedFS (S3), метрики — в локальном
 # TSDB Prometheus: у Prometheus нет нативного S3-бэкенда.
+#
+# Лимиты памяти обязательны: без них стек занимает всю RAM машины.
+# Сумма лимитов ≈ 4,3 ГБ. См. docs/DEPLOYMENT.md, раздел 11.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   seaweedfs:
     image: chrislusf/seaweedfs:3.80
     container_name: mai-code-seaweedfs
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+    logging: *logging
     command: server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=1024
     ports:
       - "127.0.0.1:18333:8333"
@@ -39,6 +52,10 @@ services:
   seaweedfs-init:
     image: chrislusf/seaweedfs:3.80
     container_name: mai-code-seaweedfs-init
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    logging: *logging
     depends_on:
       seaweedfs:
         condition: service_started
@@ -67,6 +84,10 @@ services:
     image: grafana/loki:3.2.1
     container_name: mai-code-loki
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+    logging: *logging
     command: -config.file=/etc/loki/config.yaml
     ports:
       - "127.0.0.1:3100:3100"
@@ -81,6 +102,10 @@ services:
     image: grafana/tempo:2.6.1
     container_name: mai-code-tempo
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+    logging: *logging
     command: -config.file=/etc/tempo/tempo.yaml
     ports:
       - "127.0.0.1:3200:3200"
@@ -95,6 +120,10 @@ services:
     image: otel/opentelemetry-collector-contrib:0.115.1
     container_name: mai-code-otel-collector
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    logging: *logging
     command: ["--config=/etc/otelcol/config.yaml"]
     ports:
       - "127.0.0.1:4317:4317"
@@ -110,6 +139,10 @@ services:
     image: prom/prometheus:v3.1.0
     container_name: mai-code-prometheus
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+    logging: *logging
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -126,6 +159,10 @@ services:
     image: grafana/grafana:11.4.0
     container_name: mai-code-grafana
     restart: unless-stopped
+    mem_limit: 384m
+    cpus: 0.5
+    pids_limit: 256
+    logging: *logging
     environment:
       GF_SECURITY_ADMIN_USER: ${OBS_GRAFANA_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${OBS_GRAFANA_PASSWORD:-admin}
@@ -146,6 +183,10 @@ services:
     image: postgres:16-alpine
     container_name: mai-code-phoenix-db
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    logging: *logging
     environment:
       POSTGRES_DB: phoenix
       POSTGRES_USER: phoenix
@@ -162,6 +203,10 @@ services:
     image: arizephoenix/phoenix:latest
     container_name: mai-code-phoenix
     restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 512
+    logging: *logging
     environment:
       # Без этого логи Python буферизуются и `docker logs` пустой.
       PYTHONUNBUFFERED: "1"

@@ -47,6 +47,13 @@ const DEFAULTS = {
     workspaceId: '',
     command: 'multica',
   },
+  // Локальный MAS: распознавание речи для кнопки микрофона.
+  mas: {
+    enabled: true,
+    url: 'http://127.0.0.1:8765',
+    token: '',
+    model: 'gigaam-v3-e2e-ctc',
+  },
 };
 
 // Модели, которые показываем, если шлюз не отдал /models.
@@ -178,6 +185,7 @@ export function loadSettings() {
     runtimes: bootstrapRuntimes(saved),
     guardrails: { ...DEFAULT_GUARDRAILS, ...(saved.guardrails || {}) },
     telemetry: { ...DEFAULTS.telemetry, ...(saved.telemetry || {}) },
+    mas: { ...DEFAULTS.mas, ...(saved.mas || {}) },
   };
 
   if (!settings.projectDir) {
@@ -229,6 +237,12 @@ export function saveSettings(patch) {
     next.telemetry = { ...(current.telemetry || DEFAULTS.telemetry), ...patch.telemetry };
   }
 
+  if (patch.mas) {
+    const previous = current.mas || DEFAULTS.mas;
+    next.mas = { ...previous, ...patch.mas };
+    if (!next.mas.token || next.mas.token === '***') next.mas.token = previous.token || '';
+  }
+
   // После миграции на реестр провайдеров старые поля не нужны (и не должны лежать открытым ключом).
   if (next.providers && Object.keys(next.providers).length) {
     delete next.apiKey;
@@ -256,6 +270,11 @@ export function publicSettings() {
     ...(s.infra || {}),
     vaultToken: s.infra?.vaultToken ? '***' : '',
     vaultTokenSet: Boolean(s.infra?.vaultToken),
+  };
+  safe.mas = {
+    ...(s.mas || DEFAULTS.mas),
+    token: s.mas?.token ? '***' : '',
+    tokenSet: Boolean(s.mas?.token),
   };
   // Старый формат хранил ключ в корне настроек — наружу его не отдаём.
   delete safe.apiKey;

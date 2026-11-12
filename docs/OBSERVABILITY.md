@@ -142,3 +142,16 @@ docker compose -f infra/observability/docker-compose.yml down -v   # вмест�
 Стек рассчитан на локальную машину. Комфортно с 8 ГБ свободной RAM; на 4 ГБ
 поднимайте сервисы по частям. Phoenix + Postgres и SeaweedFS + Loki + Tempo +
 Prometheus + Grafana вместе занимают заметную часть памяти.
+
+У каждого сервиса задан `mem_limit` (сумма по стеку ≈ 4,0 ГБ), `cpus` и
+`pids_limit`, логи ограничены 10 МБ × 3 файла. Проверить фактические лимиты и
+запас до памяти демона:
+
+```powershell
+npm.cmd run docker:mem
+npm.cmd run docker:mem:check
+```
+
+Лимит WSL2 должен быть не меньше суммы `mem_limit` одновременно работающих
+стеков. Слишком малое значение останавливает Docker. Правило расчёта и порядок
+применения — `docs/DEPLOYMENT.md`, раздел 11.

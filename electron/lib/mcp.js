@@ -123,7 +123,11 @@ export class McpManager {
     if (!entry || entry.status !== 'ready') throw new Error(`MCP-сервер ${serverKey} не подключён`);
     const tool = entry.tools.find((t) => t.name.replace(/[^a-zA-Z0-9_-]/g, '_') === rawTool);
     if (!tool) throw new Error(`Инструмент ${rawTool} не найден на ${serverKey}`);
-    const result = await entry.client.callTool({ name: tool.name, arguments: args || {} });
+    const result = await withTimeout(
+      entry.client.callTool({ name: tool.name, arguments: args || {} }),
+      120_000,
+      `MCP ${serverKey}: инструмент ${rawTool} не ответил за 120 с`,
+    );
     const parts = (result.content || []).map((c) =>
       c.type === 'text' ? c.text : c.type === 'resource' ? `[resource ${c.resource?.uri}]` : `[${c.type}]`,
     );

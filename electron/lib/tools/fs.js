@@ -136,6 +136,23 @@ export const fsTools = [
       const re = new RegExp(args.pattern, 'i');
       const skip = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.venv']);
       const hits = [];
+      // Путь может указывать на файл. Раньше readdirSync падал, ошибка глушилась
+      // и grep молча возвращал «Совпадений нет» — агент делал лишние итерации.
+      const scanFile = (full) => {
+        if (args.include && !full.endsWith(args.include)) return;
+        if (isSecretPath(full) && !(ctx.guardrails?.allowSecrets)) return;
+        let text = '';
+        try {
+          const stat = fs.statSync(full);
+          if (!stat.isFile() || stat.size > 500_000) return;
+          text = fs.readFileSync(full, 'utf8');
+        } catch {
+          return;
+        }
+        text.split(/\r?\n/).forEach((line, i) => {
+          if (re.test(line)) hits.push(`${path.relative(ctx.projectDir, full)}:${i + 1}: ${line.trim().slice(0, 300)}`);
+        });
+      };
       const walk = (dir) => {
         if (hits.length > 300) return;
         let entries = [];
@@ -151,22 +168,17 @@ export const fsTools = [
             walk(full);
             continue;
           }
-          if (args.include && !entry.name.endsWith(args.include)) continue;
-          if (isSecretPath(full) && !(ctx.guardrails?.allowSecrets)) continue;
-          let text = '';
-          try {
-            const stat = fs.statSync(full);
-            if (stat.size > 500_000) continue;
-            text = fs.readFileSync(full, 'utf8');
-          } catch {
-            continue;
-          }
-          text.split(/\r?\n/).forEach((line, i) => {
-            if (re.test(line)) hits.push(`${path.relative(ctx.projectDir, full)}:${i + 1}: ${line.trim().slice(0, 300)}`);
-          });
+          scanFile(full);
         }
       };
-      walk(root);
+      let rootIsFile = false;
+      try {
+        rootIsFile = fs.statSync(root).isFile();
+      } catch {
+        return `Путь не найден: ${root}`;
+      }
+      if (rootIsFile) scanFile(root);
+      else walk(root);
       return truncate(hits.join('\n') || 'Совпадений нет');
     },
   },
@@ -223,7 +235,8 @@ export const fsTools = [
       if (count === 0) return `Фрагмент не найден в ${file}`;
       if (count > 1) return `Фрагмент встречается ${count} раз — уточните old_string`;
       const allowed = await ctx.approve('edit_file', `Изменить файл ${file}`);
-      if (allowed !== true) return typeof allowed === 'string' ? allowed : 'Пользователь отклонил изменение файла.';      fs.writeFileSync(file, text.replace(args.old_string, args.new_string), 'utf8');
+      if (allowed !== true) return typeof allowed === 'string' ? allowed : 'Пользователь отклонил изменение файла.';
+      fs.writeFileSync(file, text.replace(args.old_string, args.new_string), 'utf8');
       return `Изменено: ${file}`;
     },
   },

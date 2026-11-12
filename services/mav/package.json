@@ -1,0 +1,20 @@
+{
+  "name": "mav",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MAV — сервис озвучки на моделях шлюза MAI: синтез, книги, дубляж, подбор голоса",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node test/unit.mjs",
+    "test:live": "node test/live.mjs",
+    "test:server": "node test/server.mjs",
+    "test:all": "node test/unit.mjs && node test/live.mjs && node test/server.mjs",
+    "measure:voices": "node test/measure-voices.mjs"
+  },
+  "keywords": ["tts", "speech", "mai", "silero", "dubbing"],
+  "license": "MIT"
+}

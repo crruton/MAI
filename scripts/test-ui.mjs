@@ -110,6 +110,42 @@ app.whenReady().then(async () => {
     );
     check('выбран manual', info.value === 'manual', info.value);
 
+    console.log('\n[1b] Контраст раскрытого списка');
+    const contrast = await win.webContents.executeJavaScript(`(() => {
+      const lum = (rgb) => {
+        const m = /rgba?\\(([^)]+)\\)/.exec(rgb || '');
+        if (!m) return null;
+        const [r, g, b, a = 1] = m[1].split(',').map((v) => parseFloat(v));
+        if (a === 0) return null;
+        const f = (c) => {
+          const s = c / 255;
+          return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+        };
+        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+      };
+      const sel = document.querySelector('#mode-select');
+      const opt = sel.options[0];
+      const os = getComputedStyle(opt);
+      const ss = getComputedStyle(sel);
+      const bg = lum(os.backgroundColor);
+      const fg = lum(os.color);
+      return {
+        colorScheme: getComputedStyle(document.documentElement).colorScheme,
+        optionBg: os.backgroundColor,
+        optionColor: os.color,
+        selectBg: ss.backgroundColor,
+        contrast: bg === null || fg === null ? null : Math.round(((Math.max(bg, fg) + 0.05) / (Math.min(bg, fg) + 0.05)) * 100) / 100,
+      };
+    })()`);
+    check('color-scheme dark', /dark/.test(contrast.colorScheme || ''), contrast.colorScheme);
+    check('фон опции не прозрачный', contrast.optionBg !== 'rgba(0, 0, 0, 0)', contrast.optionBg);
+    check(
+      'контраст текста опции ≥ 4.5',
+      typeof contrast.contrast === 'number' && contrast.contrast >= 4.5,
+      JSON.stringify(contrast),
+    );
+    check('фон селектора совпадает с фоном опции', contrast.selectBg === contrast.optionBg, JSON.stringify(contrast));
+
     console.log('\n[2] API моста доступен');
     const bridge = await win.webContents.executeJavaScript(`(() => ({
       hasMai: typeof window.mai === 'object',

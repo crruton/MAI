@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MAV — озвучка на моделях MAI</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">MAV</div>
+      <div>
+        <div class="brand-title">Озвучка</div>
+        <div class="brand-sub">модели MAI</div>
+      </div>
+    </div>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="speech">Синтез речи</button>
+      <button class="tab" data-tab="book">Книга</button>
+      <button class="tab" data-tab="dub">Дубляж</button>
+      <button class="tab" data-tab="voice">Подбор голоса</button>
+      <button class="tab" data-tab="history">История</button>
+    </nav>
+
+    <div class="status" id="status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">проверка шлюза…</span>
+    </div>
+
+    <div class="notice">
+      <strong>Клонирования голоса нет.</strong>
+      Шлюз MAI принимает только пять фиксированных голосов Silero.
+      Вкладка «Подбор голоса» измеряет ваш референс и выбирает ближайший
+      из пяти — это не клон.
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <!-- Синтез -->
+    <section class="panel active" id="panel-speech">
+      <h1>Синтез речи</h1>
+      <p class="lead">Русский текст → аудио. Длинный текст режется автоматически.</p>
+
+      <label class="field">
+        <span>Текст</span>
+        <textarea id="speech-text" rows="10" placeholder="Введите текст на русском языке…">Проверка синтеза речи. Этот текст можно заменить своим.</textarea>
+      </label>
+
+      <div class="row">
+        <label class="field">
+          <span>Голос</span>
+          <select id="speech-voice"></select>
+        </label>
+        <label class="field">
+          <span>Скорость: <output id="speech-speed-out">1.0</output></span>
+          <input type="range" id="speech-speed" min="0.7" max="1.3" step="0.05" value="1" />
+        </label>
+        <label class="field">
+          <span>Формат</span>
+          <select id="speech-format">
+            <option value="wav">WAV</option>
+            <option value="mp3">MP3</option>
+          </select>
+        </label>
+      </div>
+
+      <label class="check">
+        <input type="checkbox" id="speech-strip" checked />
+        <span>Убирать Markdown (код, таблицы, разметку)</span>
+      </label>
+
+      <div class="actions">
+        <button class="btn primary" id="speech-go">Озвучить</button>
+        <span class="hint" id="speech-hint"></span>
+      </div>
+
+      <div class="result" id="speech-result" hidden></div>
+    </section>
+
+    <!-- Книга -->
+    <section class="panel" id="panel-book">
+      <h1>Озвучка книги</h1>
+      <p class="lead">Markdown делится на главы по заголовкам. Каждая глава — отдельный файл.</p>
+
+      <label class="field">
+        <span>Текст книги (Markdown)</span>
+        <textarea id="book-text" rows="12" placeholder="# Глава 1&#10;&#10;Текст…"></textarea>
+      </label>
+
+      <div class="row">
+        <label class="field">
+          <span>Голос</span>
+          <select id="book-voice"></select>
+        </label>
+        <label class="field">
+          <span>Скорость: <output id="book-speed-out">1.0</output></span>
+          <input type="range" id="book-speed" min="0.7" max="1.3" step="0.05" value="1" />
+        </label>
+      </div>
+
+      <div class="actions">
+        <button class="btn" id="book-preview">Показать главы</button>
+        <button class="btn primary" id="book-go">Озвучить книгу</button>
+        <span class="hint" id="book-hint"></span>
+      </div>
+
+      <div class="result" id="book-result" hidden></div>
+    </section>
+
+    <!-- Дубляж -->
+    <section class="panel" id="panel-dub">
+      <h1>Дубляж</h1>
+      <p class="lead">Распознать речь, перевести и озвучить заново. Перевод — чат-моделью шлюза.</p>
+
+      <label class="field">
+        <span>Аудиофайл (WAV)</span>
+        <input type="file" id="dub-file" accept="audio/*" />
+      </label>
+
+      <div class="row">
+        <label class="field">
+          <span>Модель распознавания</span>
+          <select id="dub-stt"></select>
+        </label>
+        <label class="field">
+          <span>Голос</span>
+          <select id="dub-voice"></select>
+        </label>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" id="dub-go">Дубляж</button>
+        <span class="hint" id="dub-hint"></span>
+      </div>
+
+      <div class="result" id="dub-result" hidden></div>
+    </section>
+
+    <!-- Подбор голоса -->
+    <section class="panel" id="panel-voice">
+      <h1>Подбор голоса</h1>
+      <p class="lead">
+        Загрузите запись голоса. Сервис измерит высоту тона и темп и выберет
+        ближайший голос из пяти доступных.
+      </p>
+
+      <div class="notice warn">
+        Это <strong>не клонирование</strong>. Шлюз MAI не принимает референсную
+        запись: Silero синтезирует только пятью фиксированными голосами.
+        Настоящий клон требует локальной модели и GPU.
+      </div>
+
+      <label class="field">
+        <span>Референсная запись (WAV, 3–30 секунд)</span>
+        <input type="file" id="voice-file" accept="audio/*" />
+      </label>
+
+      <label class="field">
+        <span>Пол голоса</span>
+        <select id="voice-gender">
+          <option value="any">любой</option>
+          <option value="male">мужской</option>
+          <option value="female">женский</option>
+        </select>
+      </label>
+
+      <div class="actions">
+        <button class="btn primary" id="voice-go">Подобрать</button>
+        <span class="hint" id="voice-hint"></span>
+      </div>
+
+      <div class="result" id="voice-result" hidden></div>
+    </section>
+
+    <!-- История -->
+    <section class="panel" id="panel-history">
+      <h1>История</h1>
+      <p class="lead">Сохранённые файлы. Одинаковый запрос не создаёт дубль.</p>
+      <div class="actions">
+        <button class="btn" id="history-refresh">Обновить</button>
+      </div>
+      <div class="result" id="history-result"></div>
+    </section>
+
+  </main>
+</div>
+<script src="/app.js" type="module"></script>
+</body>
+</html>

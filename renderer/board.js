@@ -39,6 +39,7 @@ const state = {
   projectDir: '',
   settings: null,
   boards: null,
+  approvalOpen: false,
   viewsData: null,
   loadingViews: false,
   archTab: 'diagrams',
@@ -147,11 +148,14 @@ function priorityBadge(priority) {
   return `<span class="badge ${kind}">${label}</span>`;
 }
 
-function openModal({ title, body = [], footer = [], size = '' }) {
+function openModal({ title, body = [], footer = [], size = '', onClose }) {
   const root = $('#modal-root');
   const backdrop = el('div', { class: 'modal-backdrop' });
   const box = el('div', { class: `modal ${size}` });
-  const close = () => backdrop.remove();
+  const close = () => {
+    backdrop.remove();
+    onClose?.();
+  };
   box.append(
     el('div', { class: 'modal-head' }, [
       el('h3', { text: title }),
@@ -436,6 +440,10 @@ function handleBoardEvent(event) {
     case 'approval':
       askApproval(event);
       break;
+    case 'approval:expired':
+      state.approvalOpen = false;
+      toast('Подтверждение истекло — действие отменено', 'err');
+      break;
     case 'correction:done':
       state.correctionLive = null;
       state.selectedIssues.clear();
@@ -472,9 +480,25 @@ function handleBoardEvent(event) {
 }
 
 function askApproval(event) {
+  // Второе подтверждение поверх первого оставило бы нижнюю модалку без ответа.
+  if (state.approvalOpen) {
+    api.chat.approve(event.id, false);
+    toast('Предыдущее подтверждение ещё открыто — новое действие отклонено', 'err');
+    return;
+  }
+  state.approvalOpen = true;
+  let answered = false;
+  const answer = (allow) => {
+    if (answered) return;
+    answered = true;
+    state.approvalOpen = false;
+    api.chat.approve(event.id, allow);
+  };
   const modal = openModal({
     title: 'Подтверждение действия',
     size: 'small',
+    // Закрытие крестиком или кликом по фону — отказ, а не вечное ожидание.
+    onClose: () => answer(false),
     body: [
       el('p', { class: 'dim', text: 'Самокоррекция просит разрешение:' }),
       el('pre', { class: 'source', text: event.summary || '' }),
@@ -486,7 +510,7 @@ function askApproval(event) {
         type: 'button',
         text: 'Отклонить',
         onclick: () => {
-          api.chat.approve(event.id, false);
+          answer(false);
           modal.close();
         },
       }),
@@ -495,7 +519,7 @@ function askApproval(event) {
         type: 'button',
         text: 'Разрешить',
         onclick: () => {
-          api.chat.approve(event.id, true);
+          answer(true);
           modal.close();
         },
       }),

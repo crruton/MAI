@@ -1,0 +1,6 @@
+# Локальные данные и секреты MAV
+.env
+data/
+voices/
+*.log
+node_modules/
