@@ -172,6 +172,55 @@ app.whenReady().then(async () => {
     console.log('\n[4] Ошибки в консоли');
     const real = errors.filter((e) => !/Autofill|DevTools|Electron Security/i.test(e));
     check('нет ошибок JS', real.length === 0, real.join(' | '));
+
+    console.log('\n[5] Голосовой ввод и настройки MAS');
+    const mic = await win.webContents.executeJavaScript(`(() => {
+      const b = document.querySelector('#mic');
+      if (!b) return { found: false };
+      const r = b.getBoundingClientRect();
+      return {
+        found: true,
+        visible: r.width > 0 && r.height > 0,
+        disabled: b.disabled,
+        label: b.getAttribute('aria-label'),
+        title: b.getAttribute('title'),
+      };
+    })()`);
+    check('кнопка #mic существует', mic.found === true);
+    check('кнопка #mic видна', mic.visible === true, JSON.stringify(mic));
+    check('кнопка #mic активна', mic.disabled === false);
+    check(
+      'подсказка упоминает MAS',
+      /MAS/.test(mic.title || '') && mic.label === 'Голосовой ввод',
+      JSON.stringify(mic),
+    );
+
+    const masSettings = await win.webContents.executeJavaScript(`(async () => {
+      document.querySelector('#settings-btn').click();
+      await new Promise((r) => setTimeout(r, 500));
+      const body = document.querySelector('.modal-body');
+      if (!body) return { open: false };
+      const text = body.innerText;
+      const raw = body.textContent;
+      const inputs = [...body.querySelectorAll('input')].map((i) => i.value);
+      const buttons = [...body.querySelectorAll('button')].map((b) => b.innerText.trim());
+      return {
+        open: true,
+        hasGroup: raw.includes('MAS — распознавание речи'),
+        hasHint: text.includes('кнопка микрофона'),
+        hasToken: /api-token/.test(text),
+        hasUrl: inputs.includes('http://127.0.0.1:8765'),
+        hasModel: inputs.includes('gigaam-v3-e2e-ctc'),
+        hasCheckButton: buttons.includes('Проверить связь'),
+      };
+    })()`);
+    check('окно настроек открылось', masSettings.open === true);
+    check('раздел MAS есть', masSettings.hasGroup === true, JSON.stringify(masSettings));
+    check('подсказка про микрофон есть', masSettings.hasHint === true);
+    check('адрес MAS по умолчанию', masSettings.hasUrl === true);
+    check('модель по умолчанию', masSettings.hasModel === true);
+    check('кнопка проверки связи есть', masSettings.hasCheckButton === true);
+    check('подсказка про api-token есть', masSettings.hasToken === true);
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

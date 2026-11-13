@@ -1021,7 +1021,7 @@ async function openSettings() {
   });
   const masToken = el('input', {
     value: '',
-    placeholder: mas.tokenSet ? 'токен сохранён — оставьте пусто' : 'автоматически из %APPDATA%\\MAS\\api-token',
+    placeholder: mas.tokenSet ? 'токен сохранён — оставьте пусто' : 'автоматически из %APPDATA%\\MAS\\data\\api-token',
   });
   const masCheck = el('button', {
     class: 'btn',
@@ -1079,7 +1079,7 @@ async function openSettings() {
       el('div', { class: 'row' }, [field('Токен', masToken), masCheck]),
       el('p', {
         class: 'hint-text',
-        text: 'MAS слушает только 127.0.0.1. Токен лежит в %APPDATA%\\MAS\\api-token и подхватывается сам.',
+        text: 'MAS слушает только 127.0.0.1. Токен лежит в %APPDATA%\\MAS\\data\\api-token и подхватывается сам.',
       }),
       el('p', {
         class: 'hint-text',

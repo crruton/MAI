@@ -21,9 +21,14 @@ const TRANSCRIBE_TIMEOUT_MS = 180000;
 
 /** Токен MAS лежит в каталоге данных приложения MAS. */
 function readSharedToken() {
+  const appData = app.getPath('appData');
   const candidates = [
-    path.join(process.env.APPDATA || '', 'MAS', 'api-token'),
-    path.join(app.getPath('appData'), 'MAS', 'api-token'),
+    // Установленное приложение: DATA_DIR = %APPDATA%\MAS\data.
+    path.join(appData, 'MAS', 'data', 'api-token'),
+    // Старое расположение из документации.
+    path.join(appData, 'MAS', 'api-token'),
+    // Sidecar, запущенный из репозитория: ~/.mas/api-token.
+    path.join(app.getPath('home'), '.mas', 'api-token'),
   ];
   for (const file of candidates) {
     try {
@@ -57,7 +62,7 @@ function friendlyError(error) {
     return 'MAS не запущен. Откройте приложение MAS или проверьте адрес в настройках.';
   }
   if (/401/.test(message)) {
-    return 'MAS отклонил токен. Скопируйте api-token из %APPDATA%\\MAS в настройки.';
+    return 'MAS отклонил токен. Скопируйте api-token из %APPDATA%\\MAS\\data в настройки.';
   }
   return message;
 }
