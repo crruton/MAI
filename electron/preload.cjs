@@ -35,6 +35,10 @@ contextBridge.exposeInMainWorld('mai', {
     remove: (payload) => invoke('attachments:remove', payload),
     open: (payload) => invoke('attachments:open', payload),
   },
+  ocr: {
+    status: (payload) => invoke('ocr:status', payload),
+    recognize: (payload) => invoke('ocr:recognize', payload),
+  },
   permissions: {
     modes: (sessionId) => invoke('permissions:modes', sessionId),
     set: (mode, sessionId) => invoke('permissions:set', { mode, sessionId }),

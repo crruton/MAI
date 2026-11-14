@@ -147,6 +147,32 @@ const KIND_LABEL = {
   binary: 'двоичный',
 };
 
+/** Распознаёт текст на изображении-вложении и добавляет путь к тексту в манифест. */
+async function recognizeAttachmentText(item) {
+  if (!state.projectDir) {
+    toast('Сначала выберите папку проекта', 'err');
+    return;
+  }
+  item.ocrBusy = true;
+  renderAttachments();
+  try {
+    const result = await api.ocr.recognize({ projectDir: state.projectDir, path: item.path });
+    if (!result.ok) {
+      toast(result.error || 'Не удалось распознать текст', 'err');
+      return;
+    }
+    item.textPath = result.textPath;
+    item.meta = { ...(item.meta || {}), lines: result.lines };
+    item.note = result.note || '';
+    toast(`Текст распознан: ${result.lines} строк, движок ${result.engine}`);
+  } catch (err) {
+    toast(err?.message || 'Не удалось распознать текст', 'err');
+  } finally {
+    item.ocrBusy = false;
+    renderAttachments();
+  }
+}
+
 function renderAttachments() {
   const box = $('#attachments');
   if (!box) return;
@@ -157,17 +183,27 @@ function renderAttachments() {
     const chip = el('span', { class: 'attachment-chip', title: item.note || item.path }, [
       el('span', { class: 'name', text: item.name }),
       el('span', { class: 'size', text: `${formatSize(item.size)} · ${label}` }),
-      el('button', {
-        type: 'button',
-        text: '×',
-        title: 'Убрать вложение',
-        onclick: async () => {
-          state.attachments.splice(index, 1);
-          renderAttachments();
-          await api.attachments.remove({ projectDir: state.projectDir, path: item.path });
-        },
-      }),
     ]);
+    // OCR имеет смысл только для изображений и только пока текста нет.
+    if (item.kind === 'image' && !item.textPath) {
+      chip.append(el('button', {
+        type: 'button',
+        text: item.ocrBusy ? '…' : 'текст',
+        title: 'Распознать текст на изображении',
+        disabled: Boolean(item.ocrBusy),
+        onclick: () => recognizeAttachmentText(item),
+      }));
+    }
+    chip.append(el('button', {
+      type: 'button',
+      text: '×',
+      title: 'Убрать вложение',
+      onclick: async () => {
+        state.attachments.splice(index, 1);
+        renderAttachments();
+        await api.attachments.remove({ projectDir: state.projectDir, path: item.path });
+      },
+    }));
     if (item.note) chip.classList.add('warn');
     box.append(chip);
   });
@@ -1034,6 +1070,38 @@ async function openSettings() {
     },
   });
 
+  const ocr = settings.ocr || {};
+  const ocrEnabled = el('input', { type: 'checkbox' });
+  ocrEnabled.checked = ocr.enabled !== false;
+  const ocrEngine = el('select', {}, [
+    el('option', { value: 'auto', text: 'Авто — локальный движок, сеть последней' }),
+    el('option', { value: 'winrt', text: 'Windows (WinRT) — офлайн' }),
+    el('option', { value: 'vision', text: 'macOS Vision — офлайн' }),
+    el('option', { value: 'tesseract', text: 'tesseract — офлайн, нужен в PATH' }),
+    el('option', { value: 'mai', text: 'Шлюз MAI — сеть, расход токенов' }),
+  ]);
+  ocrEngine.value = ocr.engine || 'auto';
+  const ocrLanguage = el('input', { value: ocr.language || 'ru', placeholder: 'ru' });
+  const ocrCheck = el('button', {
+    class: 'btn',
+    type: 'button',
+    text: 'Проверить движки',
+    onclick: async () => {
+      const status = await api.ocr.status({ force: true });
+      if (!status.ok) {
+        toast(status.error || 'OCR недоступен', 'error');
+        return;
+      }
+      const ready = Object.entries(status.engines || {})
+        .filter(([, info]) => info.available)
+        .map(([id]) => id);
+      if (ready.length) {
+        toast(`OCR: доступны ${ready.join(', ')}. Выбран ${status.preferred || 'нет'}`, 'ok');
+      } else {
+        toast('OCR: ни один движок не доступен', 'error');
+      }
+    },
+  });
   const modal = openModal({
     title: 'Настройки',
     body: [
@@ -1081,6 +1149,14 @@ async function openSettings() {
         class: 'hint-text',
         text: 'MAS слушает только 127.0.0.1. Токен лежит в %APPDATA%\\MAS\\data\\api-token и подхватывается сам.',
       }),
+      el('div', { class: 'docs-group-title', text: 'OCR — текст на изображениях' }),
+      el('label', { class: 'hint-text' }, [ocrEnabled, ' кнопка «текст» у изображения распознаёт его']),
+      el('div', { class: 'row' }, [field('Движок', ocrEngine), field('Язык', ocrLanguage)]),
+      el('div', { class: 'row' }, [ocrCheck]),
+      el('p', {
+        class: 'hint-text',
+        text: 'Локальные движки не отправляют изображение в сеть. Шлюз MAI отправляет и расходует токены.',
+      }),
       el('p', {
         class: 'hint-text',
         text: 'Провайдеры и ключи — в панели «Провайдеры». Настройки лежат в %APPDATA%\\mai-code\\settings.json',
@@ -1124,7 +1200,14 @@ async function openSettings() {
               enabled: masEnabled.checked,
               url: masUrl.value.trim() || 'http://127.0.0.1:8765',
               model: masModel.value.trim() || 'gigaam-v3-e2e-ctc',
-              token: masToken.value.trim(),
+              // Пустое поле значит «оставить прежний токен»: иначе сохранение
+              // настроек стирало токен удалённого MAS.
+              token: masToken.value.trim() || String(mas.token || ''),
+            },
+            ocr: {
+              enabled: ocrEnabled.checked,
+              engine: ocrEngine.value || 'auto',
+              language: ocrLanguage.value.trim() || 'ru',
             },
           });
           updateChrome();

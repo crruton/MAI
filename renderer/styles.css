@@ -154,6 +154,26 @@ button { cursor: pointer; }
   .model-wrap { flex: 1 1 220px; }
 }
 
+/* ---------- полоса заголовка ---------- */
+
+/* Окно без системной полосы (ADR 0022): кнопки «свернуть/развернуть/закрыть»
+   рисуются поверх страницы справа. Верхняя панель работает как полоса
+   заголовка — тянет окно за пустое место, а элементы управления не тянут.
+   Отступ справа не даёт кнопкам окна накрыть кнопки панели. */
+.topbar,
+.sidebar .brand { -webkit-app-region: drag; }
+.topbar button,
+.topbar select,
+.topbar input,
+.topbar a,
+.topbar label,
+.sidebar .brand button { -webkit-app-region: no-drag; }
+/* Место под кнопки окна резервирует только первая строка панели: вторая
+   строка кнопок окна не касается и не должна терять ширину. */
+.topbar-row-main {
+  padding-right: calc(100vw - env(titlebar-area-width, calc(100vw - 140px)) - env(titlebar-area-x, 0px));
+}
+
 /* ---------- messages ---------- */
 
 .messages { flex: 1; overflow-y: auto; padding: 26px 0 10px; scroll-behavior: smooth; }

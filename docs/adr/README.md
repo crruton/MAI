@@ -30,6 +30,12 @@ ADR фиксируют решения, которые дорого менять:
 | [0012](0012-observability-otel.md) | Observability на OpenTelemetry | accepted | 2026-11-06 |
 | [0013](0013-vneshnie-rantajmy-v-kontejnerah.md) | Внешние рантаймы в отдельных контейнерах | accepted | 2026-11-06 |
 | [0014](0014-harbor-registry.md) | Harbor как registry, а не среда запуска | accepted | 2026-11-06 |
+| [0015](0015-oblegchenie-sborki-electron.md) | Облегчение сборки Electron | accepted | 2026-11-07 |
+| [0016](0016-vlozheniya-cherez-fajly-proekta.md) | Вложения через файлы проекта, а не через текст промпта | accepted | 2026-11-05 |
+| [0017](0017-rezhimy-razreshenij.md) | Режимы разрешений: авто, вручную, принимать правки, план | accepted | 2026-11-05 |
+| [0018](0018-tajmauty-podtverzhdenij-i-instrumentov.md) | Таймауты подтверждений и инструментов | accepted | 2026-11-08 |
 | [0019](0019-limity-pamyati-docker.md) | Лимиты памяти для локальных Docker-стеков | accepted | 2026-11-08 |
 | [0020](0020-mav-servis-ozvuchki.md) | Сервис озвучки MAV и подбор голоса | accepted | 2026-11-08 |
 | [0021](0021-golosovoj-vvod-cherez-mas.md) | Голосовой ввод через локальный MAS | accepted | 2026-11-12 |
+| [0022](0022-temnaya-polosa-zagolovka.md) | Тёмная полоса заголовка вместо системной | accepted | 2026-11-13 |
+| [0023](0023-ocr-cherez-adaptery-dvizhkov.md) | OCR через адаптеры движков | accepted | 2026-11-14 |

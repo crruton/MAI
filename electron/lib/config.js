@@ -54,6 +54,18 @@ const DEFAULTS = {
     token: '',
     model: 'gigaam-v3-e2e-ctc',
   },
+  // OCR: распознавание текста на изображениях. Движки — см. lib/ocr.js.
+  ocr: {
+    enabled: true,
+    // auto | winrt | vision | tesseract | mai | off
+    engine: 'auto',
+    language: 'ru',
+    provider: 'mai',
+    model: 'hunyuan-ocr',
+    maxDimension: 4000,
+    scale: 1,
+    timeoutMs: 60000,
+  },
 };
 
 // Модели, которые показываем, если шлюз не отдал /models.
@@ -186,6 +198,7 @@ export function loadSettings() {
     guardrails: { ...DEFAULT_GUARDRAILS, ...(saved.guardrails || {}) },
     telemetry: { ...DEFAULTS.telemetry, ...(saved.telemetry || {}) },
     mas: { ...DEFAULTS.mas, ...(saved.mas || {}) },
+    ocr: { ...DEFAULTS.ocr, ...(saved.ocr || {}) },
   };
 
   if (!settings.projectDir) {
@@ -235,6 +248,10 @@ export function saveSettings(patch) {
 
   if (patch.telemetry) {
     next.telemetry = { ...(current.telemetry || DEFAULTS.telemetry), ...patch.telemetry };
+  }
+
+  if (patch.ocr) {
+    next.ocr = { ...(current.ocr || DEFAULTS.ocr), ...patch.ocr };
   }
 
   if (patch.mas) {

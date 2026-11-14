@@ -39,6 +39,7 @@
 | `electron/lib/tools/shell.js` | `run_shell` |
 | `electron/lib/tools/skills.js` | `load_skill` |
 | `electron/lib/attachments.js` | вложения: копирование, разбор DOCX/XLSX/PPTX/PDF/ZIP, манифест |
+| `electron/lib/ocr.js` | OCR: четыре движка за одним интерфейсом (WinRT, Vision, tesseract, шлюз MAI) |
 | `electron/lib/permissions.js` | режимы разрешений: авто, вручную, принимать правки, план |
 | `renderer/app.js` | состояние UI, события, модальные окна |
 | `renderer/markdown.js` | безопасный минимальный Markdown |
@@ -155,6 +156,35 @@ IPC-каналы: `attachments:add`, `attachments:addImage`, `attachments:pick`,
 `attachments:remove`, `attachments:open`. Удаление и открытие проверяют, что
 путь лежит внутри папки вложений. Секретные имена отклоняются по исходному
 имени до очистки: `safeName` срезает ведущие точки, и `.env` стал бы `env`.
+
+### OCR изображений
+
+Текст с картинки достаёт `electron/lib/ocr.js` (ADR 0023). Четыре движка за одним
+интерфейсом: `winrt` (Windows), `vision` (macOS), `tesseract` (любая ОС) и `mai`
+(шлюз, `hunyuan-ocr`). В режиме `auto` локальные движки идут первыми, сеть —
+последней. `attachments.js` не знает про конкретные движки: он вызывает
+`recognizeAttachment()`, которая пишет `.txt` рядом с изображением.
+
+OCR не входит в `describe()`: `saveFromPaths` остаётся синхронным и быстрым, а
+распознавание запускается отдельным IPC-каналом. Ошибка OCR не отменяет
+вложение — файл остаётся доступен агенту.
+
+IPC-каналы: `ocr:status`, `ocr:recognize`. Подробности — [OCR](OCR.md).
+
+## Окно и полоса заголовка
+
+Системная полоса заголовка скрыта (`titleBarStyle: 'hidden'`), кнопки окна
+рисует Windows поверх страницы в цветах палитры (`titleBarOverlay`, ADR 0022).
+Настройка — `titleBarOptions()` в `electron/main.js`, применяется к главному
+окну и к окнам досок.
+
+Правила для разметки:
+
+1. Верхняя панель (`.topbar`, `.board-topbar`) — drag-регион: тянет окно.
+2. Кнопки, списки и поля внутри панели помечены `no-drag`, иначе нажатие
+   двигало бы окно.
+3. Правый отступ панели считается от `env(titlebar-area-width)` и
+   `env(titlebar-area-x)`, чтобы кнопки окна не накрывали кнопки панели.
 
 ## Сертификаты
 

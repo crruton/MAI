@@ -43,6 +43,14 @@ app.whenReady().then(async () => {
     check('tools/fs.js загружен', Array.isArray(fsTools.fsTools));
     const shellTools = await import('../electron/lib/tools/shell.js');
     check('tools/shell.js загружен', Array.isArray(shellTools.shellTools));
+    const windowLib = await import('../electron/lib/window.js');
+    check('window.js загружен', typeof windowLib.titleBarOptions === 'function');
+    const win32 = windowLib.titleBarOptions('win32');
+    check('win32: полоса скрыта', win32.titleBarStyle === 'hidden', JSON.stringify(win32));
+    check('win32: overlay в цвет палитры', win32.titleBarOverlay?.color === '#0f1117', JSON.stringify(win32));
+    check('win32: высота полосы 36', win32.titleBarOverlay?.height === 36, JSON.stringify(win32));
+    check('darwin: hiddenInset', windowLib.titleBarOptions('darwin').titleBarStyle === 'hiddenInset');
+    check('linux: без overlay не остаётся', windowLib.titleBarOptions('linux').titleBarStyle === 'hidden');
 
     console.log('\n[2] Настройки: режим по умолчанию');
     const settings = config.loadSettings();

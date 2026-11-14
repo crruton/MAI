@@ -56,6 +56,16 @@ a { color: var(--accent-2); }
   backdrop-filter: blur(8px);
 }
 
+/* Окно без системной полосы (ADR 0022): панель тянет окно, кнопки — нет.
+   Отступ справа оставляет место нативным кнопкам окна. */
+.board-topbar {
+  -webkit-app-region: drag;
+  padding-right: calc(100vw - env(titlebar-area-width, calc(100vw - 140px)) - env(titlebar-area-x, 0px) + 16px);
+}
+.board-topbar button,
+.board-topbar .tab,
+.board-topbar input { -webkit-app-region: no-drag; }
+
 .board-brand { display: flex; align-items: center; gap: 10px; min-width: 180px; }
 .brand-mark {
   width: 32px; height: 32px; border-radius: 10px;

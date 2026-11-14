@@ -20,6 +20,7 @@ const TITLE_OVERRIDES = {
   'docs/DOMAIN.md': 'Доменное имя',
   'docs/KUBERNETES.md': 'Kubernetes',
   'docs/MULTICA.md': 'Multica',
+  'docs/OCR.md': 'OCR — распознавание текста',
   'docs/OPENSCION.md': 'OpenScion',
   'docs/OPENSPEC.md': 'OpenSpec',
   'docs/PRESETS.md': 'Пресеты моделей',

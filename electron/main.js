@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, publicSettings, dataDir } from './lib/config.js';
+import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime } from './lib/runtimes.js';
@@ -50,7 +51,8 @@ import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, require
 import { listDocs, readDoc, searchDocs } from './lib/docs.js';
 import * as multica from './lib/multica.js';
 import * as sandbox from './lib/container.js';
-import { saveFromPaths, saveImage, uploadsRoot, removeSessionUploads, adoptDraftUploads } from './lib/attachments.js';
+import { saveFromPaths, saveImage, uploadsRoot, removeSessionUploads, adoptDraftUploads, recognizeAttachment } from './lib/attachments.js';
+import { ocrStatus } from './lib/ocr.js';
 import { decide, normalizeMode, MODE_INFO, PERMISSION_MODES } from './lib/permissions.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
@@ -141,6 +143,7 @@ function logError(entry) {
 
 const boardWindows = new Map(); // board -> BrowserWindow
 
+
 function openBoardWindow(board, focus = '') {
   const existing = boardWindows.get(board);
   if (existing && !existing.isDestroyed()) {
@@ -164,6 +167,7 @@ function openBoardWindow(board, focus = '') {
     minWidth: 1000,
     minHeight: 640,
     backgroundColor: '#0f1117',
+    ...titleBarOptions(),
     title: `MAI Code — ${titles[board] || board}`,
     icon: path.join(__dirname, '..', 'assets', 'icon.ico'),
     autoHideMenuBar: true,
@@ -192,6 +196,7 @@ function createWindow() {
     minWidth: 980,
     minHeight: 640,
     backgroundColor: '#0f1117',
+    ...titleBarOptions(),
     title: 'MAI Code',
     icon: path.join(__dirname, '..', 'assets', 'icon.ico'),
     autoHideMenuBar: true,
@@ -283,6 +288,28 @@ ipcMain.handle('mas:transcribe', async (_e, payload) => {
   const wav = payload?.wav;
   if (!wav || !wav.byteLength) throw new Error('Пустая запись');
   return masTranscribe({ wav: Buffer.from(wav), model: payload?.model });
+});
+
+// ---------- OCR: распознавание текста на изображениях ----------
+
+ipcMain.handle('ocr:status', async (_e, payload) => {
+  try {
+    const status = await ocrStatus(undefined, { force: Boolean(payload?.force) });
+    const { config, ...rest } = status;
+    return { ok: true, ...rest, language: config.language, model: config.model };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('ocr:recognize', async (_e, payload) => {
+  try {
+    const { projectDir, path: target, language, engine } = payload || {};
+    const result = await recognizeAttachment({ projectDir, path: target, language, engine });
+    return { ok: true, ...result };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
 });
 
 ipcMain.handle('settings:save', async (_e, patch) => {

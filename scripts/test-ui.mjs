@@ -10,6 +10,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { titleBarOptions } from '../electron/lib/window.js';
+import { loadBoards } from '../electron/lib/boards.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -52,12 +54,20 @@ ipcMain.handle('permissions:modes', () => ({ current: 'manual', fallback: 'manua
 ipcMain.handle('permissions:set', (_e, payload) => ({ ok: true, mode: payload?.mode, scope: 'default' }));
 ipcMain.handle('attachments:list', () => []);
 ipcMain.handle('chat:onEvent', () => {});
+// Окно досок грузится в разделе [9]: без заглушки Electron пишет в лог
+// «No handler registered for 'boards:load'», и это выглядит как дефект.
+ipcMain.handle('boards:load', () => ({
+  boards: loadBoards(root),
+  projectDir: root,
+  settings: { projectDir: root, activeModel: 'test-model' },
+}));
 
 app.whenReady().then(async () => {
   const win = new BrowserWindow({
     show: false,
     width: 1200,
     height: 800,
+    ...titleBarOptions(),
     webPreferences: {
       preload: path.join(root, 'electron', 'preload.cjs'),
       contextIsolation: true,
@@ -152,11 +162,17 @@ app.whenReady().then(async () => {
       hasPermissions: typeof window.mai?.permissions === 'object',
       hasModes: typeof window.mai?.permissions?.modes === 'function',
       hasSet: typeof window.mai?.permissions?.set === 'function',
+      hasOcr: typeof window.mai?.ocr === 'object',
+      hasOcrStatus: typeof window.mai?.ocr?.status === 'function',
+      hasOcrRecognize: typeof window.mai?.ocr?.recognize === 'function',
     }))()`);
     check('window.mai есть', bridge.hasMai === true);
     check('window.mai.permissions есть', bridge.hasPermissions === true);
     check('permissions.modes — функция', bridge.hasModes === true);
     check('permissions.set — функция', bridge.hasSet === true);
+    check('window.mai.ocr есть', bridge.hasOcr === true);
+    check('ocr.status — функция', bridge.hasOcrStatus === true);
+    check('ocr.recognize — функция', bridge.hasOcrRecognize === true);
 
     console.log('\n[3] Переключение режима через UI');
     const switched = await win.webContents.executeJavaScript(`(async () => {
@@ -221,6 +237,85 @@ app.whenReady().then(async () => {
     check('модель по умолчанию', masSettings.hasModel === true);
     check('кнопка проверки связи есть', masSettings.hasCheckButton === true);
     check('подсказка про api-token есть', masSettings.hasToken === true);
+
+    console.log('\n[6] Полоса заголовка и drag-регионы (ADR 0022)');
+    const titlebar = await win.webContents.executeJavaScript(`(() => {
+      const bar = document.querySelector('.topbar');
+      const row = document.querySelector('.topbar-row-main');
+      const btn = document.querySelector('.topbar button');
+      const sel = document.querySelector('.topbar select');
+      const cs = getComputedStyle(bar);
+      const rs = getComputedStyle(row);
+      return {
+        barRegion: cs.webkitAppRegion || cs.getPropertyValue('-webkit-app-region'),
+        btnRegion: getComputedStyle(btn).getPropertyValue('-webkit-app-region'),
+        selRegion: getComputedStyle(sel).getPropertyValue('-webkit-app-region'),
+        rowPaddingRight: parseFloat(rs.paddingRight) || 0,
+        barHeight: Math.round(bar.getBoundingClientRect().height),
+      };
+    })()`);
+    check('верхняя панель тянет окно', titlebar.barRegion === 'drag', JSON.stringify(titlebar));
+    check('кнопки панели не тянут окно', titlebar.btnRegion === 'no-drag', JSON.stringify(titlebar));
+    check('списки панели не тянут окно', titlebar.selRegion === 'no-drag', JSON.stringify(titlebar));
+    check('есть отступ под кнопки окна', titlebar.rowPaddingRight >= 16, JSON.stringify(titlebar));
+    check('панель не ниже полосы заголовка', titlebar.barHeight >= 36, JSON.stringify(titlebar));
+
+    console.log('\n[7] Переменные полосы заголовка');
+    const envVars = await win.webContents.executeJavaScript(`(() => {
+      const probe = document.createElement('div');
+      probe.style.cssText = 'position:fixed;left:0;top:0;width:env(titlebar-area-width, 0px);height:env(titlebar-area-height, 0px)';
+      document.body.appendChild(probe);
+      const rect = probe.getBoundingClientRect();
+      probe.remove();
+      return { width: Math.round(rect.width), height: Math.round(rect.height) };
+    })()`);
+    check('env(titlebar-area-width) определён', envVars.width > 0, JSON.stringify(envVars));
+    check('env(titlebar-area-height) = 36', envVars.height === 36, JSON.stringify(envVars));
+
+    console.log('\n[8] Кнопки окна не накрывают кнопки панели');
+    const overlap = await win.webContents.executeJavaScript(`(() => {
+      const probe = document.createElement('div');
+      probe.style.cssText = 'position:fixed;left:0;top:0;width:env(titlebar-area-width, 0px);height:env(titlebar-area-height, 0px)';
+      document.body.appendChild(probe);
+      const area = probe.getBoundingClientRect();
+      probe.remove();
+      // Область кнопок окна: справа от titlebar-area-width, высотой titlebar-area-height.
+      const buttons = { left: area.width, top: 0, right: window.innerWidth, bottom: area.height };
+      const hits = [];
+      for (const node of document.querySelectorAll('.topbar button, .topbar select')) {
+        const r = node.getBoundingClientRect();
+        const intersects = r.left < buttons.right && r.right > buttons.left
+          && r.top < buttons.bottom && r.bottom > buttons.top;
+        if (intersects) hits.push((node.id || node.textContent || '').trim().slice(0, 20));
+      }
+      return {
+        areaWidth: Math.round(area.width),
+        areaHeight: Math.round(area.height),
+        hits,
+      };
+    })()`);
+    check('область кнопок окна определена', overlap.areaWidth > 0 && overlap.areaHeight > 0, JSON.stringify(overlap));
+    check('ни один элемент панели не под кнопками окна', overlap.hits.length === 0, JSON.stringify(overlap));
+
+    console.log('\n[9] Окно досок: drag-регионы');
+    await win.loadFile(path.join(root, 'renderer', 'board.html'), { query: { board: 'delivery' } });
+    await new Promise((r) => setTimeout(r, 1200));
+    const boardBar = await win.webContents.executeJavaScript(`(() => {
+      const bar = document.querySelector('.board-topbar');
+      if (!bar) return { found: false };
+      const tab = bar.querySelector('.tab');
+      const cs = getComputedStyle(bar);
+      return {
+        found: true,
+        barRegion: cs.getPropertyValue('-webkit-app-region'),
+        tabRegion: tab ? getComputedStyle(tab).getPropertyValue('-webkit-app-region') : null,
+        paddingRight: parseFloat(cs.paddingRight) || 0,
+      };
+    })()`);
+    check('панель досок найдена', boardBar.found === true);
+    check('панель досок тянет окно', boardBar.barRegion === 'drag', JSON.stringify(boardBar));
+    check('вкладки досок не тянут окно', boardBar.tabRegion === 'no-drag', JSON.stringify(boardBar));
+    check('у панели досок есть отступ под кнопки окна', boardBar.paddingRight >= 16, JSON.stringify(boardBar));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

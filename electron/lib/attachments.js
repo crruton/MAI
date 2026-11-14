@@ -3,6 +3,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import { isSecretPath } from './guardrails.js';
+import { ocrImage } from './ocr.js';
 
 /**
  * Вложения сессии.
@@ -636,6 +637,40 @@ export function saveImage({ projectDir, sessionId, name, dataUrl }) {
   const target = uniquePath(dir, safeName(name || `clipboard-${stamp}${ext}`));
   fs.writeFileSync(target, buffer);
   return describe(projectDir, target);
+}
+
+/**
+ * Распознаёт текст на изображении-вложении и пишет его в `.txt` рядом с файлом.
+ *
+ * Отдельная асинхронная функция, а не часть `describe()`: OCR запускает внешний
+ * процесс или сетевой запрос, а `saveFromPaths` остаётся синхронным и быстрым.
+ * Ошибка OCR не отменяет вложение: файл остаётся доступен агенту.
+ */
+export async function recognizeAttachment({ projectDir, path: relativePath, language, engine, settings } = {}) {
+  if (!projectDir) throw new Error('Сначала выберите папку проекта');
+  if (!relativePath) throw new Error('не указан путь к вложению');
+  const full = path.resolve(projectDir, relativePath);
+  const rel = path.relative(projectDir, full);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('путь вне проекта');
+  if (!fs.existsSync(full)) throw new Error(`файл не найден: ${path.basename(full)}`);
+
+  const result = await ocrImage({ filePath: full, language, engine, settings });
+  const text = String(result.text || '').trim();
+  if (!text) {
+    return { ok: false, error: 'текст на изображении не найден', engine: result.engine, textPath: '' };
+  }
+
+  const info = writeTextFile(`${full}.txt`, text);
+  return {
+    ok: true,
+    engine: result.engine,
+    language: result.language || '',
+    textPath: relative(projectDir, `${full}.txt`),
+    chars: info.bytes,
+    lines: Array.isArray(result.lines) ? result.lines.length : text.split(/\r?\n/).length,
+    truncated: info.truncated,
+    note: result.note || '',
+  };
 }
 
 /** Читает файл вложения как data URL: нужно для мультимодальных запросов. */
