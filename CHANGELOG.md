@@ -8,6 +8,28 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `docs/BACKLOG.md` — единственный источник статусов. `docs/ROADMAP.md` больше не
+  дублирует статусы, а ссылается на пункты бэклога: расхождение «сделано в коде,
+  не начато в плане» устранено.
+- Статусы бэклога приведены к коду: пункт 5 (скрепка) — «сделано», пункт 4
+  (`memory.md`) — «сделано, кроме `memory_read`/`memory_append`.
+
+### Removed
+
+- Неиспользуемые экспорты: `docsRoot()` в `electron/lib/docs.js`, `OCR_DEFAULTS`
+  в `electron/lib/ocr.js`, экспорт `KINDS` в `electron/lib/artifacts.js`
+  (константа осталась локальной). Найдено `repowise dead-code`.
+
+### Fixed
+
+- Битая ссылка `docs/adr/0021-mav-audio-service.md` в `services/mav/README.md` →
+  `docs/adr/0020-mav-servis-ozvuchki.md`.
+- Ссылки на `docs/API.md` в `docs/MAS.md` и ADR 0021 помечены как внешние:
+  файл живёт в репозитории MAS, в этом репозитории его нет.
+- `services/mav/.env` в README помечен как файл вне git.
+
 ### Added
 
 - Версии памяти и откат: `electron/lib/memory.js` хранит историю правок

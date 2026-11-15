@@ -71,4 +71,4 @@ Electron.
 - `electron/lib/mas.js`
 - `renderer/app.js`
 - `electron/lib/config.js`
-- MAS: `docs/API.md` в репозитории MAS
+- MAS: `docs/API.md` в репозитории MAS (в этом репозитории файла нет)

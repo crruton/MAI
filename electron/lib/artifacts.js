@@ -16,7 +16,7 @@ import { pluginDirs } from './plugins.js';
  * опциональная синхронизация (см. infra.js).
  */
 
-export const KINDS = ['skill', 'agents', 'memory', 'openspec', 'adr', 'diagram', 'openapi', 'note', 'plugin'];
+const KINDS = ['skill', 'agents', 'memory', 'openspec', 'adr', 'diagram', 'openapi', 'note', 'plugin'];
 
 const TRANSLIT = {
   а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i',

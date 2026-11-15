@@ -510,5 +510,3 @@ export async function ocrImage({ filePath, language, engine, settings } = {}) {
 export function ocrPlatformSupported() {
   return ['win32', 'darwin', 'linux'].includes(process.platform);
 }
-
-export { DEFAULTS as OCR_DEFAULTS };

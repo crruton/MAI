@@ -142,6 +142,6 @@ MAS принимает WAV и сырой PCM16 16 кГц. MAI Code всегда 
 
 ## Ссылки
 
-- Контракт MAS: `docs/API.md` в репозитории MAS. HTTP, WebSocket, AudioSocket.
+- Контракт MAS: `docs/API.md` в репозитории MAS (в этом репозитории файла нет). HTTP, WebSocket, AudioSocket.
 - `electron/lib/mas.js` — клиент MAS.
 - `renderer/app.js` — запись, WAV, вставка текста.

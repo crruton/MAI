@@ -38,10 +38,6 @@ function appRoot() {
   return app.getAppPath();
 }
 
-export function docsRoot() {
-  return path.join(appRoot(), 'docs');
-}
-
 function safeRelative(value) {
   const raw = String(value || '').replace(/\\/g, '/');
   if (!raw || raw.includes('\0')) throw new Error('Пустой путь к документу');
