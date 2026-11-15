@@ -1264,10 +1264,69 @@ async function openAgents() {
 async function openMemory() {
   if (!state.projectDir) return toast('Сначала выберите папку проекта', 'err');
   const data = await api.memory.read(state.projectDir);
-  const projectArea = el('textarea', { rows: '14', placeholder: 'Уроки и решения этого проекта…' });
+  const versions = data.versions || {};
+
+  const projectArea = el('textarea', { rows: '12', placeholder: 'Уроки и решения этого проекта…' });
   projectArea.value = data.project;
   const globalArea = el('textarea', { rows: '8', placeholder: 'Общие уроки для всех проектов…' });
   globalArea.value = data.global;
+
+  const historyTitle = el('p', { class: 'hint-text', text: 'История версий: проект' });
+  const historyBox = el('div', { class: 'list' });
+
+  const renderHistory = (scope) => {
+    historyTitle.textContent = `История версий: ${scope === 'project' ? 'проект' : 'глобальная'}`;
+    historyBox.replaceChildren();
+    const items = versions[scope] || [];
+    if (!items.length) {
+      historyBox.append(el('p', { class: 'hint-text', text: 'Версий пока нет: первая появится после сохранения.' }));
+      return;
+    }
+    for (const version of [...items].reverse()) {
+      historyBox.append(
+        el('div', { class: 'list-item' }, [
+          el('div', {}, [
+            el('div', { class: 'title', text: `v${version.version}${version.current ? ' · текущая' : ''}` }),
+            el('div', {
+              class: 'sub',
+              text: `${fmtDate(version.at)} · ${version.size} Б · ${version.note || 'без пометки'}`,
+            }),
+          ]),
+          el('div', { class: 'actions' }, [
+            el('button', {
+              class: 'btn ghost',
+              type: 'button',
+              text: 'Показать',
+              onclick: async () => {
+                try {
+                  const text = await api.memory.version({ projectDir: state.projectDir, scope, version: version.version });
+                  (scope === 'project' ? projectArea : globalArea).value = text;
+                  toast(`Версия ${version.version} загружена в поле`, 'ok');
+                } catch (err) {
+                  toast(`Память: ${err.message}`, 'err');
+                }
+              },
+            }),
+            el('button', {
+              class: 'btn ghost',
+              type: 'button',
+              text: 'Откатить',
+              onclick: async () => {
+                try {
+                  await api.memory.restore({ projectDir: state.projectDir, scope, version: version.version });
+                  modal.close();
+                  toast(`Память откатана к версии ${version.version}`, 'ok');
+                  openMemory();
+                } catch (err) {
+                  toast(`Память: ${err.message}`, 'err');
+                }
+              },
+            }),
+          ]),
+        ]),
+      );
+    }
+  };
 
   const modal = openModal({
     title: 'Память (memory.md)',
@@ -1280,6 +1339,13 @@ async function openMemory() {
       projectArea,
       el('p', { class: 'hint-text', text: data.globalFile }),
       globalArea,
+      el('hr', { style: 'border:0;border-top:1px solid var(--border-soft)' }),
+      el('div', { class: 'row' }, [
+        el('button', { class: 'btn ghost', type: 'button', text: 'Версии проекта', onclick: () => renderHistory('project') }),
+        el('button', { class: 'btn ghost', type: 'button', text: 'Версии глобальной', onclick: () => renderHistory('global') }),
+      ]),
+      historyTitle,
+      historyBox,
     ],
     footer: [
       el('button', {
@@ -1294,10 +1360,20 @@ async function openMemory() {
         text: 'Сохранить',
         onclick: async () => {
           try {
-            await api.memory.write(data.projectFile, projectArea.value);
-            await api.memory.write(data.globalFile, globalArea.value);
-            modal.close();
-            toast('Память сохранена', 'ok');
+            const project = await api.memory.save({
+              projectDir: state.projectDir,
+              scope: 'project',
+              content: projectArea.value,
+            });
+            const globalResult = await api.memory.save({
+              projectDir: state.projectDir,
+              scope: 'global',
+              content: globalArea.value,
+            });
+            versions.project = project.versions;
+            versions.global = globalResult.versions;
+            renderHistory('project');
+            toast(project.changed || globalResult.changed ? 'Память сохранена' : 'Изменений нет', 'ok');
           } catch (err) {
             toast(`Память: ${err.message}`, 'err');
           }
@@ -1305,6 +1381,8 @@ async function openMemory() {
       }),
     ],
   });
+
+  renderHistory('project');
 }
 
 /* ---------- доступ и роли ---------- */

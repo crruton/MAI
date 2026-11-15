@@ -77,7 +77,10 @@ contextBridge.exposeInMainWorld('mai', {
   },
   memory: {
     read: (projectDir) => invoke('memory:read', projectDir),
-    write: (file, content) => invoke('memory:write', { file, content }),
+    write: (file, content, projectDir) => invoke('memory:write', { file, content, projectDir }),
+    save: (payload) => invoke('memory:save', payload),
+    version: (payload) => invoke('memory:version', payload),
+    restore: (payload) => invoke('memory:restore', payload),
   },
   skills: {
     list: (projectDir) => invoke('skills:list', projectDir),

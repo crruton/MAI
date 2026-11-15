@@ -92,7 +92,26 @@ app.whenReady().then(async () => {
       permissions.normalizeMode(legacy.permissionMode || 'manual') === 'manual',
     );
 
-    console.log('\n[6] Вложения внутри Electron');
+    console.log('\n[6] Версии памяти внутри Electron');
+    const memory = await import('../electron/lib/memory.js');
+    const memProject = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-smoke-mem-'));
+    const first = memory.saveMemory(memProject, { scope: 'project', content: 'урок 1' });
+    check('первая версия создана', first.changed === true && first.version === 1, JSON.stringify(first.version));
+    const same = memory.saveMemory(memProject, { scope: 'project', content: 'урок 1' });
+    check('повтор без изменений не плодит версию', same.changed === false && same.version === 1);
+    const second = memory.saveMemory(memProject, { scope: 'project', content: 'урок 1\nурок 2' });
+    check('вторая версия создана', second.changed === true && second.version === 2);
+    check('файл памяти обновлён', fs.readFileSync(path.join(memProject, '.mai-code', 'memory.md'), 'utf8').includes('урок 2'));
+    check('версия 1 читается', memory.memoryVersion(memProject, 'project', 1) === 'урок 1');
+    const restored = memory.restoreMemory(memProject, 'project', 1);
+    check('откат создаёт версию 3', restored.version === 3, String(restored.version));
+    check('файл после отката', fs.readFileSync(path.join(memProject, '.mai-code', 'memory.md'), 'utf8') === 'урок 1');
+    const state = memory.readMemoryState(memProject);
+    check('история в состоянии', state.versions.project.length === 3, String(state.versions.project.length));
+    check('уровень по пути определён', memory.memoryScopeOfFile(memProject, path.join(memProject, '.mai-code', 'memory.md')) === 'project');
+    fs.rmSync(memProject, { recursive: true, force: true });
+
+    console.log('\n[7] Вложения внутри Electron');
     const source = path.join(project, 'hello.txt');
     fs.writeFileSync(source, 'привет', 'utf8');
     const saved = attachments.saveFromPaths({ projectDir: project, sessionId: 'smoke', paths: [source] });

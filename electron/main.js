@@ -11,7 +11,8 @@ import { listModels, resolveModel } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime } from './lib/runtimes.js';
 import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode } from './lib/sessions.js';
 import { runAgent } from './lib/agent.js';
-import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, readMemory, writeMemory, installBundledSkills } from './lib/skills.js';
+import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
+import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
 import { loadPlugins, pluginDirs } from './lib/plugins.js';
 import {
@@ -930,10 +931,24 @@ ipcMain.handle('agents:write', (_e, { file, content }) => {
 
 // ---------- память ----------
 
-ipcMain.handle('memory:read', (_e, projectDir) => readMemory(projectDir));
-ipcMain.handle('memory:write', (_e, { file, content }) => {
+ipcMain.handle('memory:read', (_e, projectDir) => readMemoryState(projectDir));
+ipcMain.handle('memory:write', (_e, { file, content, projectDir }) => {
   requireAdmin();
-  return writeMemory(file, content);
+  return saveMemoryFile(projectOf({ projectDir }), file, content);
+});
+
+ipcMain.handle('memory:save', (_e, payload) => {
+  requireAdmin();
+  return saveMemory(projectOf(payload), { scope: payload.scope, content: payload.content, note: payload.note });
+});
+
+ipcMain.handle('memory:version', (_e, payload) =>
+  memoryVersion(projectOf(payload), payload.scope, payload.version),
+);
+
+ipcMain.handle('memory:restore', (_e, payload) => {
+  requireAdmin();
+  return restoreMemory(projectOf(payload), payload.scope, payload.version);
 });
 
 // ---------- навыки ----------
