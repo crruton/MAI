@@ -106,6 +106,8 @@ function enabledRuntimes() {
 /* ---------- вложения ---------- */
 
 const MAX_ATTACHMENTS = 20;
+// Совпадает с MAX_TOTAL_BYTES в electron/lib/attachments.js.
+const MAX_TOTAL_BYTES = 500 * 1024 * 1024;
 
 /**
  * Вложения не вставляются в промпт. Файл копируется в `.mai-code/uploads/<сессия>/`,
@@ -207,6 +209,14 @@ function renderAttachments() {
     if (item.note) chip.classList.add('warn');
     box.append(chip);
   });
+  // Суммарный размер: видно, сколько уйдёт в проект и не близко ли к лимиту.
+  if (!state.attachments.length) return;
+  const total = state.attachments.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+  const totalChip = el('span', { class: 'attachment-total', title: 'Суммарный размер вложений' }, [
+    el('span', { text: `${state.attachments.length} из ${MAX_ATTACHMENTS} · ${formatSize(total)}` }),
+  ]);
+  if (total > MAX_TOTAL_BYTES) totalChip.classList.add('warn');
+  box.append(totalChip);
 }
 
 function clearAttachments() {

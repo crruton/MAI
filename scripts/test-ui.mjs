@@ -426,6 +426,21 @@ app.whenReady().then(async () => {
     check('сохранение вызвало memory:save для глобальной', memoryCalls.some((c) => c.channel === 'save' && c.scope === 'global'), JSON.stringify(memoryCalls));
     check('«Показать» вызвало memory:version', memoryCalls.some((c) => c.channel === 'version' && c.version === 2), JSON.stringify(memoryCalls));
     check('сохранение передало projectDir', memoryCalls.filter((c) => c.channel === 'save').every((c) => Boolean(c.projectDir)), JSON.stringify(memoryCalls));
+
+    console.log('\n[12] Индикатор суммарного размера вложений');
+    const attachTotal = await win.webContents.executeJavaScript(`(() => {
+      const box = document.querySelector('#attachments');
+      if (!box) return { found: false };
+      // Пустое состояние: блок скрыт, индикатора нет.
+      return {
+        found: true,
+        hiddenWhenEmpty: box.hidden === true,
+        totalWhenEmpty: box.querySelectorAll('.attachment-total').length,
+      };
+    })()`);
+    check('блок вложений найден', attachTotal.found === true);
+    check('пустой блок вложений скрыт', attachTotal.hiddenWhenEmpty === true, JSON.stringify(attachTotal));
+    check('без вложений индикатора нет', attachTotal.totalWhenEmpty === 0, JSON.stringify(attachTotal));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

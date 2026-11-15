@@ -42,6 +42,7 @@
     "test:ui": "electron scripts/test-ui.mjs",
     "test:attachments": "node scripts/test-attachments.mjs",
     "test:ocr": "node scripts/test-ocr.mjs",
+    "test:memory": "electron scripts/test-memory-tools.mjs",
     "multica:sync": "node scripts/multica-sync.mjs",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down",

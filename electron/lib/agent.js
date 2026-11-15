@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { fsTools } from './tools/fs.js';
 import { shellTools } from './tools/shell.js';
 import { skillTools } from './tools/skills.js';
+import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
 import { listSkills, readAgents, readMemory } from './skills.js';
 import { reviewAnswer } from './reviewer.js';
@@ -31,6 +32,11 @@ function systemPrompt({ projectDir, skills, mcpStatus, mode }) {
   if (memory.project.trim()) {
     parts.push(`\n# Память проекта (memory.md)\n${memory.project.trim().slice(0, 12000)}`);
   }
+  parts.push(
+    '\n# Память\nИнструмент memory_read читает память и историю версий. ' +
+      'Инструмент memory_append дописывает блок в память и создаёт версию; он требует подтверждения. ' +
+      'Записывай только проверенные уроки и решения, коротко, без дублей.',
+  );
   if (skills.length) {
     parts.push(
       `\n# Навыки\nПолный текст навыка загружается инструментом load_skill.\n${skills
@@ -104,7 +110,7 @@ export async function runAgent({
   const repoTools = settings.repowise?.enabled ? repowiseTools : [];
   const mode = normalizeMode(permissionMode || settings.permissionMode);
   const hidden = hiddenToolsForMode(mode);
-  const tools = [...fsTools, ...shellTools, ...skillTools, ...repoTools, ...pluginTools, ...mcp.toolSchemas()]
+  const tools = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...pluginTools, ...mcp.toolSchemas()]
     // В режиме «План» инструменты записи не показываем: модель не должна пытаться.
     .filter((t) => !hidden.has(t.schema?.function?.name));
 

@@ -40,7 +40,7 @@ export const MODE_INFO = {
 };
 
 /** Инструменты, которые меняют файлы проекта. */
-const WRITE_TOOLS = new Set(['write_file', 'edit_file']);
+const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'memory_append']);
 
 /** Инструменты, которые запускают процессы. */
 const SHELL_TOOLS = new Set(['run_shell']);
@@ -51,6 +51,7 @@ const READ_TOOLS = new Set([
   'list_files',
   'grep',
   'load_skill',
+  'memory_read',
   'web_fetch',
   'web_search',
 ]);

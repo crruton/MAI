@@ -38,6 +38,8 @@
 | `electron/lib/tools/fs.js` | чтение, поиск, запись, правка файлов |
 | `electron/lib/tools/shell.js` | `run_shell` |
 | `electron/lib/tools/skills.js` | `load_skill` |
+| `electron/lib/tools/memory.js` | `memory_read`, `memory_append` |
+| `electron/lib/memory.js` | версии памяти и откат |
 | `electron/lib/attachments.js` | вложения: копирование, разбор DOCX/XLSX/PPTX/PDF/ZIP, манифест |
 | `electron/lib/ocr.js` | OCR: четыре движка за одним интерфейсом (WinRT, Vision, tesseract, шлюз MAI) |
 | `electron/lib/permissions.js` | режимы разрешений: авто, вручную, принимать правки, план |
@@ -132,7 +134,8 @@ main кладёт резолвер в `state.approvals` и отправляет 
 
 В режиме `plan` инструменты записи и оболочки не передаются модели вовсе
 (`hiddenToolsForMode`), а в системный промпт добавляется требование выдать план
-с альтернативами (`modePrompt`).
+с альтернативами (`modePrompt`). `memory_append` относится к инструментам записи,
+поэтому в режиме `plan` он тоже скрыт; `memory_read` — инструмент чтения.
 
 IPC-каналы: `permissions:modes(sessionId)` возвращает `current`, `fallback` и
 список режимов; `permissions:set({ mode, sessionId })` пишет в сессию, а без
