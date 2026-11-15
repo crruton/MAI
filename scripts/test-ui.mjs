@@ -47,13 +47,42 @@ ipcMain.handle('settings:get', () => ({
   models: [],
 }));
 ipcMain.handle('runtimes:list', () => ({}));
-ipcMain.handle('auth:status', () => ({ authenticated: false }));
+ipcMain.handle('auth:status', () => ({ authenticated: false, role: 'admin', mode: 'local' }));
 ipcMain.handle('models:list', () => []);
 ipcMain.handle('sessions:list', () => []);
 ipcMain.handle('permissions:modes', () => ({ current: 'manual', fallback: 'manual', sessionId: null, modes: MODES }));
 ipcMain.handle('permissions:set', (_e, payload) => ({ ok: true, mode: payload?.mode, scope: 'default' }));
 ipcMain.handle('attachments:list', () => []);
 ipcMain.handle('chat:onEvent', () => {});
+
+// Память: заглушка с историей версий. Вызовы пишем, чтобы проверить действия панели.
+const memoryCalls = [];
+const memoryVersions = {
+  project: [
+    { version: 1, at: '2026-11-14T10:00:00.000Z', size: 12, note: 'первая запись', current: false },
+    { version: 2, at: '2026-11-15T10:00:00.000Z', size: 20, note: 'сохранение из панели', current: true },
+  ],
+  global: [],
+};
+ipcMain.handle('memory:read', () => ({
+  project: 'память проекта',
+  global: 'глобальная память',
+  projectFile: path.join(root, '.mai-code', 'memory.md'),
+  globalFile: path.join(sandbox, 'memory.md'),
+  versions: memoryVersions,
+}));
+ipcMain.handle('memory:save', (_e, payload) => {
+  memoryCalls.push({ channel: 'save', ...payload });
+  return { scope: payload.scope, changed: true, version: 3, versions: memoryVersions[payload.scope] || [] };
+});
+ipcMain.handle('memory:version', (_e, payload) => {
+  memoryCalls.push({ channel: 'version', ...payload });
+  return `текст версии ${payload.version}`;
+});
+ipcMain.handle('memory:restore', (_e, payload) => {
+  memoryCalls.push({ channel: 'restore', ...payload });
+  return { scope: payload.scope, changed: true, version: 3, versions: [] };
+});
 // Окно досок грузится в разделе [9]: без заглушки Electron пишет в лог
 // «No handler registered for 'boards:load'», и это выглядит как дефект.
 ipcMain.handle('boards:load', () => ({
@@ -316,6 +345,87 @@ app.whenReady().then(async () => {
     check('панель досок тянет окно', boardBar.barRegion === 'drag', JSON.stringify(boardBar));
     check('вкладки досок не тянут окно', boardBar.tabRegion === 'no-drag', JSON.stringify(boardBar));
     check('у панели досок есть отступ под кнопки окна', boardBar.paddingRight >= 16, JSON.stringify(boardBar));
+
+    console.log('\n[10] Панель «Память»: версии и откат');
+    await win.loadFile(path.join(root, 'renderer', 'index.html'));
+    await new Promise((r) => setTimeout(r, 2000));
+    const memoryPanel = await win.webContents.executeJavaScript(`(async () => {
+      const btn = document.querySelector('[data-panel="memory"]');
+      if (!btn) return { found: false };
+      btn.click();
+      await new Promise((r) => setTimeout(r, 600));
+      const body = document.querySelector('.modal-body');
+      if (!body) return { found: true, open: false };
+      const buttons = [...body.querySelectorAll('button')].map((b) => b.innerText.trim());
+      const areas = [...body.querySelectorAll('textarea')].map((t) => t.value);
+      const items = [...body.querySelectorAll('.list-item')].map((i) => i.innerText.replace(/\\s+/g, ' ').trim());
+      return {
+        found: true,
+        open: true,
+        buttons,
+        areas,
+        items,
+        title: document.querySelector('.modal-head h2')?.innerText || '',
+      };
+    })()`);
+    check('кнопка панели «Память» найдена', memoryPanel.found === true);
+    check('окно памяти открылось', memoryPanel.open === true, JSON.stringify(memoryPanel));
+    check('заголовок окна памяти', memoryPanel.title === 'Память (memory.md)', memoryPanel.title);
+    check('два поля памяти', memoryPanel.areas?.length === 2, JSON.stringify(memoryPanel.areas));
+    check('поле проекта заполнено', memoryPanel.areas?.[0] === 'память проекта', memoryPanel.areas?.[0]);
+    check('поле глобальной заполнено', memoryPanel.areas?.[1] === 'глобальная память', memoryPanel.areas?.[1]);
+    check(
+      'кнопки версий есть',
+      memoryPanel.buttons?.includes('Версии проекта') && memoryPanel.buttons?.includes('Версии глобальной'),
+      JSON.stringify(memoryPanel.buttons),
+    );
+    check('история проекта показана по умолчанию', memoryPanel.items?.length === 2, JSON.stringify(memoryPanel.items));
+    check(
+      'в истории есть номер версии и пометка',
+      /v2/.test(memoryPanel.items?.[0] || '') && /текущая/.test(memoryPanel.items?.[0] || ''),
+      JSON.stringify(memoryPanel.items),
+    );
+    check(
+      'у версии есть действия',
+      /Показать/.test(memoryPanel.items?.[0] || '') && /Откатить/.test(memoryPanel.items?.[0] || ''),
+      JSON.stringify(memoryPanel.items),
+    );
+
+    console.log('\n[11] Панель «Память»: действия версий');
+    const memoryActions = await win.webContents.executeJavaScript(`(async () => {
+      const body = document.querySelector('.modal-body');
+      const items = [...body.querySelectorAll('.list-item')];
+      const first = items[0];
+      const showBtn = [...first.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Показать');
+      showBtn.click();
+      await new Promise((r) => setTimeout(r, 400));
+      const areaAfterShow = body.querySelectorAll('textarea')[0].value;
+      const globalBtn = [...body.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Версии глобальной');
+      globalBtn.click();
+      await new Promise((r) => setTimeout(r, 300));
+      const emptyHint = body.innerText.includes('Версий пока нет');
+      const projectBtn = [...body.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Версии проекта');
+      projectBtn.click();
+      await new Promise((r) => setTimeout(r, 300));
+      const backItems = body.querySelectorAll('.list-item').length;
+      return { areaAfterShow, emptyHint, backItems };
+    })()`);
+    check('«Показать» загрузило текст версии в поле', memoryActions.areaAfterShow === 'текст версии 2', memoryActions.areaAfterShow);
+    check('пустая история глобальной объяснена', memoryActions.emptyHint === true, JSON.stringify(memoryActions));
+    check('переключение обратно на проект работает', memoryActions.backItems === 2, String(memoryActions.backItems));
+
+    const memorySave = await win.webContents.executeJavaScript(`(async () => {
+      const foot = document.querySelector('.modal-foot');
+      const save = [...foot.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Сохранить');
+      save.click();
+      await new Promise((r) => setTimeout(r, 500));
+      return { stillOpen: Boolean(document.querySelector('.modal-body')) };
+    })()`);
+    check('сохранение не закрывает окно (история обновляется)', memorySave.stillOpen === true);
+    check('сохранение вызвало memory:save для проекта', memoryCalls.some((c) => c.channel === 'save' && c.scope === 'project'), JSON.stringify(memoryCalls));
+    check('сохранение вызвало memory:save для глобальной', memoryCalls.some((c) => c.channel === 'save' && c.scope === 'global'), JSON.stringify(memoryCalls));
+    check('«Показать» вызвало memory:version', memoryCalls.some((c) => c.channel === 'version' && c.version === 2), JSON.stringify(memoryCalls));
+    check('сохранение передало projectDir', memoryCalls.filter((c) => c.channel === 'save').every((c) => Boolean(c.projectDir)), JSON.stringify(memoryCalls));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);
