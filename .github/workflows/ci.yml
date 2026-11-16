@@ -1,0 +1,43 @@
+name: ci
+
+# Разработка идёт в dev, в main — только проверенное (AGENTS.md, правило 9).
+# Проверки гоняются на обоих ветках: на dev перед слиянием, на main как
+# последний барьер перед релизом по тегу.
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Тесты
+        run: npm test
+
+      - name: Проверки транспорта Responses API
+        run: npm run test:responses
+
+      - name: Проверки экспорта ответов
+        run: npm run test:export
+
+      - name: Ссылки в документации
+        run: npm run docs:check
+
+      - name: Пробелы в патчах
+        run: git diff --check HEAD
