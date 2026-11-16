@@ -55,6 +55,7 @@ import * as sandbox from './lib/container.js';
 import { saveFromPaths, saveImage, uploadsRoot, removeSessionUploads, adoptDraftUploads, recognizeAttachment } from './lib/attachments.js';
 import { ocrStatus } from './lib/ocr.js';
 import { decide, normalizeMode, MODE_INFO, PERMISSION_MODES } from './lib/permissions.js';
+import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
 // Флаг --use-system-ca решает проблему, но его нужно передать до старта Node,
@@ -1147,6 +1148,53 @@ ipcMain.handle('artifacts:export', async (event, payload) => {
   if (result.canceled || !result.filePath) return { ok: false, canceled: true };
   exportArtifact(projectDir, payload.id, result.filePath);
   return { ok: true, file: result.filePath };
+});
+
+/**
+ * Экспорт ответа агента в файл: md, txt, docx, xlsx.
+ *
+ * Сборка содержимого — в `electron/lib/export`, здесь только диалог сохранения
+ * и запись. Форматы не требуют сети и внешних библиотек. См. ADR 0025.
+ */
+async function saveExport(event, markdown, format, title) {
+  const key = String(format || 'md').toLowerCase();
+  if (!FORMATS[key]) {
+    return { ok: false, error: `Неизвестный формат: ${format}. Доступны: ${Object.keys(FORMATS).join(', ')}` };
+  }
+  const text = String(markdown || '');
+  if (!text.trim()) return { ok: false, error: 'Нечего сохранять: ответ пуст' };
+
+  let built;
+  try {
+    built = buildExport(text, key, { title });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const { canceled, filePath } = await dialog.showSaveDialog(window, {
+    title: 'Скачать ответ',
+    defaultPath: path.join(app.getPath('downloads'), fileNameFor(text, built.ext)),
+    filters: [{ name: FORMATS[key].name, extensions: [built.ext] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+
+  try {
+    fs.writeFileSync(filePath, built.data);
+  } catch (err) {
+    return { ok: false, error: `Не удалось записать файл: ${err.message}` };
+  }
+  return { ok: true, file: filePath, format: key };
+}
+
+ipcMain.handle('export:message', async (event, payload) =>
+  saveExport(event, payload?.markdown, payload?.format, payload?.title),
+);
+
+ipcMain.handle('export:chat', async (event, payload) => {
+  const messages = Array.isArray(payload?.messages) ? payload.messages : [];
+  const markdown = chatToMarkdown(messages, { title: payload?.title });
+  return saveExport(event, markdown, payload?.format, payload?.title);
 });
 
 ipcMain.handle('artifacts:applyToFile', (_e, payload) => {

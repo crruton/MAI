@@ -49,7 +49,29 @@ ipcMain.handle('settings:get', () => ({
 ipcMain.handle('runtimes:list', () => ({}));
 ipcMain.handle('auth:status', () => ({ authenticated: false, role: 'admin', mode: 'local' }));
 ipcMain.handle('models:list', () => []);
-ipcMain.handle('sessions:list', () => []);
+// Сессия с ответом агента: нужна для проверки меню «Скачать» у сообщения.
+const TEST_SESSION = {
+  id: 'test-session',
+  title: 'Тестовый диалог',
+  model: 'test-model',
+  messages: [
+    { role: 'user', content: 'Покажи отчёт', display: 'Покажи отчёт' },
+    { role: 'assistant', content: '# Отчёт\n\nТекст ответа с **разметкой**.' },
+  ],
+};
+ipcMain.handle('sessions:list', () => [TEST_SESSION]);
+ipcMain.handle('sessions:get', (_e, id) => (id === TEST_SESSION.id ? TEST_SESSION : null));
+
+// Экспорт: записываем вызовы, файл не пишем.
+const exportCalls = [];
+ipcMain.handle('export:message', (_e, payload) => {
+  exportCalls.push({ channel: 'message', format: payload?.format, markdown: payload?.markdown });
+  return { ok: true, file: 'C:/tmp/test.' + (payload?.format || 'md'), format: payload?.format };
+});
+ipcMain.handle('export:chat', (_e, payload) => {
+  exportCalls.push({ channel: 'chat', format: payload?.format, messages: payload?.messages });
+  return { ok: true, file: 'C:/tmp/chat.' + (payload?.format || 'md'), format: payload?.format };
+});
 ipcMain.handle('permissions:modes', () => ({ current: 'manual', fallback: 'manual', sessionId: null, modes: MODES }));
 ipcMain.handle('permissions:set', (_e, payload) => ({ ok: true, mode: payload?.mode, scope: 'default' }));
 ipcMain.handle('attachments:list', () => []);
@@ -441,6 +463,74 @@ app.whenReady().then(async () => {
     check('блок вложений найден', attachTotal.found === true);
     check('пустой блок вложений скрыт', attachTotal.hiddenWhenEmpty === true, JSON.stringify(attachTotal));
     check('без вложений индикатора нет', attachTotal.totalWhenEmpty === 0, JSON.stringify(attachTotal));
+
+    console.log('\n[13] Меню «Скачать» у ответа и у чата');
+    // Загружаем сессию с ответом агента: так меню рисуется настоящим кодом.
+    const exportUi = await win.webContents.executeJavaScript(`(async () => {
+      const chatBtn = document.querySelector("#export-chat");
+      const sessions = document.querySelectorAll("#sessions .session");
+      if (sessions.length) sessions[0].click();
+      await new Promise((r) => setTimeout(r, 600));
+      const host = document.querySelector("#messages");
+      const menu = host.querySelector(".msg-export");
+      const buttons = menu ? [...menu.querySelectorAll("button")].map((b) => b.textContent.trim()) : [];
+      return {
+        chatBtn: Boolean(chatBtn),
+        chatBtnText: chatBtn ? chatBtn.textContent.trim() : "",
+        sessions: sessions.length,
+        menuFound: Boolean(menu),
+        buttons,
+        headFound: Boolean(host.querySelector(".msg-head")),
+        assistantCount: host.querySelectorAll(".msg-assistant").length,
+      };
+    })()`);
+    check('кнопка «Скачать чат» есть', exportUi.chatBtn === true);
+    check('подпись кнопки чата', exportUi.chatBtnText.includes('Скачать'), exportUi.chatBtnText);
+    check('сессия с ответом загрузилась', exportUi.assistantCount > 0, JSON.stringify(exportUi));
+    check('меню у ответа отрисовано', exportUi.menuFound === true, JSON.stringify(exportUi));
+    check('четыре формата в меню', exportUi.buttons.length === 4, JSON.stringify(exportUi.buttons));
+    check('форматы MD, TXT, DOCX, XLSX', ['MD', 'TXT', 'DOCX', 'XLSX'].every((f) => exportUi.buttons.includes(f)), JSON.stringify(exportUi.buttons));
+    check('имя модели и меню в одной строке', exportUi.headFound === true);
+
+    // Клик по формату должен вызвать IPC с нужным форматом и текстом ответа.
+    const exportClick = await win.webContents.executeJavaScript(`(async () => {
+      const menu = document.querySelector("#messages .msg-export");
+      if (!menu) return { clicked: false };
+      const docx = [...menu.querySelectorAll("button")].find((b) => b.textContent.trim() === "DOCX");
+      if (!docx) return { clicked: false };
+      docx.click();
+      await new Promise((r) => setTimeout(r, 400));
+      return { clicked: true, label: docx.textContent.trim() };
+    })()`);
+    check('клик по DOCX выполнен', exportClick.clicked === true, JSON.stringify(exportClick));
+    check('IPC export:message вызван', exportCalls.some((c) => c.channel === 'message'), JSON.stringify(exportCalls));
+    check('формат передан верно', exportCalls.some((c) => c.channel === 'message' && c.format === 'docx'), JSON.stringify(exportCalls));
+    check('текст ответа передан', exportCalls.some((c) => c.channel === 'message' && String(c.markdown || '').includes('Отчёт')), JSON.stringify(exportCalls));
+
+    // Кнопка «Скачать чат» открывает меню выбора формата.
+    const chatMenu = await win.webContents.executeJavaScript(`(async () => {
+      const btn = document.querySelector("#export-chat");
+      btn.click();
+      await new Promise((r) => setTimeout(r, 300));
+      const picker = document.querySelector(".export-picker");
+      const items = picker ? [...picker.querySelectorAll("button")].map((b) => b.textContent.trim()) : [];
+      return { found: Boolean(picker), items };
+    })()`);
+    check('меню форматов чата открылось', chatMenu.found === true, JSON.stringify(chatMenu));
+    check('четыре варианта в меню чата', chatMenu.items.length === 4, JSON.stringify(chatMenu.items));
+
+    const chatPick = await win.webContents.executeJavaScript(`(async () => {
+      const picker = document.querySelector(".export-picker");
+      const md = picker ? [...picker.querySelectorAll("button")].find((b) => b.textContent.trim() === "Markdown") : null;
+      if (!md) return { picked: false };
+      md.click();
+      await new Promise((r) => setTimeout(r, 400));
+      return { picked: true, pickerGone: !document.querySelector(".export-picker") };
+    })()`);
+    check('формат чата выбран', chatPick.picked === true, JSON.stringify(chatPick));
+    check('меню закрылось после выбора', chatPick.pickerGone === true, JSON.stringify(chatPick));
+    check('IPC export:chat вызван', exportCalls.some((c) => c.channel === 'chat'), JSON.stringify(exportCalls));
+    check('чат передан списком сообщений', exportCalls.some((c) => c.channel === 'chat' && Array.isArray(c.messages) && c.messages.length >= 2), JSON.stringify(exportCalls));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

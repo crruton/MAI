@@ -140,6 +140,10 @@ contextBridge.exposeInMainWorld('mai', {
     export: (payload) => invoke('artifacts:export', payload),
     applyToFile: (payload) => invoke('artifacts:applyToFile', payload),
   },
+  export: {
+    message: (payload) => invoke('export:message', payload),
+    chat: (payload) => invoke('export:chat', payload),
+  },
   boards: {
     open: (board, focus) => invoke('boards:open', { board, focus }),
     load: (payload) => invoke('boards:load', payload),

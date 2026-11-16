@@ -17,6 +17,15 @@
   версию не создаёт. Предел блока — 20 000 символов. См. `docs/MEMORY.md`.
 - Индикатор суммарного размера вложений в композере: число файлов из 20 и общий
   размер. При превышении 500 МБ индикатор подсвечивается. См. бэклог №5.
+- Экспорт ответа агента в MD, TXT, DOCX и XLSX. Меню «Скачать» у сообщения
+  и кнопка «Скачать чат» в боковой панели. DOCX и XLSX собираются без внешних
+  библиотек: ZIP с XML внутри, `zlib` входит в Node. См. ADR 0025 и
+  `electron/lib/export/`.
+- `scripts/make-sums.mjs` и `npm run pack:sums`: пересчёт SHA-256 для всех
+  артефактов `dist/`. Раньше `make-offline.mjs` дописывал только строку архива,
+  и хеши EXE оставались от прошлой сборки.
+- `scripts/test-export.mjs` и `npm run test:export`: 92 проверки экспорта —
+  ZIP, разбор Markdown, DOCX, XLSX, имена файлов, запись на диск.
 - Второй транспорт к шлюзу — OpenAI Responses API (`electron/lib/responses.js`).
   Модели, которым не дан `/v1/chat/completions` (`gpt-5.6-sol`, `gpt-6.1-sol` на
   AgentRouter), работают: цикл агента тот же, ход оборачивается в `/v1/responses`
@@ -67,6 +76,8 @@
 
 ### Changed
 
+- `make-offline.mjs` вызывает `make-sums.mjs` вместо дописывания одной строки
+  в `SHA256SUMS.txt`.
 - `memory_append` добавлен в `WRITE_TOOLS`, `memory_read` — в `READ_TOOLS`
   (`electron/lib/permissions.js`). В режиме «План» запись в память скрыта от модели.
 - В системный промпт добавлен раздел «Память» с описанием обоих инструментов.
