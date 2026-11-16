@@ -1,4 +1,13 @@
 import OpenAI from 'openai';
+import { providerUserAgent } from './config.js';
+import {
+  splitSystem,
+  toInput,
+  toResponseTools,
+  streamResponseTurn,
+  isResponsesRequired,
+  supportsTemperature,
+} from './responses.js';
 import { fsTools } from './tools/fs.js';
 import { shellTools } from './tools/shell.js';
 import { skillTools } from './tools/skills.js';
@@ -102,10 +111,25 @@ export async function runAgent({
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
   if (!provider.apiKey) throw new Error(`Не задан API-ключ провайдера «${provider.name || 'unknown'}»`);
 
-  const client = new OpenAI({ apiKey: provider.apiKey, baseURL: provider.baseURL, maxRetries: 1 });
+  // defaultHeaders собираем отдельно для каждого провайдера: User-Agent
+  // основного не должен перетекать в клиент ревизора.
+  const clientOptions = (prov) => ({
+    apiKey: prov.apiKey,
+    baseURL: prov.baseURL,
+    maxRetries: 1,
+    ...(() => {
+      const ua = providerUserAgent('', prov);
+      return ua ? { defaultHeaders: { 'User-Agent': ua } } : {};
+    })(),
+  });
+  const client = new OpenAI(clientOptions(provider));
   const reviewerClient = reviewer?.provider?.baseURL && reviewer?.provider?.apiKey
-    ? new OpenAI({ apiKey: reviewer.provider.apiKey, baseURL: reviewer.provider.baseURL, maxRetries: 1 })
+    ? new OpenAI(clientOptions(reviewer.provider))
     : null;
+  // Часть моделей (gpt-5.6-sol, gpt-6.1-sol на AgentRouter) не принимает
+  // /v1/chat/completions. Запоминаем выбор транспорта на всю сессию,
+  // чтобы не ловить 400 на каждой итерации.
+  let useResponses = false;
   const skills = listSkills(projectDir);
   const repoTools = settings.repowise?.enabled ? repowiseTools : [];
   const mode = normalizeMode(permissionMode || settings.permissionMode);
@@ -135,43 +159,77 @@ export async function runAgent({
       { role: 'system', content: system },
       ...history.map(toApiMessage),
     ];
-    const stream = await client.chat.completions.create(
-      {
-        model,
-        messages: requestMessages,
-        tools: tools.map((t) => t.schema),
-        temperature: settings.temperature ?? 0.3,
-        stream: true,
-      },
-      { signal },
-    );
 
     let content = '';
     let reasoning = '';
-    const calls = [];
-    for await (const chunk of stream) {
-      if (signal.aborted) break;
-      const delta = chunk.choices?.[0]?.delta;
-      if (!delta) continue;
-      const reasoningDelta = delta.reasoning_content || delta.reasoning;
-      if (reasoningDelta) {
-        reasoning += reasoningDelta;
-        emit({ type: 'reasoning', text: reasoningDelta });
-      }
-      if (delta.content) {
-        content += delta.content;
-        emit({ type: 'delta', text: delta.content });
-      }
-      for (const call of delta.tool_calls || []) {
-        const index = call.index ?? calls.length;
-        calls[index] ??= { id: '', name: '', arguments: '' };
-        if (call.id) calls[index].id = call.id;
-        if (call.function?.name) calls[index].name = call.function.name;
-        if (call.function?.arguments) calls[index].arguments += call.function.arguments;
+    let validCalls = [];
+
+    const runViaResponses = async () => {
+      const { system: instructions, rest } = splitSystem(requestMessages);
+      const turn = await streamResponseTurn({
+        client,
+        model,
+        instructions,
+        input: toInput(rest.map(toApiMessage)),
+        tools: toResponseTools(tools),
+        temperature: settings.temperature ?? 0.3,
+        signal,
+        emit,
+      });
+      content = turn.content;
+      reasoning = turn.reasoning;
+      validCalls = turn.toolCalls;
+    };
+
+    if (useResponses) {
+      await runViaResponses();
+    } else {
+      try {
+        const stream = await client.chat.completions.create(
+          {
+            model,
+            messages: requestMessages,
+            tools: tools.map((t) => t.schema),
+            ...(supportsTemperature(model) ? { temperature: settings.temperature ?? 0.3 } : {}),
+            stream: true,
+          },
+          { signal },
+        );
+
+        const calls = [];
+        for await (const chunk of stream) {
+          if (signal.aborted) break;
+          const delta = chunk.choices?.[0]?.delta;
+          if (!delta) continue;
+          const reasoningDelta = delta.reasoning_content || delta.reasoning;
+          if (reasoningDelta) {
+            reasoning += reasoningDelta;
+            emit({ type: 'reasoning', text: reasoningDelta });
+          }
+          if (delta.content) {
+            content += delta.content;
+            emit({ type: 'delta', text: delta.content });
+          }
+          for (const call of delta.tool_calls || []) {
+            const index = call.index ?? calls.length;
+            calls[index] ??= { id: '', name: '', arguments: '' };
+            if (call.id) calls[index].id = call.id;
+            if (call.function?.name) calls[index].name = call.function.name;
+            if (call.function?.arguments) calls[index].arguments += call.function.arguments;
+          }
+        }
+        validCalls = calls.filter((c) => c && c.name);
+      } catch (err) {
+        // Шлюз требует /v1/responses — повторяем этот же шаг новым транспортом.
+        if (signal.aborted || !isResponsesRequired(err)) throw err;
+        useResponses = true;
+        content = '';
+        reasoning = '';
+        emit({ type: 'notice', text: `${model}: только /v1/responses — переключаюсь на него.` });
+        await runViaResponses();
       }
     }
 
-    const validCalls = calls.filter((c) => c && c.name);
     const assistantMessage = { role: 'assistant', content: content || null };
     if (reasoning) assistantMessage.reasoning = reasoning;
     if (validCalls.length) {

@@ -884,6 +884,9 @@ function handleEvent(event) {
       state.approvalOpen = false;
       toast('Подтверждение истекло — действие отменено', 'err');
       break;
+    case 'notice':
+      toast(event.text || '', 'ok');
+      break;
     case 'review:start':
       toast(`Ревизор ${event.model || ''} проверяет ответ…`);
       break;

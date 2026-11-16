@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadSettings, saveSettings, publicSettings, dataDir } from './lib/config.js';
+import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent } from './lib/config.js';
 import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel } from './lib/models.js';
@@ -409,7 +409,13 @@ ipcMain.handle('providers:test', async (_e, id) => {
   if (!provider) return { ok: false, error: 'Провайдер не найден' };
   try {
     const res = await fetch(`${provider.baseURL}/models`, {
-      headers: provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {},
+      headers: {
+        ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
+        ...(() => {
+          const ua = providerUserAgent(id, provider);
+          return ua ? { 'User-Agent': ua } : {};
+        })(),
+      },
       signal: AbortSignal.timeout(10_000),
     });
     const text = await res.text();

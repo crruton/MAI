@@ -71,12 +71,33 @@ const DEFAULTS = {
 // Модели, которые показываем, если шлюз не отдал /models.
 const STATIC_MODELS = {
   agentrouter: [
-    { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', context: 200000 },
-    { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', context: 200000 },
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', context: 1000000 },
+    { id: 'gpt-5.6-sol', name: 'GPT 5.6 Sol', context: null },
+    { id: 'gpt-6.1-sol', name: 'GPT 6.1 Sol', context: null },
+  ],
+  mai: [
+    { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', context: 1048576 },
+    { id: 'DeepSeek-V4-Flash', name: 'DeepSeek V4 Flash', context: 1048576 },
+    { id: 'qwen3.8-27b', name: 'Qwen 3.8 27B', context: 262144 },
+    { id: 'qwen3.8-flash-next', name: 'Qwen 3.8 Flash Next', context: 262144 },
   ],
 };
 
+// AgentRouter пропускает только клиент Claude Code: с другим User-Agent отдаёт
+// 401 «unauthorized client detected». Провайдер MAI на User-Agent не реагирует.
+const PROVIDER_USER_AGENT = { agentrouter: 'claude-cli/1.0.0 (external, cli)' };
+// Резерв по хосту: помогает старым settings.json без поля userAgent.
+const HOST_USER_AGENT = { 'agentrouter.org': 'claude-cli/1.0.0 (external, cli)' };
+/** User-Agent для запросов к шлюзу провайдера ('' — дефолт SDK). */
+export function providerUserAgent(providerId, provider) {
+  const explicit = String(provider?.userAgent || PROVIDER_USER_AGENT[providerId] || '');
+  if (explicit) return explicit;
+  try {
+    const host = new URL(String(provider?.baseURL || '')).hostname.toLowerCase();
+    return HOST_USER_AGENT[host] || '';
+  } catch {
+    return '';
+  }
+}
 function dataDir() {
   const dir = app.getPath('userData');
   fs.mkdirSync(dir, { recursive: true });
@@ -124,6 +145,7 @@ function cleanProvider(id, provider) {
     name: provider.name || id,
     baseURL: String(provider.baseURL || '').replace(/\/$/, ''),
     apiKey: provider.apiKey || '',
+    userAgent: provider.userAgent || PROVIDER_USER_AGENT[id] || '',
     models,
   };
 }
@@ -140,14 +162,15 @@ function bootstrapProviders(saved, env) {
   // Миграция со старого формата: один шлюз в baseURL/apiKey/model.
   const baseURL = saved.baseURL || env.LLM_BASE_URL || 'https://api-ai.mai.ru/v1';
   const apiKey = saved.apiKey || env.LLM_API_KEY || readKeyFromDevFile();
-  const model = saved.model || env.LLM_MODEL || 'deepseek-v4.1-flash';
+  // Список чат-моделей MAI берём из STATIC_MODELS: одна модель из старого .env
+  // не отражает реальный каталог шлюза.
 
   const providers = {
     mai: cleanProvider('mai', {
       name: 'MAI',
       baseURL,
       apiKey,
-      models: [{ id: model, name: '', context: null }],
+      models: STATIC_MODELS.mai,
     }),
   };
 

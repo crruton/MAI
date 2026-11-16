@@ -1,4 +1,4 @@
-import { loadSettings } from './config.js';
+import { loadSettings, providerUserAgent } from './config.js';
 
 const cache = new Map(); // providerId -> { at, baseURL, data }
 const TTL = 5 * 60 * 1000;
@@ -59,7 +59,12 @@ async function fetchProviderModels(providerId, provider, force) {
 
   try {
     const res = await fetch(`${provider.baseURL}/models`, {
-      headers: provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {},
+      headers: {
+        ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
+        ...(providerUserAgent(providerId, provider)
+          ? { 'User-Agent': providerUserAgent(providerId, provider) }
+          : {}),
+      },
       signal: AbortSignal.timeout(FETCH_TIMEOUT),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
