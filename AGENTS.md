@@ -43,10 +43,11 @@
    Если следующий шаг не назван, агент выбирает его сам по дорожной карте и
    обосновывает выбор одной строкой.
 9. **Ветки: `dev` и `main`, других нет.** Разработка идёт только в `dev`.
-   Прямой push в `main` запрещён: на ветке должна стоять защита GitHub
-   (`restrict_pushes`), а агент push в `main` не делает ни при каких
-   настройках. В `main` попадает только проверенное: перед слиянием в `dev`
-   прогнаны `npm.cmd test`, `npm.cmd run test:responses`,
+   Прямой push в `main` запрещён: локально его блокирует хук
+   `scripts/hooks/pre-push` (`npm.cmd run hooks:install`), на GitHub должна
+   стоять защита ветки (`restrict_pushes`). Агент push в `main` не делает ни
+   при каких настройках. В `main` попадает только проверенное: перед слиянием
+   в `dev` прогнаны `npm.cmd test`, `npm.cmd run test:responses`,
    `npm.cmd run test:export`, `npm.cmd run docs:check` и затронутые сценарии
    (то же гоняет `.github/workflows/ci.yml`). Слияние — через pull request
    `dev` → `main`. Временные ветки по задачам не заводятся; если задача

@@ -1,0 +1,7 @@
+# Git-хуки исполняются sh из Git for Windows и из Unix: переводы строк
+# только LF. Иначе при core.autocrlf=true checkout даёт CRLF и shebang
+# перестаёт работать («bad interpreter»).
+scripts/hooks/** text eol=lf
+
+# Shell-скрипты вне .git тоже запускаются sh.
+*.sh text eol=lf

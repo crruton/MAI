@@ -79,6 +79,9 @@
 - Ветки: только `dev` и `main`. Разработка ведётся в `dev`, в `main` попадает
   только проверенное через pull request. Прямой push в `main` запрещён.
   Правило 9 в `AGENTS.md`.
+  Прямой push в `main` блокирует хук `scripts/hooks/pre-push`;
+  установка — `npm run hooks:install` (копирует хуки в `.git/hooks`,
+  `core.hooksPath` не трогает, чтобы не отключить `post-commit` от repowise).
 - `.github/workflows/ci.yml`: тесты, проверки транспорта и экспорта, ссылки в
   документации и `git diff --check` на push и pull request в `dev` и `main`.
   Раньше автоматических проверок в CI не было — только сборка релиза по тегу
