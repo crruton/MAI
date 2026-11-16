@@ -450,6 +450,61 @@ function hintButton(label, text) {
   });
 }
 
+/**
+ * Меню «Скачать» у сообщения: md, txt, docx, xlsx.
+ *
+ * Содержимое собирает main-процесс (`electron/lib/export`), здесь только
+ * вызов и обратная связь. См. ADR 0025.
+ */
+function exportMenu(markdown) {
+  const menu = el('div', { class: 'msg-export' });
+  const formats = [['md', 'MD'], ['txt', 'TXT'], ['docx', 'DOCX'], ['xlsx', 'XLSX']];
+  for (const [format, label] of formats) {
+    const button = el('button', { type: 'button', text: label, title: `Скачать в ${label}` });
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      const result = await api.export.message({ markdown, format });
+      button.disabled = false;
+      if (result?.ok) {
+        button.classList.add('done');
+        button.textContent = '✓';
+        setTimeout(() => { button.classList.remove('done'); button.textContent = label; }, 1500);
+      } else if (result?.error) {
+        toast(result.error);
+      }
+    });
+    menu.append(button);
+  }
+  return menu;
+}
+
+/**
+ * Спрашивает формат у пользователя через простое меню у кнопки.
+ * Возвращает `md`, `txt`, `docx`, `xlsx` или пустую строку при отмене.
+ */
+function pickExportFormat(anchor) {
+  return new Promise((resolve) => {
+    const menu = el('div', { class: 'export-picker' });
+    const formats = [['md', 'Markdown'], ['txt', 'Текст'], ['docx', 'Word'], ['xlsx', 'Excel']];
+    let settled = false;
+    const close = (value) => {
+      if (settled) return;
+      settled = true;
+      menu.remove();
+      document.removeEventListener('click', onOutside, true);
+      resolve(value);
+    };
+    const onOutside = (event) => {
+      if (!menu.contains(event.target)) close('');
+    };
+    for (const [format, label] of formats) {
+      menu.append(el('button', { type: 'button', text: label, onclick: () => close(format) }));
+    }
+    anchor.after(menu);
+    setTimeout(() => document.addEventListener('click', onOutside, true), 0);
+  });
+}
+
 function messageNode(message) {
   if (message.role === 'user') {
     return el('div', { class: 'msg msg-user' }, [
@@ -460,9 +515,11 @@ function messageNode(message) {
     return runtimeNode(message.name || 'Рантайм', message.content || '', message.code, false);
   }
   if (message.role === 'assistant') {
-    const body = el('div', { class: 'msg-body' }, [
+    const head = el('div', { class: 'msg-head' }, [
       el('div', { class: 'msg-name', text: `MAI · ${modelLabel(state.model)}` }),
     ]);
+    if (message.content) head.append(exportMenu(message.content));
+    const body = el('div', { class: 'msg-body' }, [head]);
     if (message.reasoning) body.append(thinkingBlock(message.reasoning));
     if (message.content) body.append(el('div', { class: 'md', html: renderMarkdown(message.content) }));
     if (message.tool_calls?.length) {
@@ -2809,6 +2866,23 @@ async function init() {
   api.chat.onEvent(handleEvent);
 
   $('#new-chat').addEventListener('click', newChat);
+
+// Экспорт всего диалога: меню форматов открывается по клику.
+$('#export-chat').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const messages = state.messages.filter((m) => m.role === 'user' || m.role === 'assistant');
+  if (!messages.length) {
+    toast('В диалоге пока нет сообщений');
+    return;
+  }
+  const format = await pickExportFormat(button);
+  if (!format) return;
+  button.disabled = true;
+  const result = await api.export.chat({ messages, format, title: 'Диалог MAI Code' });
+  button.disabled = false;
+  if (result?.ok) toast(`Сохранено: ${result.file}`);
+  else if (result?.error) toast(result.error);
+});
   $('#project-btn').addEventListener('click', pickProject);
   $('#new-project-btn').addEventListener('click', newProjectModal);
   $('#settings-btn').addEventListener('click', openSettings);

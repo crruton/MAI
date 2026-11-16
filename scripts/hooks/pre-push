@@ -1,0 +1,24 @@
+#!/bin/sh
+# Запрет прямого push в main. Разработка ведётся в dev, в main — только
+# слияние через pull request. См. AGENTS.md, правило 9.
+#
+# Установка: npm run hooks:install
+# Обход осознанного случая: git push --no-verify (не рекомендуется).
+
+blocked=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main)
+      blocked=1
+      ;;
+  esac
+done
+
+if [ "$blocked" -eq 1 ]; then
+  echo "push в main запрещён." >&2
+  echo "Разработка ведётся в dev. В main — только pull request dev -> main." >&2
+  echo "Обход при осознанной необходимости: git push --no-verify" >&2
+  exit 1
+fi
+
+exit 0

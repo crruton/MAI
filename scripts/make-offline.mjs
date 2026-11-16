@@ -173,14 +173,20 @@ if (seven) {
 fs.rmSync(archiveTar, { force: true });
 
 const hash = crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex');
-const sums = path.join(root, 'dist', 'SHA256SUMS.txt');
 const fileName = path.basename(archive);
-const previous = fs.existsSync(sums)
-  ? fs.readFileSync(sums, 'utf8').split(/\r?\n/).filter((row) => row && !row.endsWith(`  ${fileName}`))
-  : [];
-fs.writeFileSync(sums, [...previous, `${hash}  ${fileName}`].join('\n') + '\n', 'utf8');
+
+// Суммы считает отдельный скрипт: он пересчитывает все артефакты dist/,
+// включая EXE от electron-builder. Раньше здесь дописывалась одна строка,
+// и хеши EXE оставались от прошлой сборки.
+const sumsScript = path.join(root, 'scripts', 'make-sums.mjs');
+const sums = spawnSync(process.execPath, [sumsScript], { encoding: 'utf8' });
+if (sums.error || sums.status !== 0) {
+  console.error(sums.error?.message || sums.stderr || `make-sums завершился с кодом ${sums.status}`);
+  process.exit(1);
+}
+if (sums.stdout.trim()) console.log(sums.stdout.trim());
 
 const size = (fs.statSync(archive).size / 1024 / 1024).toFixed(1);
 log(`готово: ${archive} (${size} МБ)`);
 log(`sha256: ${hash}`);
-log(`контрольные суммы: ${sums}`);
+log(`контрольные суммы: ${path.join(root, 'dist', 'SHA256SUMS.txt')}`);

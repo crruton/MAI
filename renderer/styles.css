@@ -211,6 +211,34 @@ button { cursor: pointer; }
 .msg-body { flex: 1; min-width: 0; }
 .msg-name { font-size: 12px; color: var(--text-faint); margin-bottom: 4px; }
 
+/* Меню «Скачать» у сообщения: четыре формата, появляется при наведении. */
+.msg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.msg-head .msg-name { margin-bottom: 0; }
+.msg-export { display: flex; gap: 4px; margin-left: auto; opacity: 0; transition: opacity .12s; }
+.msg:hover .msg-export, .msg-export:focus-within { opacity: 1; }
+.msg-export button {
+  font: inherit; font-size: 11px; line-height: 1; padding: 3px 6px; cursor: pointer;
+  color: var(--text-faint); background: transparent;
+  border: 1px solid var(--border); border-radius: 5px;
+}
+.msg-export button:hover { color: var(--text); border-color: var(--accent); }
+.msg-export button:disabled { opacity: .5; cursor: default; }
+.msg-export .done { color: var(--ok, #3fb950); border-color: var(--ok, #3fb950); }
+
+/* Меню выбора формата у кнопки «Скачать чат». */
+.export-picker {
+  position: absolute; z-index: 40; display: flex; flex-direction: column; gap: 2px;
+  padding: 4px; margin-top: 4px; min-width: 130px;
+  background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+}
+.export-picker button {
+  font: inherit; font-size: 12px; text-align: left; padding: 6px 10px; cursor: pointer;
+  color: var(--text); background: transparent; border: 0; border-radius: 5px;
+}
+.export-picker button:hover { background: var(--bg-elev); }
+.export-chat { margin-top: 6px; width: 100%; }
+
 .md { color: var(--text); overflow-wrap: anywhere; }
 .md p { margin: 0 0 10px; }
 .md p:last-child { margin-bottom: 0; }
