@@ -349,7 +349,8 @@ button { cursor: pointer; }
 }
 .mode-select:hover { color: var(--text); border-color: var(--accent); }
 .mode-select:focus { outline: none; border-color: var(--accent); }
-.mode-select.mode-auto { color: #34d399; border-color: rgba(52, 211, 153, 0.45); }
+.mode-select.mode-bypass { color: var(--amber); border-color: rgba(251, 191, 36, 0.55); }
+.mode-select.mode-dontask { color: var(--text-dim); border-style: dashed; }
 .mode-select option { background: var(--bg-elev-2); color: var(--text); }
 .composer.dragover { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.18); }
 .attach {
@@ -447,6 +448,41 @@ button { cursor: pointer; }
   padding: 10px 12px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap;
   max-height: 220px; overflow: auto; color: var(--text-dim);
 }
+
+/* ---------- запрос разрешения (ADR 0027) ---------- */
+.approve-modal .modal-foot { flex-direction: column; align-items: stretch; gap: 8px; }
+.approve-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.risk-badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); }
+.risk-low { color: var(--green); border-color: rgba(52, 211, 153, 0.45); }
+.risk-medium { color: var(--amber); border-color: rgba(251, 191, 36, 0.45); }
+.risk-high { color: var(--red); border-color: rgba(248, 113, 113, 0.55); background: rgba(248, 113, 113, 0.08); }
+.approve-class { font-size: 12px; color: var(--text-dim); }
+.approve-feedback {
+  width: 100%; margin-top: 10px; resize: vertical; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 13px;
+}
+.approve-details pre { max-height: 180px; overflow: auto; font-size: 12px; }
+.approve-option { display: flex; align-items: center; gap: 10px; justify-content: flex-start; text-align: left; width: 100%; }
+.approve-option.recommended { box-shadow: 0 0 0 2px var(--accent-soft), 0 0 0 1px var(--accent) inset; }
+.approve-key {
+  display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center;
+  border-radius: 5px; border: 1px solid currentColor; font-size: 11px; opacity: 0.8; flex: none;
+}
+.recommended-badge {
+  margin-left: auto; font-size: 11px; padding: 1px 8px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent-2); border: 1px solid var(--accent);
+}
+.approve-always { display: flex; gap: 8px; align-items: stretch; }
+.approve-always .approve-option { flex: 1; }
+.approve-scope { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0 8px; }
+
+/* ---------- ревизор ---------- */
+.msg-review { display: flex; justify-content: center; }
+.review-card {
+  max-width: 760px; width: 100%; border: 1px dashed rgba(251, 191, 36, 0.5); border-radius: var(--radius);
+  padding: 10px 14px; background: rgba(251, 191, 36, 0.05);
+}
+.review-head { font-size: 12px; color: var(--amber); margin-bottom: 4px; }
 
 /* ---------- toasts ---------- */
 

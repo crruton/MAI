@@ -15,7 +15,9 @@ import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
 import { listSkills, readAgents, readMemory } from './skills.js';
 import { reviewAnswer } from './reviewer.js';
-import { hiddenToolsForMode, modePrompt, normalizeMode } from './permissions.js';
+import { modePrompt } from './permissions.js';
+import { effectiveMode, mergeRules } from './policy.js';
+import { runToolCall, toolEntry } from './tool-runner.js';
 
 const BASE_PROMPT = `Ты — MAI Code, агент для программирования на рабочей машине пользователя.
 
@@ -24,7 +26,8 @@ const BASE_PROMPT = `Ты — MAI Code, агент для программиро
 - Прежде чем менять код, посмотри файлы инструментами read_file / list_files / grep.
 - Правки делай точечно через edit_file; whole-file write_file — только для новых файлов.
 - Не выдумывай содержимое файлов: если не читал — прочитай.
-- Команды оболочки запускай только когда это действительно нужно; пользователь подтверждает каждую.
+- Команды оболочки запускай только когда это действительно нужно. Что требует подтверждения, описано в разделе «Режим».
+- Если вызов отклонён, не повторяй его тем же способом: учти причину и пояснение пользователя.
 - После изменений проверяй результат (тесты, сборка, линтер), если это возможно.
 - Не коммить в git и не удалять данные без явной просьбы.`;
 
@@ -63,24 +66,57 @@ function systemPrompt({ projectDir, skills, mcpStatus, mode }) {
   return parts.join('\n');
 }
 
-/** Оставляет только поля, допустимые в запросе к провайдеру. */
-function toApiMessage(message) {
-  const out = { role: message.role };
+const API_ROLES = new Set(['system', 'user', 'assistant', 'tool']);
+
+/**
+ * Приводит сообщение сессии к формату провайдера.
+ * В сессии бывают роли, которых нет у провайдера: `runtime` (вывод внешнего
+ * CLI) и `review` (замечание ревизора). Без преобразования шлюз отвечает 400.
+ */
+export function toApiMessage(message) {
+  if (message.role === 'runtime') {
+    const code = message.code === undefined || message.code === null ? '' : `, код ${message.code}`;
+    return {
+      role: 'assistant',
+      content: `[Ответ рантайма ${message.name || message.runtimeId || 'CLI'}${code}]\n${message.content || ''}`,
+    };
+  }
+  if (message.role === 'review') {
+    return { role: 'user', content: String(message.content || '') };
+  }
+  const out = { role: API_ROLES.has(message.role) ? message.role : 'user' };
   if (message.content !== undefined) out.content = message.content;
-  if (message.name) out.name = message.name;
+  if (message.name && out.role === 'tool') out.name = message.name;
   if (message.tool_call_id) out.tool_call_id = message.tool_call_id;
   if (message.tool_calls) out.tool_calls = message.tool_calls;
   return out;
 }
 
-function trimMessages(messages, limit = 320_000) {
-  let total = JSON.stringify(messages).length;
-  const copy = [...messages];
-  while (total > limit && copy.length > 6) {
-    const nextUser = copy.findIndex((m, i) => i > 0 && m.role === 'user');
-    const cut = nextUser > 0 ? nextUser : 2;
-    copy.splice(0, cut);
-    total = JSON.stringify(copy).length;
+const TRIM_NOTE = { role: 'user', content: '[Начало диалога обрезано из-за размера контекста.]' };
+
+/**
+ * Обрезает историю с начала, не разрывая пары assistant.tool_calls → tool.
+ * Режет только по границе хода: перед сообщением пользователя или перед
+ * ответом ассистента, у которого нет висящих результатов инструментов.
+ */
+export function trimMessages(messages, limit = 320_000) {
+  const size = (list) => JSON.stringify(list).length;
+  let copy = [...messages];
+  if (size(copy) <= limit) return copy;
+  const boundaries = [];
+  for (let i = 1; i < copy.length; i += 1) {
+    const role = copy[i].role;
+    if (role === 'user' || role === 'runtime' || (role === 'assistant' && copy[i - 1].role !== 'assistant')) {
+      boundaries.push(i);
+    }
+  }
+  for (const cut of boundaries) {
+    if (copy.length - cut < 4) break;
+    const candidate = copy.slice(cut);
+    if (candidate[0].role === 'tool') continue;
+    const next = candidate[0].role === 'user' ? candidate : [TRIM_NOTE, ...candidate];
+    copy = next;
+    if (size(copy) <= limit) break;
   }
   return copy;
 }
@@ -107,6 +143,10 @@ export async function runAgent({
   transforms = [],
   reviewer = null,
   permissionMode = '',
+  policy = null,
+  audit = null,
+  onHistory = null,
+  clientFactory = null,
 }) {
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
   if (!provider.apiKey) throw new Error(`Не задан API-ключ провайдера «${provider.name || 'unknown'}»`);
@@ -122,9 +162,10 @@ export async function runAgent({
       return ua ? { defaultHeaders: { 'User-Agent': ua } } : {};
     })(),
   });
-  const client = new OpenAI(clientOptions(provider));
+  const makeClient = clientFactory || ((options) => new OpenAI(options));
+  const client = makeClient(clientOptions(provider));
   const reviewerClient = reviewer?.provider?.baseURL && reviewer?.provider?.apiKey
-    ? new OpenAI(clientOptions(reviewer.provider))
+    ? makeClient(clientOptions(reviewer.provider))
     : null;
   // Часть моделей (gpt-5.6-sol, gpt-6.1-sol на AgentRouter) не принимает
   // /v1/chat/completions. Запоминаем выбор транспорта на всю сессию,
@@ -132,21 +173,57 @@ export async function runAgent({
   let useResponses = false;
   const skills = listSkills(projectDir);
   const repoTools = settings.repowise?.enabled ? repowiseTools : [];
-  const mode = normalizeMode(permissionMode || settings.permissionMode);
-  const hidden = hiddenToolsForMode(mode);
-  const tools = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...pluginTools, ...mcp.toolSchemas()]
-    // В режиме «План» инструменты записи не показываем: модель не должна пытаться.
-    .filter((t) => !hidden.has(t.schema?.function?.name));
 
-  const system = systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode });
-  let history = trimMessages([...messages]);
+  // Режим и правила читаются на каждый вызов: переключение в интерфейсе
+  // действует сразу, в том числе на список инструментов следующей итерации.
+  const role = policy?.role || 'admin';
+  const currentMode = () => effectiveMode(policy?.getMode ? policy.getMode() : permissionMode || settings.permissionMode, role);
+  const policyCtx = {
+    role,
+    getMode: currentMode,
+    getRules: () => (policy?.getRules ? policy.getRules() : mergeRules(settings.permissions)),
+  };
+
+  const builtin = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools].map((t) =>
+    toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck }),
+  );
+  const builtinNames = new Set(builtin.map((t) => t.name));
+  const fromPlugins = pluginTools
+    // Плагин не может подменить встроенный инструмент: иначе он унаследует его класс.
+    .filter((t) => !builtinNames.has(t.schema?.function?.name))
+    .map((t) => toolEntry(t.schema, { source: 'plugin', kind: t.kind, run: t.run, precheck: t.precheck }));
+  const buildTools = (mode) => {
+    const fromMcp = mcp.toolSchemas().map((schema) =>
+      toolEntry(schema, {
+        source: 'mcp',
+        annotations: schema.annotations,
+        run: (_ctx, args) => mcp.call(schema.function.name, args),
+      }),
+    );
+    const all = [...builtin, ...fromPlugins, ...fromMcp];
+    // В «Плане» модель видит только чтение: ей незачем пытаться писать.
+    return mode === 'plan' ? all.filter((t) => t.cls === 'read') : all;
+  };
+
+  // Полная история сохраняется в сессию; обрезается только копия для запроса.
+  let history = [...messages];
   const userTask = [...messages].reverse().find((m) => m.role === 'user')?.content || '';
   const maxIterations = settings.maxIterations || 30;
   const maxReviewRounds = Number(reviewer?.maxRounds ?? 2);
   let reviewRound = 0;
+  const snapshot = () => {
+    try {
+      onHistory?.([...history]);
+    } catch {
+      /* сохранение не должно ломать прогон */
+    }
+  };
 
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
     if (signal.aborted) break;
+    const mode = currentMode();
+    const tools = buildTools(mode);
+    const system = systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode });
     for (const transform of transforms) {
       try {
         history = transform(history) || history;
@@ -157,7 +234,7 @@ export async function runAgent({
 
     const requestMessages = [
       { role: 'system', content: system },
-      ...history.map(toApiMessage),
+      ...trimMessages(history).map(toApiMessage),
     ];
 
     let content = '';
@@ -230,7 +307,7 @@ export async function runAgent({
       }
     }
 
-    const assistantMessage = { role: 'assistant', content: content || null };
+    const assistantMessage = { role: 'assistant', content: content || null, model };
     if (reasoning) assistantMessage.reasoning = reasoning;
     if (validCalls.length) {
       assistantMessage.tool_calls = validCalls.map((c) => ({
@@ -240,6 +317,7 @@ export async function runAgent({
       }));
     }
     history.push(assistantMessage);
+    snapshot();
     emit({ type: 'assistant', message: assistantMessage });
 
     if (!validCalls.length) {
@@ -269,9 +347,11 @@ export async function runAgent({
         emit({ type: 'review:result', round: reviewRound, ...verdict });
         if (verdict.verdict === 'revise') {
           history.push({
-            role: 'user',
+            role: 'review',
+            round: reviewRound,
             content: `[Ревизор, раунд ${reviewRound}] ${verdict.reason}\n\nЧто исправить:\n${verdict.instructions || 'Уточни ответ и проверь результат.'}`,
           });
+          snapshot();
           continue;
         }
       }
@@ -279,31 +359,35 @@ export async function runAgent({
       return history;
     }
 
+    const toolCtx = {
+      projectDir,
+      allowOutsideProject: settings.allowOutsideProject,
+      guardrails: settings.guardrails,
+      repowise: settings.repowise,
+    };
     for (const call of assistantMessage.tool_calls) {
-      if (signal.aborted) break;
       const args = parseArgs(call.function.arguments);
-      emit({ type: 'tool_call', id: call.id, name: call.function.name, args });
-      let result;
-      let ok = true;
-      try {
-        if (call.function.name.startsWith('mcp__')) {
-          result = await mcp.call(call.function.name, args);
+      let outcome;
+      if (signal.aborted) {
+        // Ответ на каждый tool_call обязателен, иначе следующий запрос получит 400.
+        outcome = { ok: false, content: 'Остановлено пользователем до выполнения.' };
+      } else {
+        emit({ type: 'tool_call', id: call.id, name: call.function.name, args });
+        const entry = tools.find((t) => t.name === call.function.name);
+        if (!entry) {
+          outcome = { ok: false, content: `Ошибка: инструмент ${call.function.name} недоступен в текущем режиме или не существует` };
         } else {
-          const tool = tools.find((t) => t.schema.function.name === call.function.name);
-          if (!tool) throw new Error(`Неизвестный инструмент: ${call.function.name}`);
-          result = await tool.run({ projectDir, approve, allowOutsideProject: settings.allowOutsideProject, guardrails: settings.guardrails, repowise: settings.repowise }, args);
+          outcome = await runToolCall({ entry, args, ctx: toolCtx, policy: policyCtx, approve, audit });
         }
-      } catch (err) {
-        ok = false;
-        result = `Ошибка: ${err?.message || String(err)}`;
       }
-      emit({ type: 'tool_result', id: call.id, name: call.function.name, content: String(result), ok });
+      emit({ type: 'tool_result', id: call.id, name: call.function.name, content: outcome.content, ok: outcome.ok });
       history.push({
         role: 'tool',
         tool_call_id: call.id,
         name: call.function.name,
-        content: String(result),
+        content: outcome.content,
       });
+      snapshot();
     }
   }
 

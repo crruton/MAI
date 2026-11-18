@@ -33,11 +33,18 @@ app.disableHardwareAcceleration();
 
 // Заглушки: фронтенд не должен падать из-за отсутствия бэкенда.
 const MODES = [
-  { id: 'auto', label: 'Авто', description: 'Агент сам решает' },
   { id: 'manual', label: 'Вручную', description: 'Спрашивать всегда' },
   { id: 'acceptEdits', label: 'Принимать правки', description: 'Правки без вопросов' },
   { id: 'plan', label: 'План', description: 'Только чтение и план' },
+  { id: 'dontAsk', label: 'Только разрешённое', description: 'Только по правилам' },
+  { id: 'bypass', label: 'Без вопросов', description: 'Всё без подтверждения', warning: true, adminOnly: true, disabled: true },
 ];
+// Ответы на запросы разрешения из окна (раздел [14]).
+const approvals = [];
+ipcMain.handle('chat:approval', (_e, payload) => {
+  approvals.push(payload);
+  return true;
+});
 
 ipcMain.handle('settings:get', () => ({
   projectDir: root,
@@ -163,12 +170,16 @@ app.whenReady().then(async () => {
     check('visibility не hidden', info.visibility !== 'hidden', info.visibility);
     check('opacity не 0', info.opacity !== '0', info.opacity);
     check('селектор в пределах окна', info.inViewport === true, JSON.stringify(info));
-    check('опций 4', info.options?.length === 4, JSON.stringify(info.options));
+    check('опций 5', info.options?.length === 5, JSON.stringify(info.options));
     check(
       'подписи режимов на месте',
-      info.options?.map((o) => o.text).join(',') === 'Авто,Вручную,Принимать правки,План',
+      info.options?.map((o) => o.text).join(',') === 'Вручную,Принимать правки,План,Только разрешённое,⚠ Без вопросов',
       JSON.stringify(info.options),
     );
+    const bypassDisabled = await win.webContents.executeJavaScript(
+      `document.querySelector('#mode-select option[value="bypass"]')?.disabled === true`,
+    );
+    check('«Без вопросов» недоступен, если main пометил disabled', bypassDisabled === true);
     check('выбран manual', info.value === 'manual', info.value);
 
     console.log('\n[1b] Контраст раскрытого списка');
@@ -531,6 +542,70 @@ app.whenReady().then(async () => {
     check('меню закрылось после выбора', chatPick.pickerGone === true, JSON.stringify(chatPick));
     check('IPC export:chat вызван', exportCalls.some((c) => c.channel === 'chat'), JSON.stringify(exportCalls));
     check('чат передан списком сообщений', exportCalls.some((c) => c.channel === 'chat' && Array.isArray(c.messages) && c.messages.length >= 2), JSON.stringify(exportCalls));
+
+    console.log('\n[14] Запрос разрешения: рекомендованный ответ и правила (ADR 0027)');
+    win.webContents.send('chat:event', {
+      type: 'approval',
+      id: 'appr-1',
+      tool: 'run_shell',
+      name: 'run_shell',
+      cls: 'exec',
+      summary: 'git push origin dev',
+      risk: 'high',
+      why: 'необратимая операция git',
+      recommended: 'deny',
+      suggestions: ['run_shell(git push*)'],
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const modal1 = await win.webContents.executeJavaScript(`(() => {
+      const m = document.querySelector('.approve-modal');
+      if (!m) return { found: false };
+      const rec = m.querySelector('.approve-option.recommended');
+      return {
+        found: true,
+        recommended: rec?.textContent || '',
+        focused: document.activeElement === rec,
+        risk: m.querySelector('.risk-badge')?.className || '',
+        options: [...m.querySelectorAll('.approve-option')].map((b) => b.textContent),
+      };
+    })()`);
+    check('модалка запроса открыта', modal1.found === true, JSON.stringify(modal1));
+    check('высокий риск: рекомендовано «Нет»', /Нет/.test(modal1.recommended) && /Рекомендуется/.test(modal1.recommended), JSON.stringify(modal1));
+    check('рекомендованная кнопка в фокусе', modal1.focused === true, JSON.stringify(modal1));
+    check('бейдж высокого риска', /risk-high/.test(modal1.risk), modal1.risk);
+    check('три варианта ответа', modal1.options.length === 3, JSON.stringify(modal1.options));
+    check('вариант 2 показывает правило', modal1.options.some((t) => t.includes('run_shell(git push*)')), JSON.stringify(modal1.options));
+
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 300));
+    const a1 = approvals.find((a) => a.id === 'appr-1');
+    check('клавиша 2: разрешено с правилом на чат', a1?.allow === true && a1?.remember === 'session' && a1?.rules?.[0] === 'run_shell(git push*)', JSON.stringify(a1));
+
+    win.webContents.send('chat:event', {
+      type: 'approval',
+      id: 'appr-2',
+      tool: 'write_file',
+      cls: 'write',
+      summary: 'Записать файл src/a.js',
+      risk: 'medium',
+      recommended: 'allow',
+      suggestions: [],
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const modal2 = await win.webContents.executeJavaScript(`(() => {
+      const m = document.querySelector('.approve-modal');
+      const rec = m?.querySelector('.approve-option.recommended');
+      const area = m?.querySelector('.approve-feedback');
+      if (area) area.value = 'сначала прочитай файл';
+      return { recommended: rec?.textContent || '', options: m ? m.querySelectorAll('.approve-option').length : 0 };
+    })()`);
+    check('средний риск: рекомендовано «Да»', /^1Да/.test(modal2.recommended), JSON.stringify(modal2));
+    check('без подсказки правила — два варианта', modal2.options === 2, JSON.stringify(modal2));
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 300));
+    const a2 = approvals.find((a) => a.id === 'appr-2');
+    check('клавиша 3: отказ с пояснением', a2?.allow === false && a2?.feedback === 'сначала прочитай файл', JSON.stringify(a2));
+    check('модалка закрыта', await win.webContents.executeJavaScript(`!document.querySelector('.approve-modal')`));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

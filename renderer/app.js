@@ -309,11 +309,13 @@ async function pickAttachments() {
 
 /* ---------- режимы разрешений ---------- */
 
+// Запасной список на случай, если IPC недоступен. Источник правды — MODE_INFO в main.
 const MODE_FALLBACK = [
-  { id: 'auto', label: 'Авто', description: 'Агент сам решает, что можно делать. Опасные команды блокируют guardrails.' },
-  { id: 'manual', label: 'Вручную', description: 'Спрашивать перед каждой правкой файла и каждой командой.' },
-  { id: 'acceptEdits', label: 'Принимать правки', description: 'Правки файлов применяются без вопросов, команды требуют подтверждения.' },
-  { id: 'plan', label: 'План', description: 'Только чтение и план с альтернативами. Файлы не меняются.' },
+  { id: 'manual', label: 'Вручную', description: 'Спрашивать перед каждой правкой, командой и внешним инструментом.' },
+  { id: 'acceptEdits', label: 'Принимать правки', description: 'Правки файлов — без вопросов, команды и внешние инструменты — с подтверждением.' },
+  { id: 'plan', label: 'План', description: 'Только чтение и план с альтернативами.' },
+  { id: 'dontAsk', label: 'Только разрешённое', description: 'Только то, что разрешено правилами; остальное отклоняется.' },
+  { id: 'bypass', label: 'Без вопросов', description: 'Всё без подтверждения, кроме guardrails и правил deny.', warning: true, adminOnly: true },
 ];
 
 async function renderModeSelect() {
@@ -322,13 +324,21 @@ async function renderModeSelect() {
   const modes = state.permissionModes.length ? state.permissionModes : MODE_FALLBACK;
   select.replaceChildren();
   for (const mode of modes) {
-    select.append(el('option', { value: mode.id, text: mode.label, title: mode.description || '' }));
+    select.append(
+      el('option', {
+        value: mode.id,
+        text: mode.warning ? `⚠ ${mode.label}` : mode.label,
+        title: mode.disabled ? `${mode.description} Недоступно для вашей роли.` : mode.description || '',
+        disabled: mode.disabled ? 'disabled' : null,
+      }),
+    );
   }
   select.value = state.permissionMode;
   const info = modes.find((m) => m.id === state.permissionMode);
   select.title = info?.description || 'Режим разрешений';
   select.classList.toggle('mode-plan', state.permissionMode === 'plan');
-  select.classList.toggle('mode-auto', state.permissionMode === 'auto');
+  select.classList.toggle('mode-bypass', state.permissionMode === 'bypass');
+  select.classList.toggle('mode-dontask', state.permissionMode === 'dontAsk');
 }
 
 /** Перечитывает режим для текущей сессии (или значение по умолчанию). */
@@ -345,7 +355,17 @@ async function refreshPermissionMode() {
 }
 
 async function setPermissionMode(mode) {
+  const info0 = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).find((m) => m.id === mode);
+  if (info0?.warning && !window.confirm(`${info0.label}: ${info0.description}\n\nВключить?`)) {
+    renderModeSelect();
+    return;
+  }
   const result = await api.permissions.set(mode, state.sessionId);
+  if (result && result.ok === false) {
+    toast(result.error || 'Режим не изменён', 'err');
+    await refreshPermissionMode();
+    return;
+  }
   state.permissionMode = result?.mode || mode;
   renderModeSelect();
   const info = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).find(
@@ -514,9 +534,18 @@ function messageNode(message) {
   if (message.role === 'runtime') {
     return runtimeNode(message.name || 'Рантайм', message.content || '', message.code, false);
   }
+  if (message.role === 'review') {
+    // Замечание ревизора — не реплика пользователя (ADR 0027, A3.4).
+    return el('div', { class: 'msg msg-review' }, [
+      el('div', { class: 'review-card' }, [
+        el('div', { class: 'review-head', text: `Ревизор · раунд ${message.round || ''} · на доработку` }),
+        el('div', { class: 'md', html: renderMarkdown(String(message.content || '').replace(/^\[Ревизор, раунд \d+\]\s*/, '')) }),
+      ]),
+    ]);
+  }
   if (message.role === 'assistant') {
     const head = el('div', { class: 'msg-head' }, [
-      el('div', { class: 'msg-name', text: `MAI · ${modelLabel(state.model)}` }),
+      el('div', { class: 'msg-name', text: `MAI · ${modelLabel(message.model || state.model)}` }),
     ]);
     if (message.content) head.append(exportMenu(message.content));
     const body = el('div', { class: 'msg-body' }, [head]);
@@ -1017,54 +1046,129 @@ function handleEvent(event) {
   }
 }
 
+const RISK_LABEL = { low: 'Низкий риск', medium: 'Средний риск', high: 'Высокий риск' };
+const CLASS_LABEL = {
+  read: 'чтение',
+  write: 'правка файла',
+  exec: 'команда',
+  memory: 'память',
+  network: 'сеть',
+  external: 'внешний инструмент',
+};
+
+/**
+ * Запрос разрешения (ADR 0027). Три ответа, как в Claude Code:
+ * 1 — да; 2 — да и не спрашивать (правило на чат или всегда); 3 — нет,
+ * с пояснением для агента. Рекомендованный ответ подсвечен и получает фокус.
+ */
 function askApproval(event) {
   // Второе подтверждение не должно открываться поверх первого: нижняя модалка
   // осталась бы без ответа, и её промис не резолвился бы никогда.
   if (state.approvalOpen) {
-    api.chat.approve(event.id, false);
+    api.chat.approve(event.id, false, { feedback: 'Предыдущий запрос ещё открыт.' });
     toast('Предыдущее подтверждение ещё открыто — новое действие отклонено', 'err');
     return;
   }
   state.approvalOpen = true;
   let answered = false;
-  const answer = (allow) => {
+  const answer = (allow, extra = {}) => {
     if (answered) return;
     answered = true;
     state.approvalOpen = false;
-    api.chat.approve(event.id, allow);
+    document.removeEventListener('keydown', onKey, true);
+    api.chat.approve(event.id, allow, extra);
   };
+
+  const recommended = event.recommended === 'deny' ? 'deny' : 'allow';
+  const suggestions = Array.isArray(event.suggestions) ? event.suggestions : [];
+  const feedback = el('textarea', {
+    class: 'approve-feedback',
+    rows: '2',
+    placeholder: 'Что сделать иначе (необязательно, уйдёт агенту при отказе)',
+  });
+  const scope = el('select', { class: 'approve-scope' }, [
+    el('option', { value: 'session', text: 'в этом чате' }),
+    el('option', { value: 'global', text: 'всегда (все чаты)' }),
+  ]);
+
+  const risk = event.risk || 'medium';
   const body = [
-    el('p', { text: 'Агент просит разрешение на действие:' }),
-    el('div', { class: 'approve-args', text: event.summary }),
-    el('p', { class: 'hint-text', text: `Инструмент: ${event.name}` }),
+    el('div', { class: 'approve-meta' }, [
+      el('span', { class: `risk-badge risk-${risk}`, text: RISK_LABEL[risk] || risk }),
+      el('span', { class: 'approve-class', text: CLASS_LABEL[event.cls] || event.cls || '' }),
+      el('span', { class: 'hint-text', text: event.tool || event.name || '' }),
+    ]),
+    el('div', { class: 'approve-args', text: event.summary || '' }),
+    event.why ? el('p', { class: 'hint-text', text: `Почему спрашиваем: ${event.why}.` }) : null,
+    event.rule ? el('p', { class: 'hint-text', text: `Сработало правило ask: ${event.rule}` }) : null,
+    event.args && event.cls === 'external'
+      ? el('details', { class: 'approve-details' }, [el('summary', { text: 'Аргументы' }), el('pre', { text: event.args })])
+      : null,
+    feedback,
   ];
+
+  const option = (key, label, kind, onclick, extraClass = '') =>
+    el(
+      'button',
+      {
+        class: `btn approve-option${kind === recommended ? ' primary recommended' : ''}${extraClass}`,
+        type: 'button',
+        'data-key': key,
+        onclick,
+      },
+      [
+        el('span', { class: 'approve-key', text: key }),
+        el('span', { text: label }),
+        kind === recommended ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+      ],
+    );
+
+  const close = () => modal.close();
+  const allowOnce = () => {
+    answer(true);
+    close();
+  };
+  const allowAlways = () => {
+    answer(true, { remember: scope.value, rules: suggestions });
+    close();
+  };
+  const deny = () => {
+    answer(false, { feedback: feedback.value });
+    close();
+  };
+
+  const footer = [
+    option('1', 'Да', 'allow', allowOnce),
+    suggestions.length
+      ? el('div', { class: 'approve-always' }, [
+          option('2', `Да, и не спрашивать: ${suggestions.join(', ')}`, 'always', allowAlways),
+          scope,
+        ])
+      : null,
+    option('3', 'Нет', 'deny', deny),
+  ].filter(Boolean);
+
   const modal = openModal({
-    title: 'Подтверждение',
+    title: 'Разрешить действие?',
     body,
     small: true,
     // Закрытие крестиком или кликом по фону — это отказ, а не «пусть висит».
-    onClose: () => answer(false),
-    footer: [
-      el('button', {
-        class: 'btn',
-        type: 'button',
-        text: 'Отклонить',
-        onclick: () => {
-          answer(false);
-          modal.close();
-        },
-      }),
-      el('button', {
-        class: 'btn primary',
-        type: 'button',
-        text: 'Разрешить',
-        onclick: () => {
-          answer(true);
-          modal.close();
-        },
-      }),
-    ],
+    onClose: () => answer(false, { feedback: feedback.value }),
+    footer,
   });
+  modal.modal.classList.add('approve-modal');
+
+  function onKey(e) {
+    if (e.target === feedback) return;
+    if (e.key === '1') allowOnce();
+    else if (e.key === '2' && suggestions.length) allowAlways();
+    else if (e.key === '3' || e.key === 'Escape') deny();
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  document.addEventListener('keydown', onKey, true);
+  modal.footEl.querySelector('.recommended')?.focus();
 }
 
 /* ---------- настройки ---------- */

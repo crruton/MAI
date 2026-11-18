@@ -36,6 +36,16 @@ jobs:
       - name: Проверки экспорта ответов
         run: npm run test:export
 
+      # Агентный цикл и инструменты памяти импортируют electron.app,
+      # поэтому идут под Electron в виртуальном дисплее (ADR 0027).
+      - name: Агентный цикл и память (Electron)
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
+        run: |
+          xvfb-run -a npx electron --no-sandbox scripts/test-agent-loop.mjs
+          xvfb-run -a npx electron --no-sandbox scripts/test-memory-tools.mjs
+          xvfb-run -a npx electron --no-sandbox scripts/test-ui.mjs
+
       - name: Ссылки в документации
         run: npm run docs:check
 

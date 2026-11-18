@@ -1,0 +1,161 @@
+/**
+ * Выполнение одного вызова инструмента через PolicyEngine (ADR 0027).
+ *
+ * Инструменты сами разрешение не спрашивают: цикл агента вызывает
+ * `runToolCall`, который решает allow / ask / deny для любого источника —
+ * встроенного инструмента, MCP или плагина. Новый инструмент нельзя
+ * «забыть» защитить.
+ *
+ * Модуль не зависит от Electron.
+ */
+import { classifyTool, evaluate, subjectOf, summarize, suggestRules } from './policy.js';
+import { effectiveCommand } from './tools/shell.js';
+
+const ARGS_PREVIEW = 2000;
+
+/**
+ * Описание инструмента для цикла агента.
+ * @param {object} schema OpenAI tool schema `{type:'function', function:{name,...}}`
+ * @param {object} meta { source: 'builtin'|'plugin'|'mcp', kind?, annotations?, run, precheck? }
+ */
+export function toolEntry(schema, meta = {}) {
+  const name = schema?.function?.name || '';
+  return {
+    name,
+    schema: { type: 'function', function: schema.function },
+    source: meta.source || 'builtin',
+    cls: classifyTool(name, meta),
+    run: meta.run,
+    precheck: meta.precheck,
+  };
+}
+
+/** Ответ пользователя в едином виде. Старый approve возвращал true / false / строку. */
+export function normalizeAnswer(answer) {
+  if (answer === true) return { allow: true };
+  if (answer === false || answer == null) return { allow: false };
+  if (typeof answer === 'string') return { allow: false, message: answer };
+  return {
+    allow: answer.allow === true,
+    remember: answer.remember || null,
+    rules: Array.isArray(answer.rules) ? answer.rules : [],
+    feedback: String(answer.feedback || '').trim(),
+    message: answer.message || '',
+  };
+}
+
+function preview(args) {
+  const json = JSON.stringify(args ?? {}, null, 2);
+  return json.length > ARGS_PREVIEW ? `${json.slice(0, ARGS_PREVIEW)}\n…` : json;
+}
+
+function deniedText(entry, decision, answer) {
+  if (decision.action === 'deny') return decision.reason || 'Действие запрещено политикой.';
+  if (answer?.message) return answer.message;
+  const base = `Пользователь отклонил вызов ${entry.name}.`;
+  return answer?.feedback ? `${base} Пользователь пишет: ${answer.feedback}` : base;
+}
+
+/**
+ * @param {object} p
+ * @param {object} p.entry   элемент из toolEntry
+ * @param {object} p.args    разобранные аргументы
+ * @param {object} p.ctx     контекст инструмента (projectDir, guardrails, …)
+ * @param {object} p.policy  { getMode(), getRules(), role }
+ * @param {Function} p.approve async (request) → answer
+ * @param {Function} [p.audit] (record) → void
+ * @returns {Promise<{ok:boolean, content:string, decision:object, approved:boolean}>}
+ */
+export async function runToolCall({ entry, args, ctx, policy = {}, approve, audit }) {
+  const started = Date.now();
+  const mode = policy.getMode ? policy.getMode() : 'manual';
+  const rules = policy.getRules ? policy.getRules() : {};
+  const command = entry.cls === 'exec' ? effectiveCommand(ctx, args) : undefined;
+  const subject = subjectOf({ tool: entry.name, cls: entry.cls, args, projectDir: ctx.projectDir, command });
+
+  const record = (extra) => {
+    try {
+      audit?.({
+        at: new Date().toISOString(),
+        tool: entry.name,
+        source: entry.source,
+        cls: entry.cls,
+        subject: subject == null ? null : String(subject).slice(0, 500),
+        mode,
+        ms: Date.now() - started,
+        ...extra,
+      });
+    } catch {
+      /* журнал не должен ломать прогон */
+    }
+  };
+
+  // Ошибку аргументов показываем до вопроса пользователю.
+  if (typeof entry.precheck === 'function') {
+    let problem = null;
+    try {
+      problem = entry.precheck(ctx, args);
+    } catch (err) {
+      problem = `Ошибка: ${err?.message || String(err)}`;
+    }
+    if (problem) {
+      record({ decision: 'precheck', reason: problem });
+      return { ok: false, content: problem, decision: { action: 'precheck' }, approved: false };
+    }
+  }
+
+  const decision = evaluate({
+    tool: entry.name,
+    cls: entry.cls,
+    subject,
+    mode,
+    rules,
+    guardrails: ctx.guardrails,
+    role: policy.role || 'admin',
+  });
+
+  let answer = null;
+  if (decision.action === 'ask') {
+    if (typeof approve !== 'function') {
+      answer = { allow: false, message: 'Подтверждение недоступно — действие отклонено.' };
+    } else {
+      answer = normalizeAnswer(
+        await approve({
+          tool: entry.name,
+          source: entry.source,
+          cls: entry.cls,
+          summary: summarize({ tool: entry.name, cls: entry.cls, args, subject }),
+          subject,
+          args: preview(args),
+          risk: decision.risk,
+          why: decision.why,
+          recommended: decision.recommended,
+          rule: decision.rule || null,
+          suggestions: suggestRules({ tool: entry.name, cls: entry.cls, subject }),
+          mode: decision.mode,
+        }),
+      );
+    }
+  }
+
+  const allowed = decision.action === 'allow' || (decision.action === 'ask' && answer?.allow === true);
+  record({
+    decision: decision.action,
+    source_of_decision: decision.source,
+    rule: decision.rule || null,
+    risk: decision.risk,
+    answer: answer ? { allow: answer.allow, remember: answer.remember || null, rules: answer.rules || [] } : null,
+  });
+
+  if (!allowed) {
+    return { ok: false, content: deniedText(entry, decision, answer), decision, approved: false };
+  }
+
+  try {
+    // Плагины старого формата сами зовут ctx.approve — вызов уже разрешён.
+    const result = await entry.run({ ...ctx, approve: async () => true }, args);
+    return { ok: true, content: String(result), decision, approved: true };
+  } catch (err) {
+    return { ok: false, content: `Ошибка: ${err?.message || String(err)}`, decision, approved: true };
+  }
+}

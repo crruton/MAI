@@ -94,7 +94,10 @@ export class McpManager {
     return results;
   }
 
-  /** MCP-инструменты в формате OpenAI tools. */
+  /**
+   * MCP-инструменты в формате OpenAI tools. Поле `annotations` (readOnlyHint,
+   * destructiveHint) нужно PolicyEngine; в запрос к модели оно не уходит.
+   */
   toolSchemas() {
     const schemas = [];
     for (const [server, entry] of this.servers) {
@@ -107,6 +110,7 @@ export class McpManager {
             description: `[MCP ${server}] ${tool.description || tool.name}`,
             parameters: tool.inputSchema || { type: 'object', properties: {} },
           },
+          annotations: tool.annotations || {},
         });
       }
     }

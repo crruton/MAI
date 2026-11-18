@@ -42,6 +42,8 @@ contextBridge.exposeInMainWorld('mai', {
   permissions: {
     modes: (sessionId) => invoke('permissions:modes', sessionId),
     set: (mode, sessionId) => invoke('permissions:set', { mode, sessionId }),
+    rules: (payload) => invoke('permissions:rules', payload),
+    audit: (limit) => invoke('permissions:audit', { limit }),
   },
   workspace: {
     root: () => invoke('workspace:root'),
@@ -64,7 +66,8 @@ contextBridge.exposeInMainWorld('mai', {
   chat: {
     start: (payload) => invoke('chat:start', payload),
     stop: () => invoke('chat:stop'),
-    approve: (id, allow) => invoke('chat:approval', { id, allow }),
+    // extra: { remember: 'session'|'global', rules: [...], feedback: '...' } (ADR 0027)
+    approve: (id, allow, extra = {}) => invoke('chat:approval', { id, allow, ...extra }),
     onEvent: (handler) => {
       const listener = (_event, data) => handler(data);
       ipcRenderer.on('chat:event', listener);

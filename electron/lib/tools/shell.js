@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { checkCommand } from '../guardrails.js';
 
@@ -25,6 +26,31 @@ function hasRepowise() {
   return repowiseAvailable;
 }
 
+/**
+ * Команда, которая реально выполнится. Repowise distill оборачивает простые
+ * команды, и пользователь должен подтверждать именно итоговую строку (ADR 0027).
+ */
+export function effectiveCommand(ctx, args) {
+  const command = String(args?.command || '');
+  if (ctx?.repowise?.distill && command && !/^\s*repowise\b/.test(command) && !/[|&<>]/.test(command) && hasRepowise()) {
+    return `repowise distill ${command}`;
+  }
+  return command;
+}
+
+/** Рабочая папка команды: всегда внутри проекта, если не включён доступ вне проекта. */
+export function resolveCwd(ctx, cwd) {
+  const base = ctx?.projectDir || process.cwd();
+  const resolved = path.resolve(base, cwd || '.');
+  if (!ctx?.allowOutsideProject) {
+    const relative = path.relative(base, resolved);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error(`Рабочая папка вне проекта запрещена: ${resolved}`);
+    }
+  }
+  return resolved;
+}
+
 export const shellTools = [
   {
     schema: {
@@ -32,7 +58,7 @@ export const shellTools = [
       function: {
         name: 'run_shell',
         description:
-          'Выполнить команду в папке проекта (cmd.exe на Windows). Требует подтверждения пользователя. Возвращает stdout, stderr и код возврата.',
+          'Выполнить команду в папке проекта (cmd.exe на Windows). Подтверждение зависит от режима разрешений. Возвращает stdout, stderr и код возврата.',
         parameters: {
           type: 'object',
           properties: {
@@ -44,19 +70,14 @@ export const shellTools = [
       },
     },
     async run(ctx, args) {
+      // Разрешение уже получено в цикле агента (PolicyEngine). Guardrails
+      // проверяются ещё раз — защита в глубину для прямых вызовов.
       const check = checkCommand(args.command, { guardrails: ctx.guardrails });
       if (!check.allowed) {
         return `Guardrails заблокировали команду: ${check.reason}`;
       }
-      const allowed = await ctx.approve('run_shell', args.command);
-      if (allowed !== true) return typeof allowed === 'string' ? allowed : 'Пользователь отклонил выполнение команды.';
-      let command = String(args.command || '');
-      // Repowise distill сжимает вывод тестов/установки/гита, сохраняя ошибки.
-      // Сложные shell-конструкции не оборачиваем: distill не заменяет shell.
-      if (ctx.repowise?.distill && command && !/^\s*repowise\b/.test(command) && !/[|&<>]/.test(command) && hasRepowise()) {
-        command = `repowise distill ${command}`;
-      }
-      return await execute(command, args.cwd || ctx.projectDir);
+      const cwd = resolveCwd(ctx, args.cwd);
+      return await execute(effectiveCommand(ctx, args), cwd);
     },
   },
 ];

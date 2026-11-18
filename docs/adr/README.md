@@ -41,3 +41,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0023](0023-ocr-cherez-adaptery-dvizhkov.md) | OCR через адаптеры движков | accepted | 2026-11-14 |
 | [0024](0024-versii-pamyati.md) | Версии памяти в хранилище артефактов | accepted | 2026-11-15 |
 | [0026](0026-vtoroj-transport-responses-api.md) | Второй транспорт к шлюзу: OpenAI Responses API | accepted | 2026-11-16 |
+| [0027](0027-policy-engine.md) | PolicyEngine: одна точка решения о вызове инструмента | accepted | 2026-11-18 |

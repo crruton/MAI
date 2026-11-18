@@ -8,8 +8,11 @@ import { DEFAULT_GUARDRAILS } from './guardrails.js';
 const DEFAULTS = {
   temperature: 0.3,
   maxIterations: 30,
-  // Режим разрешений: auto | manual | acceptEdits | plan (см. lib/permissions.js).
+  // Режим разрешений: manual | acceptEdits | plan | dontAsk | bypass (lib/permissions.js).
   permissionMode: 'manual',
+  // Правила разрешений (ADR 0027): `инструмент` или `инструмент(маска)`.
+  // deny сильнее ask, ask сильнее allow. Пример: "run_shell(npm test*)".
+  permissions: { allow: [], ask: [], deny: [] },
   allowOutsideProject: false,
   guardrails: DEFAULT_GUARDRAILS,
   telemetry: {
@@ -219,6 +222,11 @@ export function loadSettings() {
     providers,
     runtimes: bootstrapRuntimes(saved),
     guardrails: { ...DEFAULT_GUARDRAILS, ...(saved.guardrails || {}) },
+    permissions: {
+      allow: Array.isArray(saved.permissions?.allow) ? saved.permissions.allow : [],
+      ask: Array.isArray(saved.permissions?.ask) ? saved.permissions.ask : [],
+      deny: Array.isArray(saved.permissions?.deny) ? saved.permissions.deny : [],
+    },
     telemetry: { ...DEFAULTS.telemetry, ...(saved.telemetry || {}) },
     mas: { ...DEFAULTS.mas, ...(saved.mas || {}) },
     ocr: { ...DEFAULTS.ocr, ...(saved.ocr || {}) },

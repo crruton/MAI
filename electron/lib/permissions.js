@@ -4,60 +4,76 @@
  * Режим решает, что делать с запросом инструмента на опасное действие:
  * разрешить молча, спросить пользователя или отказать.
  *
- * Guardrails проверяются раньше и работают во всех режимах: режим «авто»
- * не отключает защиту от разрушительных команд и секретов.
+ * Guardrails и правила deny проверяются раньше и работают во всех режимах:
+ * режим «Без вопросов» не отключает защиту от разрушительных команд и секретов.
+ * Полное решение принимает PolicyEngine (policy.js, ADR 0027).
  */
 
-export const PERMISSION_MODES = ['auto', 'manual', 'acceptEdits', 'plan'];
+export const PERMISSION_MODES = ['manual', 'acceptEdits', 'plan', 'dontAsk', 'bypass'];
 
 export const DEFAULT_PERMISSION_MODE = 'manual';
 
+/**
+ * Старые значения режима. До ADR 0027 режим «Авто» разрешал всё без вопросов,
+ * поэтому сохранённое `auto` переводится в `bypass` — поведение пользователя
+ * не меняется молча. Новый «Авто» с классификатором появится отдельным id.
+ */
+const LEGACY_MODES = { auto: 'bypass' };
+
 export const MODE_INFO = {
-  auto: {
-    id: 'auto',
-    label: 'Авто',
-    short: 'Авто',
-    description: 'Агент сам решает, что можно делать. Опасные команды по-прежнему блокируют guardrails.',
-  },
   manual: {
     id: 'manual',
     label: 'Вручную',
     short: 'Вручную',
-    description: 'Приложение спрашивает перед каждой записью файла и каждой командой оболочки.',
+    description: 'Спрашивать перед каждой правкой, командой и внешним инструментом. Чтение — без вопросов.',
   },
   acceptEdits: {
     id: 'acceptEdits',
     label: 'Принимать правки',
     short: 'Правки',
-    description: 'Правки файлов применяются без вопросов. Команды оболочки всё равно требуют подтверждения.',
+    description: 'Правки файлов проекта — без вопросов. Команды, память и внешние инструменты — с подтверждением.',
   },
   plan: {
     id: 'plan',
     label: 'План',
     short: 'План',
-    description: 'Агент только читает и предлагает план с альтернативами. Файлы не меняются, команды не запускаются.',
+    description: 'Только чтение и план с альтернативами. Запись, команды, MCP и плагины с действиями отключены.',
+  },
+  dontAsk: {
+    id: 'dontAsk',
+    label: 'Только разрешённое',
+    short: 'Разрешённое',
+    description: 'Выполняется только то, что разрешено правилами. Остальное отклоняется без вопроса. Для фоновых задач.',
+  },
+  bypass: {
+    id: 'bypass',
+    label: 'Без вопросов',
+    short: 'Без вопросов',
+    description:
+      'Всё выполняется без подтверждения. Защищают только guardrails и правила deny. Недоступен гостю.',
+    warning: true,
+    adminOnly: true,
   },
 };
 
-/** Инструменты, которые меняют файлы проекта. */
+/** Классы, которые меняют состояние (для обратной совместимости тестов и UI). */
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'memory_append']);
-
-/** Инструменты, которые запускают процессы. */
 const SHELL_TOOLS = new Set(['run_shell']);
-
-/** Инструменты, которые только читают. Их не спрашиваем ни в одном режиме. */
 const READ_TOOLS = new Set([
   'read_file',
   'list_files',
   'grep',
   'load_skill',
   'memory_read',
-  'web_fetch',
-  'web_search',
+  'repowise_ask',
+  'repowise_context',
+  'repowise_risk',
+  'repowise_search',
 ]);
 
 export function normalizeMode(value) {
-  const mode = String(value || '').trim();
+  const raw = String(value || '').trim();
+  const mode = LEGACY_MODES[raw] || raw;
   return PERMISSION_MODES.includes(mode) ? mode : DEFAULT_PERMISSION_MODE;
 }
 
@@ -74,25 +90,13 @@ export function isReadTool(name) {
 }
 
 /**
- * Решает судьбу запроса на разрешение.
- *
- * Возвращает:
- * - `{ action: 'allow' }` — выполнить без вопроса;
- * - `{ action: 'ask' }` — спросить пользователя;
- * - `{ action: 'deny', reason }` — отказать, инструмент получит причину.
+ * Упрощённое решение без правил и аргументов. Полная проверка — `evaluate`
+ * в policy.js; эта функция оставлена для старых вызовов и тестов.
  */
-export function decide({ mode, tool, guardrails } = {}) {
+export function decide({ mode, tool } = {}) {
   const current = normalizeMode(mode);
   const name = String(tool || '');
-
-  // Чтение не спрашиваем никогда: это не меняет состояние.
   if (isReadTool(name)) return { action: 'allow' };
-
-  // MCP-инструменты и плагины неизвестны заранее — считаем их опасными.
-  const isWrite = isWriteTool(name);
-  const isShell = isShellTool(name);
-  const isUnknown = !isWrite && !isShell;
-
   if (current === 'plan') {
     return {
       action: 'deny',
@@ -100,26 +104,15 @@ export function decide({ mode, tool, guardrails } = {}) {
         'Режим «План»: изменения запрещены. Опиши план и альтернативы, затем попроси пользователя переключить режим.',
     };
   }
-
-  if (current === 'auto') {
-    // Guardrails уже проверили команду до вызова approve. Здесь разрешаем.
-    return { action: 'allow' };
+  if (current === 'bypass') return { action: 'allow' };
+  if (current === 'dontAsk') {
+    return { action: 'deny', reason: 'Режим «Только разрешённое»: действие не покрыто правилом allow.' };
   }
-
-  if (current === 'acceptEdits') {
-    if (isWrite) return { action: 'allow' };
-    return { action: 'ask' };
-  }
-
-  // manual: спрашиваем про всё, что меняет состояние.
-  if (isWrite || isShell || isUnknown) return { action: 'ask' };
+  if (current === 'acceptEdits' && (name === 'write_file' || name === 'edit_file')) return { action: 'allow' };
   return { action: 'ask' };
 }
 
-/**
- * Инструменты, которые нельзя показывать модели в режиме «План».
- * Модель не должна даже пытаться писать: это экономит итерации.
- */
+/** Встроенные инструменты, скрытые в режиме «План». Полный фильтр — по классу в agent.js. */
 export function hiddenToolsForMode(mode) {
   if (normalizeMode(mode) !== 'plan') return new Set();
   return new Set([...WRITE_TOOLS, ...SHELL_TOOLS]);
@@ -131,7 +124,7 @@ export function modePrompt(mode) {
   if (current === 'plan') {
     return [
       '# Режим: План',
-      'Ты не меняешь файлы и не запускаешь команды. Инструменты записи отключены.',
+      'Ты не меняешь файлы и не запускаешь команды. Инструменты записи, команд и внешние инструменты с действиями отключены.',
       'Сначала изучи проект инструментами read_file, list_files и grep.',
       'Затем выдай план в таком виде:',
       '1. Цель — что нужно получить.',
@@ -142,24 +135,31 @@ export function modePrompt(mode) {
       'В конце попроси пользователя переключить режим на «Вручную» или «Принимать правки», чтобы выполнить план.',
     ].join('\n');
   }
-  if (current === 'auto') {
+  if (current === 'bypass') {
     return [
-      '# Режим: Авто',
+      '# Режим: Без вопросов',
       'Пользователь разрешил выполнять правки и команды без подтверждения.',
-      'Guardrails по-прежнему блокируют разрушительные команды и доступ к секретам.',
+      'Guardrails и правила deny по-прежнему блокируют разрушительные команды и доступ к секретам.',
       'Действуй осторожно: не удаляй данные и не коммить в git без явной просьбы.',
+    ].join('\n');
+  }
+  if (current === 'dontAsk') {
+    return [
+      '# Режим: Только разрешённое',
+      'Пользователя не спрашивают. Выполняется только то, что разрешено правилами allow.',
+      'Если инструмент вернул отказ, не повторяй вызов: опиши, какое разрешение нужно, и продолжай без него.',
     ].join('\n');
   }
   if (current === 'acceptEdits') {
     return [
       '# Режим: Принимать правки',
-      'Правки файлов применяются без подтверждения. Команды оболочки требуют подтверждения.',
+      'Правки файлов проекта применяются без подтверждения. Команды, память и внешние инструменты требуют подтверждения.',
       'Перед правкой прочитай файл. После правки проверь результат.',
     ].join('\n');
   }
   return [
     '# Режим: Вручную',
-    'Пользователь подтверждает каждую запись файла и каждую команду оболочки.',
+    'Пользователь подтверждает каждую запись файла, каждую команду и каждый внешний инструмент.',
     'Объясняй коротко, что собираешься сделать, чтобы подтверждение было осознанным.',
   ].join('\n');
 }

@@ -121,6 +121,10 @@ function chatToMarkdown(messages, options = {}) {
       const text = String(message.content || '').trim();
       if (!text) continue;
       out.push('## MAI', '', text, '');
+    } else if (role === 'review') {
+      // Замечание ревизора — отдельный раздел, а не реплика пользователя.
+      const text = String(message.content || '').replace(/^\[Ревизор, раунд \d+\]\s*/, '').trim();
+      if (text) out.push(`## Ревизор${message.round ? ` (раунд ${message.round})` : ''}`, '', text, '');
     }
     // Рантайм и системные сообщения в экспорт не попадают: это отладка.
   }

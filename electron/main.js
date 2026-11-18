@@ -9,7 +9,7 @@ import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime } from './lib/runtimes.js';
-import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode } from './lib/sessions.js';
+import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, addSessionRules, removeSessionRules } from './lib/sessions.js';
 import { runAgent } from './lib/agent.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
@@ -54,7 +54,9 @@ import * as multica from './lib/multica.js';
 import * as sandbox from './lib/container.js';
 import { saveFromPaths, saveImage, uploadsRoot, removeSessionUploads, adoptDraftUploads, recognizeAttachment } from './lib/attachments.js';
 import { ocrStatus } from './lib/ocr.js';
-import { decide, normalizeMode, MODE_INFO, PERMISSION_MODES } from './lib/permissions.js';
+import { normalizeMode, MODE_INFO, PERMISSION_MODES } from './lib/permissions.js';
+import { effectiveMode, mergeRules, parseRule } from './lib/policy.js';
+import { createAuditLog, readAudit } from './lib/audit.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
@@ -632,27 +634,62 @@ ipcMain.handle('project:pick', async () => {
 ipcMain.handle('permissions:modes', (_e, sessionId) => {
   const settings = loadSettings();
   const session = sessionId ? getSession(sessionId) : null;
+  const role = authStatus().role;
   return {
-    current: normalizeMode(session?.permissionMode || settings.permissionMode),
-    fallback: normalizeMode(settings.permissionMode),
+    current: effectiveMode(session?.permissionMode || settings.permissionMode, role),
+    fallback: effectiveMode(settings.permissionMode, role),
     sessionId: session?.id || null,
-    modes: PERMISSION_MODES.map((id) => MODE_INFO[id]),
+    role,
+    // Режим «Без вопросов» гостю не показываем выбираемым (ADR 0027).
+    modes: PERMISSION_MODES.map((id) => ({ ...MODE_INFO[id], disabled: Boolean(MODE_INFO[id].adminOnly && role !== 'admin') })),
+    rules: {
+      global: mergeRules(settings.permissions),
+      session: mergeRules(session?.permissionRules),
+    },
   };
 });
 
 /**
  * Сохраняет режим в сессию. Если сессии нет, запоминаем как значение по
  * умолчанию: иначе выбор в новом чате потерялся бы до первого сообщения.
+ * Проверка роли — здесь, в main: интерфейс можно обойти.
  */
 ipcMain.handle('permissions:set', (_e, payload) => {
   const { mode, sessionId } = payload || {};
   const next = normalizeMode(mode);
+  if (MODE_INFO[next]?.adminOnly && authStatus().role !== 'admin') {
+    return { ok: false, error: `Режим «${MODE_INFO[next].label}» доступен только роли admin`, mode: effectiveMode(next, 'guest') };
+  }
   if (sessionId) {
     const session = setSessionMode(sessionId, next);
     if (session) return { ok: true, mode: next, sessionId: session.id, scope: 'session' };
   }
   saveSettings({ permissionMode: next });
   return { ok: true, mode: next, sessionId: null, scope: 'default' };
+});
+
+/** Правила разрешений: сессия или глобально. Глобальные меняет только admin. */
+ipcMain.handle('permissions:rules', (_e, payload) => {
+  const { sessionId, scope = 'session', kind = 'allow', add = [], remove = [] } = payload || {};
+  const valid = (list) => (list || []).map(String).filter((rule) => parseRule(rule));
+  if (scope === 'global') {
+    requireAdmin();
+    const current = mergeRules(loadSettings().permissions);
+    const key = ['allow', 'ask', 'deny'].includes(kind) ? kind : 'allow';
+    const drop = new Set(valid(remove));
+    current[key] = [...current[key].filter((r) => !drop.has(r)), ...valid(add).filter((r) => !current[key].includes(r))];
+    saveSettings({ permissions: current });
+    return { ok: true, rules: current };
+  }
+  if (!sessionId) return { ok: false, error: 'нет сессии' };
+  if (remove?.length) removeSessionRules(sessionId, valid(remove));
+  const updated = add?.length ? addSessionRules(sessionId, kind, valid(add)) : getSession(sessionId);
+  return { ok: true, rules: mergeRules(updated?.permissionRules) };
+});
+
+ipcMain.handle('permissions:audit', (_e, payload) => {
+  requireAdmin();
+  return readAudit(dataDir(), { limit: Number(payload?.limit) || 200 });
 });
 
 // ---------- вложения ----------
@@ -837,6 +874,14 @@ ipcMain.handle('chat:start', async (event, payload) => {
         transforms,
         reviewer,
         permissionMode: session.permissionMode || '',
+        policy: policyFor(session.id),
+        audit,
+        // История сохраняется после каждого шага: при сбое выполненные
+        // правки и команды не пропадают из сессии (они уже на диске).
+        onHistory: (history) => {
+          session.messages = history;
+          saveSession(session);
+        },
         emit: (e) => send(window, e),
         approve: makeApprover(window, state, session.id),
       });
@@ -854,7 +899,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
         message,
         aborted,
       });
-      session.messages = session.messages;
+      // onHistory уже сохранил выполненные шаги; здесь фиксируем финальное состояние.
       saveSession(session);
     } finally {
       state.controller = null;
@@ -865,20 +910,41 @@ ipcMain.handle('chat:start', async (event, payload) => {
   return { ok: true, sessionId: session.id, title: session.title };
 });
 
+const audit = (record) => auditLog()(record);
+let auditInstance = null;
+function auditLog() {
+  auditInstance ||= createAuditLog(dataDir());
+  return auditInstance;
+}
+
 /**
- * Создаёт функцию approve для агента с учётом режима разрешений.
- *
- * Режим берётся из сессии, а если там пусто — из настроек. Значение читается
- * на каждый вызов, поэтому переключение в интерфейсе действует сразу.
+ * Политика для прогона агента: режим, правила и роль читаются на каждый
+ * вызов, поэтому переключение в интерфейсе действует сразу (ADR 0027).
+ */
+function policyFor(sessionId) {
+  return {
+    role: authStatus().role,
+    getMode: () => {
+      const settings = loadSettings();
+      const session = sessionId ? getSession(sessionId) : null;
+      return effectiveMode(session?.permissionMode || settings.permissionMode, authStatus().role);
+    },
+    getRules: () => {
+      const settings = loadSettings();
+      const session = sessionId ? getSession(sessionId) : null;
+      return mergeRules(settings.permissions, session?.permissionRules);
+    },
+  };
+}
+
+/**
+ * Создаёт функцию approve: показывает запрос в окне и ждёт ответа.
+ * Решение «спрашивать ли» уже принял PolicyEngine — сюда приходят только ask.
+ * Ответ «да, и не спрашивать» сохраняет правила в сессию или глобально.
  */
 function makeApprover(window, state, sessionId) {
-  return (name, summary) => {
-    const settings = loadSettings();
-    const session = sessionId ? getSession(sessionId) : null;
-    const mode = normalizeMode(session?.permissionMode || settings.permissionMode);
-    const decision = decide({ mode, tool: name, guardrails: settings.guardrails });
-    if (decision.action === 'allow') return Promise.resolve(true);
-    if (decision.action === 'deny') return Promise.resolve(decision.reason || false);
+  return (request, legacySummary = '') => {
+    const payload = typeof request === 'string' ? { tool: request, summary: legacySummary } : request || {};
     return new Promise((resolve) => {
       const id = crypto.randomUUID();
       // Таймаут обязателен: если окно потеряло событие или пользователь закрыл
@@ -886,21 +952,37 @@ function makeApprover(window, state, sessionId) {
       const timer = setTimeout(() => {
         if (!state.approvals.has(id)) return;
         state.approvals.delete(id);
-        send(window, { type: 'approval:expired', id, name });
-        resolve('Подтверждение не получено за 10 минут — действие отменено.');
+        send(window, { type: 'approval:expired', id, name: payload.tool });
+        resolve({ allow: false, message: 'Подтверждение не получено за 10 минут — действие отменено.' });
       }, APPROVAL_TIMEOUT_MS);
-      state.approvals.set(id, (value) => {
+      state.approvals.set(id, (answer) => {
         clearTimeout(timer);
-        resolve(value);
+        if (answer?.allow && answer.remember && answer.rules?.length) {
+          const rules = answer.rules.filter((rule) => parseRule(rule));
+          try {
+            if (answer.remember === 'global') {
+              requireAdmin();
+              const current = mergeRules(loadSettings().permissions);
+              current.allow = [...current.allow, ...rules.filter((r) => !current.allow.includes(r))];
+              saveSettings({ permissions: current });
+            } else if (sessionId) {
+              addSessionRules(sessionId, 'allow', rules);
+            }
+          } catch (err) {
+            send(window, { type: 'notice', text: `Правило не сохранено: ${err?.message || String(err)}` });
+          }
+        }
+        resolve(answer);
       });
-      send(window, { type: 'approval', id, name, summary });
+      // Для обратной совместимости окна досок: name и summary остаются.
+      send(window, { type: 'approval', id, name: payload.tool, ...payload });
     });
   };
 }
 
 /** Закрывает висящие подтверждения отказом, иначе инструмент ждёт клика вечно. */
 function denyApprovals(state) {
-  for (const resolve of state.approvals.values()) resolve(false);
+  for (const resolve of state.approvals.values()) resolve({ allow: false, message: 'Остановлено пользователем.' });
   state.approvals.clear();
 }
 
@@ -912,14 +994,20 @@ ipcMain.handle('chat:stop', (event) => {
   return true;
 });
 
-ipcMain.handle('chat:approval', (event, { id, allow } = {}) => {
+ipcMain.handle('chat:approval', (event, payload = {}) => {
+  const { id, allow, remember, rules, feedback } = payload;
   const window = BrowserWindow.fromWebContents(event.sender);
   const state = runState(window);
   const resolve = state.approvals.get(id);
   if (resolve) {
     state.approvals.delete(id);
     // allow === undefined означает «модалку закрыли без ответа» — это отказ.
-    resolve(allow === true);
+    resolve({
+      allow: allow === true,
+      remember: remember === 'global' || remember === 'session' ? remember : null,
+      rules: Array.isArray(rules) ? rules.map(String) : [],
+      feedback: String(feedback || '').slice(0, 2000),
+    });
   }
   return true;
 });
@@ -1377,6 +1465,14 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         pluginTools,
         transforms,
         permissionMode: session.permissionMode || '',
+        policy: policyFor(session.id),
+        audit,
+        // История сохраняется после каждого шага: при сбое выполненные
+        // правки и команды не пропадают из сессии (они уже на диске).
+        onHistory: (history) => {
+          session.messages = history;
+          saveSession(session);
+        },
         emit: (e) => send(window, e),
         approve: makeApprover(window, state, session.id),
       });
