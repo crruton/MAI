@@ -385,6 +385,70 @@ console.log('\n[10] Учёт токенов (A3.8)');
   check('шлюз без stream_options: повтор без параметра', calls === 2 && !strict[1].stream_options, String(calls));
 }
 
+console.log('\n[11] ask_user и exit_plan: ответ пользователя и смена режима (CC1.7, CC1.8)');
+{
+  const bodies = [];
+  const questions = [];
+  const history = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'настрой базу' }],
+      mcp: fakeMcp(),
+      ask: async (request) => {
+        questions.push(request);
+        return { answers: ['Postgres'] };
+      },
+      clientFactory: fakeClient(
+        [
+          { calls: [{ name: 'ask_user', args: { questions: [{ question: 'Какая база?', options: [{ label: 'SQLite' }, { label: 'Postgres', recommended: true }] }] } }] },
+          { text: 'беру Postgres' },
+        ],
+        bodies,
+      ),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const names = bodies[0].tools.map((t) => t.function.name);
+  check('ask_user виден модели', names.includes('ask_user'));
+  check('exit_plan вне «Плана» скрыт', !names.includes('exit_plan'));
+  check('вопрос дошёл до интерфейса с рекомендацией первой', questions[0]?.questions?.[0]?.options?.[0]?.label === 'Postgres');
+  check('ответ пользователя — результат инструмента', /Postgres/.test(history.find((m) => m.role === 'tool')?.content || ''));
+
+  // «План» → exit_plan → пользователь одобряет «Принимать правки» → следующая итерация с записью.
+  let mode = 'plan';
+  const planBodies = [];
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'спланируй' }],
+      mcp: fakeMcp(),
+      ask: async (request) => {
+        if (request.kind === 'plan') mode = 'acceptEdits'; // так делает main после одобрения
+        return { action: 'approve', mode: 'acceptEdits', alternative: 0 };
+      },
+      clientFactory: fakeClient(
+        [{ calls: [{ name: 'exit_plan', args: { plan: '# шаги', alternatives: [{ title: 'A' }], recommended: 0 } }] }, { text: 'выполняю' }],
+        planBodies,
+      ),
+      policy: { getMode: () => mode, getRules: () => ({}) },
+    }),
+  );
+  const before = planBodies[0].tools.map((t) => t.function.name);
+  const after = planBodies[1].tools.map((t) => t.function.name);
+  check('в «Плане» exit_plan есть, записи нет', before.includes('exit_plan') && !before.includes('write_file'));
+  check('после одобрения плана запись доступна', after.includes('write_file') && !after.includes('exit_plan'));
+
+  const silent = [];
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'x' }],
+      mcp: fakeMcp(),
+      ask: async () => ({}),
+      clientFactory: fakeClient([{ text: 'ок' }], silent),
+      policy: { getMode: () => 'dontAsk', getRules: () => ({}) },
+    }),
+  );
+  check('в «Только разрешённое» ask_user скрыт', !silent[0].tools.map((t) => t.function.name).includes('ask_user'));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

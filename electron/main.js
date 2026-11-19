@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent } from './lib/config.js';
+import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets } from './lib/config.js';
 import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel } from './lib/models.js';
@@ -163,7 +163,7 @@ function send(window, event) {
 
 function runState(window) {
   const id = window.id;
-  if (!runs.has(id)) runs.set(id, { controller: null, runtime: null, runtimeGroup: null, stage: null, correction: null, approvals: new Map() });
+  if (!runs.has(id)) runs.set(id, { controller: null, runtime: null, runtimeGroup: null, stage: null, correction: null, approvals: new Map(), questions: new Map() });
   return runs.get(id);
 }
 
@@ -270,6 +270,14 @@ app.whenReady().then(async () => {
     installBundledSkills(path.join(app.getAppPath(), 'skills'));
   } catch (err) {
     console.error('[skills] не удалось установить вложенные навыки:', err?.message || err);
+  }
+  // Ключи из settings.json старого формата шифруются хранилищем ОС (ADR 0031).
+  try {
+    const secrets = migrateSecrets();
+    if (secrets.migrated) emitLog(`Зашифровано секретов в settings.json: ${secrets.migrated}`);
+    if (secrets.protection !== 'os') console.warn(`[secrets] защита ключей: ${secrets.protection}`);
+  } catch (err) {
+    console.error('[secrets] не удалось зашифровать ключи:', err?.message || err);
   }
   createWindow();
   const settings = loadSettings();
@@ -1021,6 +1029,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
         },
         emit: (e) => send(window, e),
         approve: makeApprover(window, state, session.id),
+        ask: makeAsker(window, state, session.id, projectDir),
       });
       session.messages = history;
       saveSession(session);
@@ -1041,6 +1050,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
     } finally {
       state.controller = null;
       state.approvals.clear();
+      state.questions.clear();
       lock.release();
     }
   })();
@@ -1121,10 +1131,44 @@ function makeApprover(window, state, sessionId) {
   };
 }
 
+/**
+ * Вопрос пользователю из ask_user или карточка плана из exit_plan (CC1.7, CC1.8).
+ * Ответ на план с выбранным режимом сразу меняет режим сессии: PolicyEngine
+ * читает режим на каждый вызов, и следующая итерация получит инструменты записи.
+ */
+function makeAsker(window, state, sessionId, projectDir) {
+  return (request) =>
+    new Promise((resolve) => {
+      const id = crypto.randomUUID();
+      const timer = setTimeout(() => {
+        if (!state.questions.has(id)) return;
+        state.questions.delete(id);
+        send(window, { type: 'question:expired', id });
+        resolve({ cancelled: true });
+      }, APPROVAL_TIMEOUT_MS);
+      state.questions.set(id, (answer) => {
+        clearTimeout(timer);
+        if (request.kind === 'plan' && answer?.action === 'approve') {
+          const wanted = normalizeMode(answer.mode);
+          let mode = ['manual', 'acceptEdits', 'bypass'].includes(wanted) ? wanted : 'manual';
+          // Те же ограничения, что у селектора режима: гостю и в недоверенной папке — без «Без вопросов».
+          if (mode === 'bypass' && (authStatus().role !== 'admin' || !isTrusted(projectDir))) mode = 'manual';
+          if (sessionId) setSessionMode(sessionId, mode);
+          answer = { ...answer, mode };
+          send(window, { type: 'mode:changed', sessionId, mode });
+        }
+        resolve(answer);
+      });
+      send(window, { type: 'question', id, ...request });
+    });
+}
+
 /** Закрывает висящие подтверждения отказом, иначе инструмент ждёт клика вечно. */
 function denyApprovals(state) {
   for (const resolve of state.approvals.values()) resolve({ allow: false, message: 'Остановлено пользователем.' });
   state.approvals.clear();
+  for (const resolve of state.questions.values()) resolve({ cancelled: true });
+  state.questions.clear();
 }
 
 ipcMain.handle('chat:stop', (event) => {
@@ -1132,6 +1176,25 @@ ipcMain.handle('chat:stop', (event) => {
   const state = runState(window);
   denyApprovals(state);
   state.controller?.abort();
+  return true;
+});
+
+ipcMain.handle('chat:answer', (event, payload = {}) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const state = runState(window);
+  const resolve = state.questions.get(payload.id);
+  if (resolve) {
+    state.questions.delete(payload.id);
+    const answer = payload.answer || {};
+    resolve({
+      cancelled: answer.cancelled === true,
+      answers: Array.isArray(answer.answers) ? answer.answers.map((a) => (Array.isArray(a) ? a.map(String) : String(a ?? ''))) : [],
+      action: answer.action === 'revise' ? 'revise' : answer.action === 'approve' ? 'approve' : '',
+      mode: String(answer.mode || ''),
+      alternative: Number.isInteger(answer.alternative) ? answer.alternative : -1,
+      feedback: String(answer.feedback || '').slice(0, 4000),
+    });
+  }
   return true;
 });
 
@@ -1640,6 +1703,7 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         },
         emit: (e) => send(window, e),
         approve: makeApprover(window, state, session.id),
+        ask: makeAsker(window, state, session.id, projectDir),
       });
       session.messages = history;
       saveSession(session);

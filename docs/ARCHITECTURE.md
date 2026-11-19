@@ -160,6 +160,21 @@ IPC-каналы:
 - `permissions:audit({ limit })` — последние записи `audit.jsonl`, только admin;
 - `chat:approval({ id, allow, remember, rules, feedback })` — ответ на запрос.
 
+## Ключи и диалоговые инструменты
+
+Секреты в `settings.json` (`providers.*.apiKey`, `infra.vaultToken`,
+`mas.token`) хранятся как `enc:v1:<base64>` через `safeStorage`
+(`electron/lib/secrets.js`, ADR 0031). `loadSettings` расшифровывает,
+`saveSettings` шифрует и пишет атомарно, `migrateSecrets` при старте шифрует
+старые открытые ключи. `publicSettings` отдаёт `secretsProtection`
+(`os` / `weak` / `none`) и список нерасшифрованных путей.
+
+`ask_user` и `exit_plan` (`electron/lib/tools/interactive.js`) зовут
+`ctx.ask`: `makeAsker` в main шлёт окну событие `question`, ответ приходит
+через `chat:answer({ id, answer })`. Одобрение плана меняет режим сессии
+(`setSessionMode`) и шлёт `mode:changed`. Таймаут — 10 минут, «Стоп»
+отвечает `cancelled`.
+
 ## Доверие к папке и матрица прав IPC
 
 Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или

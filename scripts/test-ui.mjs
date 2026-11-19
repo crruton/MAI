@@ -62,6 +62,11 @@ ipcMain.handle('project:pick', () => {
 });
 // Ответы на запросы разрешения из окна (раздел [14]).
 const approvals = [];
+const answers = [];
+ipcMain.handle('chat:answer', (_e, payload) => {
+  answers.push(payload);
+  return true;
+});
 ipcMain.handle('chat:approval', (_e, payload) => {
   approvals.push(payload);
   return true;
@@ -692,6 +697,103 @@ app.whenReady().then(async () => {
     craftedBoards = null;
     const cspErrors = errors.filter((e) => /Content Security Policy|Refused to/i.test(e));
     check('нет нарушений CSP за весь прогон', cspErrors.length === 0, cspErrors.join(' | '));
+
+    console.log('\n[17] Вопрос агента и карточка плана в ленте (CC1.7, CC1.8)');
+    await win.loadFile(path.join(root, 'renderer', 'index.html'));
+    // Ждём конца init(): подписка на события идёт после загрузки моделей и сессий.
+    for (let i = 0; i < 50; i += 1) {
+      const ready = await win.webContents.executeJavaScript(`document.querySelectorAll('#mode-select option').length > 0 && document.querySelectorAll('.session').length > 0`);
+      if (ready) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    win.webContents.send('chat:event', {
+      type: 'question',
+      id: 'q-1',
+      kind: 'questions',
+      questions: [
+        {
+          question: 'Какую базу взять?',
+          header: 'База',
+          options: [
+            { label: 'Postgres', description: 'уже есть в infra', recommended: true },
+            { label: 'SQLite', recommended: false },
+          ],
+        },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const card = await win.webContents.executeJavaScript(`(() => {
+      const c = document.querySelector('.question-card');
+      if (!c) return { found: false };
+      const first = c.querySelector('.question-option');
+      return {
+        found: true,
+        inFeed: Boolean(c.closest('#messages')),
+        modal: Boolean(document.querySelector('.modal-backdrop')),
+        firstText: first?.textContent || '',
+        firstRecommended: first?.classList.contains('recommended'),
+        firstPicked: first?.classList.contains('picked'),
+      };
+    })()`);
+    check('вопрос показан карточкой в ленте, не модалкой', card.found && card.inFeed && !card.modal, JSON.stringify(card));
+    check('рекомендованный вариант первым, с бейджем', card.firstRecommended && /Рекомендуется/.test(card.firstText), JSON.stringify(card));
+    check('рекомендованный выбран заранее', card.firstPicked === true);
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 300));
+    const q1 = answers.find((a) => a.id === 'q-1');
+    check('Enter отвечает рекомендованным', q1?.answer?.answers?.[0] === 'Postgres', JSON.stringify(q1));
+    check('карточка закрылась', await win.webContents.executeJavaScript(`!document.querySelector('.question-card')`));
+
+    win.webContents.send('chat:event', {
+      type: 'question',
+      id: 'q-2',
+      kind: 'questions',
+      questions: [{ question: 'Где хранить?', options: [{ label: 'диск', recommended: true }, { label: 'S3' }] }],
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 200));
+    await win.webContents.executeJavaScript(`document.querySelector('.question-card .btn.primary').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('клавиша 2 выбирает второй вариант', answers.find((a) => a.id === 'q-2')?.answer?.answers?.[0] === 'S3', JSON.stringify(answers));
+
+    win.webContents.send('chat:event', {
+      type: 'question',
+      id: 'p-1',
+      kind: 'plan',
+      plan: '# План\n\n1. Добавить кэш',
+      alternatives: [
+        { title: 'Кэш в памяти', risk: 'low' },
+        { title: 'Redis', risk: 'medium', pros: 'общий для процессов' },
+      ],
+      recommended: 1,
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const planCard = await win.webContents.executeJavaScript(`(() => {
+      const c = document.querySelector('.plan-card');
+      if (!c) return { found: false };
+      const alts = [...c.querySelectorAll('.plan-alt')];
+      return {
+        found: true,
+        planRendered: Boolean(c.querySelector('.plan-text h1')),
+        recommendedTitle: alts.find((a) => a.classList.contains('recommended'))?.querySelector('b')?.textContent || '',
+        pickedTitle: alts.find((a) => a.classList.contains('picked'))?.querySelector('b')?.textContent || '',
+        buttons: [...c.querySelectorAll('.question-foot .btn')].map((b) => b.textContent),
+      };
+    })()`);
+    check('карточка плана в ленте, план отрисован', planCard.found && planCard.planRendered, JSON.stringify(planCard));
+    check('рекомендованная альтернатива подсвечена и выбрана', planCard.recommendedTitle === 'Redis' && planCard.pickedTitle === 'Redis', JSON.stringify(planCard));
+    check('кнопки выполнения и доработки', planCard.buttons.some((t) => /принимать правки/.test(t)) && planCard.buttons.some((t) => /Доработать/.test(t)), JSON.stringify(planCard.buttons));
+    await win.webContents.executeJavaScript(`(() => {
+      const area = document.querySelector('.plan-card .approve-feedback');
+      area.value = 'добавь тесты';
+      area.dispatchEvent(new Event('input', { bubbles: true }));
+      [...document.querySelectorAll('.plan-card .question-foot .btn')].find((b) => /Доработать/.test(b.textContent)).click();
+    })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    const p1 = answers.find((a) => a.id === 'p-1');
+    check('«Доработать» уходит с замечаниями', p1?.answer?.action === 'revise' && p1?.answer?.feedback === 'добавь тесты', JSON.stringify(p1));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

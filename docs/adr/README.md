@@ -45,3 +45,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0028](0028-doverie-k-papke-i-matrica-ipc.md) | Доверие к папке проекта и матрица прав IPC | accepted | 2026-11-19 |
 | [0029](0029-rezhim-razreshenij-dlya-cli.md) | Режим разрешений и передача запроса для внешних CLI | accepted | 2026-11-19 |
 | [0030](0030-plaginy-v-otdelnom-processe.md) | Плагины в отдельном процессе, песочница окон и CSP | accepted | 2026-11-19 |
+| [0031](0031-shifrovanie-klyuchej-i-dialogovye-instrumenty.md) | Шифрование ключей и диалоговые инструменты ask_user, exit_plan | accepted | 2026-11-19 |

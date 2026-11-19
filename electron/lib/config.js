@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { app } from 'electron';
+import { app, safeStorage } from 'electron';
+import { createSecretBox, openSettings, sealSettings, keepUnreadable, plaintextSecrets } from './secrets.js';
 import { envCandidates, readEnvFiles } from './env.js';
 import { RUNTIME_PRESETS } from './runtimes.js';
 import { DEFAULT_GUARDRAILS } from './guardrails.js';
@@ -141,7 +142,13 @@ function cleanProvider(id, provider) {
   const models = Array.isArray(provider.models)
     ? provider.models
         .filter((m) => m && m.id)
-        .map((m) => ({ id: String(m.id), name: m.name || '', context: m.context || null }))
+        .map((m) => ({
+          id: String(m.id),
+          name: m.name || '',
+          context: m.context || null,
+          // Явный флаг поддержки изображений (бэклог F1); без него — эвристика по имени.
+          ...(typeof m.vision === 'boolean' ? { vision: m.vision } : {}),
+        }))
     : [];
   return {
     id,
@@ -205,13 +212,58 @@ function bootstrapRuntimes(saved) {
   return runtimes;
 }
 
-export function loadSettings() {
-  let saved = {};
+/**
+ * Секреты в settings.json шифруются хранилищем ОС (ADR 0031). На Linux без
+ * keyring Electron использует basic_text — это шифр без ключа ОС, помечаем как weak.
+ */
+const secretBox = createSecretBox({
+  available: () => safeStorage.isEncryptionAvailable(),
+  weak: () => process.platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text',
+  encrypt: (text) => safeStorage.encryptString(text),
+  decrypt: (buffer) => safeStorage.decryptString(buffer),
+});
+
+// Пути секретов, которые не удалось расшифровать при последнем чтении.
+let unreadableSecrets = [];
+
+function readRawSettings() {
   try {
-    saved = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
+    return JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
   } catch {
-    saved = {};
+    return {};
   }
+}
+
+function writeRawSettings(data) {
+  const file = settingsPath();
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(temp, JSON.stringify(data, null, 2), 'utf8');
+  fs.renameSync(temp, file);
+}
+
+/**
+ * Шифрует секреты, которые лежат в settings.json открытым текстом
+ * (файлы до ADR 0031). Вызывается после app.ready.
+ */
+export function migrateSecrets() {
+  const raw = readRawSettings();
+  const plain = plaintextSecrets(raw);
+  if (!plain.length || !secretBox.available()) {
+    return { migrated: 0, plaintext: plain, protection: secretBox.protection() };
+  }
+  writeRawSettings(sealSettings(raw, secretBox));
+  return { migrated: plain.length, plaintext: plaintextSecrets(readRawSettings()), protection: secretBox.protection() };
+}
+
+export function secretsStatus() {
+  return { protection: secretBox.protection(), plaintext: plaintextSecrets(readRawSettings()), unreadable: [...unreadableSecrets] };
+}
+
+export function loadSettings() {
+  const opened = openSettings(readRawSettings(), secretBox);
+  let saved = opened.settings;
+  unreadableSecrets = opened.unreadable;
 
   const env = loadEnv();
   const providers = bootstrapProviders(saved, env);
@@ -298,7 +350,8 @@ export function saveSettings(patch) {
     delete next.model;
   }
 
-  fs.writeFileSync(settingsPath(), JSON.stringify(next, null, 2), 'utf8');
+  // На диск — с зашифрованными секретами; в памяти main остаются открытые значения.
+  writeRawSettings(keepUnreadable(sealSettings(next, secretBox), readRawSettings(), unreadableSecrets));
   return next;
 }
 
@@ -324,6 +377,10 @@ export function publicSettings() {
     token: s.mas?.token ? '***' : '',
     tokenSet: Boolean(s.mas?.token),
   };
+  const secrets = secretsStatus();
+  safe.secretsProtection = secrets.protection;
+  safe.secretsPlaintext = secrets.plaintext.length;
+  safe.secretsUnreadable = secrets.unreadable;
   // Старый формат хранил ключ в корне настроек — наружу его не отдаём.
   delete safe.apiKey;
   delete safe.baseURL;

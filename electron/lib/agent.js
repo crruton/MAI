@@ -13,6 +13,7 @@ import { shellTools } from './tools/shell.js';
 import { skillTools } from './tools/skills.js';
 import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
+import { interactiveTools } from './tools/interactive.js';
 import { listSkills, readAgents, readMemory } from './skills.js';
 import { reviewAnswer } from './reviewer.js';
 import { modePrompt } from './permissions.js';
@@ -155,6 +156,7 @@ export async function runAgent({
   policy = null,
   audit = null,
   trusted = true,
+  ask = null,
   onHistory = null,
   clientFactory = null,
 }) {
@@ -201,7 +203,7 @@ export async function runAgent({
     getRules: () => (policy?.getRules ? policy.getRules() : mergeRules(settings.permissions)),
   };
 
-  const builtin = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools].map((t) =>
+  const builtin = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools].map((t) =>
     toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck }),
   );
   const builtinNames = new Set(builtin.map((t) => t.name));
@@ -217,7 +219,12 @@ export async function runAgent({
         run: (_ctx, args) => mcp.call(schema.function.name, args),
       }),
     );
-    const all = [...builtin, ...fromPlugins, ...fromMcp];
+    const all = [...builtin, ...fromPlugins, ...fromMcp].filter((t) => {
+      // exit_plan нужен только в «Плане»; спросить пользователя в «Только разрешённое» некого.
+      if (t.name === 'exit_plan') return mode === 'plan';
+      if (t.name === 'ask_user') return mode !== 'dontAsk' && typeof ask === 'function';
+      return true;
+    });
     // В «Плане» модель видит только чтение: ей незачем пытаться писать.
     return mode === 'plan' ? all.filter((t) => t.cls === 'read') : all;
   };
@@ -425,6 +432,7 @@ export async function runAgent({
       guardrails: settings.guardrails,
       repowise: settings.repowise,
       trusted,
+      ask,
     };
     for (const call of assistantMessage.tool_calls) {
       const args = parseArgs(call.function.arguments);

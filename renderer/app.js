@@ -25,6 +25,8 @@ const state = {
   permissionModes: [],
   approvalOpen: false,
   trust: null,
+  // Открытый вопрос ask_user или карточка плана exit_plan (CC1.7, CC1.8).
+  question: null,
 };
 
 /* ---------- утилиты ---------- */
@@ -575,7 +577,7 @@ function renderAll() {
   const stick = isNearBottom();
   box.replaceChildren();
 
-  if (!state.messages.length && !state.live && !state.liveRuntimes.length) {
+  if (!state.messages.length && !state.live && !state.liveRuntimes.length && !state.question) {
     box.append(emptyState());
     return;
   }
@@ -588,8 +590,196 @@ function renderAll() {
   for (const live of state.liveRuntimes) {
     box.append(runtimeNode(live.name, live.output, null, true));
   }
-  if (stick) box.scrollTop = box.scrollHeight;
+  if (state.question) box.append(questionCard());
+  if (stick || state.question) box.scrollTop = box.scrollHeight;
 }
+
+/* ---------- вопросы агента и карточка плана (CC1.7, CC1.8) ---------- */
+
+function openQuestion(event) {
+  const questions = event.questions || [];
+  state.question = {
+    ...event,
+    // Рекомендованный вариант выбран заранее: Enter сразу отвечает рекомендацией.
+    picks: questions.map((q) => {
+      const index = q.options.findIndex((o) => o.recommended);
+      return index >= 0 ? [index] : [];
+    }),
+    other: questions.map(() => ''),
+    feedback: '',
+    alternative: Number.isInteger(event.recommended) ? event.recommended : 0,
+  };
+  renderAll();
+  setTimeout(() => document.querySelector('.question-card .recommended, .question-card .primary')?.focus(), 0);
+}
+
+function answerQuestion(answer) {
+  const current = state.question;
+  if (!current) return;
+  state.question = null;
+  api.chat.answer(current.id, answer);
+  renderAll();
+}
+
+function submitQuestions() {
+  const q = state.question;
+  const answers = q.questions.map((item, i) => {
+    const labels = (q.picks[i] || []).map((index) => item.options[index]?.label).filter(Boolean);
+    const other = String(q.other[i] || '').trim();
+    if (item.multiSelect) return other ? [...labels, other] : labels;
+    return other || labels[0] || '';
+  });
+  answerQuestion({ answers });
+}
+
+function questionsBody(q) {
+  return q.questions.map((item, qi) =>
+    el('div', { class: 'question-block' }, [
+      el('div', { class: 'question-title' }, [
+        item.header ? el('span', { class: 'question-chip', text: item.header }) : null,
+        el('span', { text: item.question }),
+        item.multiSelect ? el('span', { class: 'hint-text', text: ' (можно несколько)' }) : null,
+      ]),
+      el(
+        'div',
+        { class: 'question-options' },
+        item.options.map((option, oi) => {
+          const picked = (q.picks[qi] || []).includes(oi);
+          return el(
+            'button',
+            {
+              class: `question-option${picked ? ' picked' : ''}${option.recommended ? ' recommended' : ''}`,
+              type: 'button',
+              'aria-pressed': picked ? 'true' : 'false',
+              onclick: () => {
+                const list = q.picks[qi] || [];
+                q.picks[qi] = item.multiSelect ? (picked ? list.filter((x) => x !== oi) : [...list, oi]) : [oi];
+                if (!item.multiSelect) q.other[qi] = '';
+                renderAll();
+              },
+            },
+            [
+              el('span', { class: 'approve-key', text: String(oi + 1) }),
+              el('span', { class: 'question-option-text' }, [
+                el('b', { text: option.label }),
+                option.description ? el('small', { text: option.description }) : null,
+              ]),
+              option.recommended ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+            ],
+          );
+        }),
+      ),
+      el('input', {
+        class: 'question-other',
+        placeholder: 'Другое…',
+        value: q.other[qi] || '',
+        oninput: (e) => {
+          q.other[qi] = e.target.value;
+        },
+      }),
+    ]),
+  );
+}
+
+function planBody(q) {
+  const tiles = (q.alternatives || []).map((alt, index) =>
+    el(
+      'button',
+      {
+        class: `plan-alt${q.alternative === index ? ' picked' : ''}${q.recommended === index ? ' recommended' : ''}`,
+        type: 'button',
+        onclick: () => {
+          q.alternative = index;
+          renderAll();
+        },
+      },
+      [
+        el('div', { class: 'plan-alt-head' }, [
+          el('b', { text: alt.title }),
+          el('span', { class: `risk-badge risk-${alt.risk}`, text: RISK_LABEL[alt.risk] || alt.risk }),
+          q.recommended === index ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+        ]),
+        alt.summary ? el('div', { class: 'plan-alt-text', text: alt.summary }) : null,
+        alt.pros ? el('div', { class: 'plan-alt-pros', text: `+ ${alt.pros}` }) : null,
+        alt.cons ? el('div', { class: 'plan-alt-cons', text: `− ${alt.cons}` }) : null,
+      ],
+    ),
+  );
+  return [
+    el('div', { class: 'md plan-text', html: renderMarkdown(q.plan || '') }),
+    tiles.length ? el('div', { class: 'docs-group-title', text: 'Альтернативы' }) : null,
+    tiles.length ? el('div', { class: 'plan-alts' }, tiles) : null,
+  ];
+}
+
+function questionCard() {
+  const q = state.question;
+  const isPlan = q.kind === 'plan';
+  const feedback = el('textarea', {
+    class: 'approve-feedback',
+    rows: '2',
+    placeholder: isPlan ? 'Замечания к плану (необязательно)' : 'Комментарий (необязательно)',
+    value: q.feedback || '',
+    oninput: (e) => {
+      q.feedback = e.target.value;
+    },
+  });
+  feedback.value = q.feedback || '';
+  const bypassAllowed = (state.permissionModes || []).some((m) => m.id === 'bypass' && !m.disabled);
+  const approve = (mode) => answerQuestion({ action: 'approve', mode, alternative: q.alternative, feedback: q.feedback });
+  const footer = isPlan
+    ? [
+        el('button', { class: 'btn primary recommended', type: 'button', onclick: () => approve('acceptEdits') }, [
+          el('span', { text: 'Выполнить: принимать правки' }),
+          el('span', { class: 'recommended-badge', text: 'Рекомендуется' }),
+        ]),
+        el('button', { class: 'btn', type: 'button', text: 'Выполнить: вручную', onclick: () => approve('manual') }),
+        bypassAllowed ? el('button', { class: 'btn', type: 'button', text: '⚠ Без вопросов', onclick: () => approve('bypass') }) : null,
+        el('button', {
+          class: 'btn ghost',
+          type: 'button',
+          text: 'Доработать план',
+          onclick: () => answerQuestion({ action: 'revise', feedback: q.feedback }),
+        }),
+      ]
+    : [
+        el('button', { class: 'btn primary recommended', type: 'button', text: 'Ответить', onclick: submitQuestions }),
+        el('button', { class: 'btn ghost', type: 'button', text: 'Пропустить', onclick: () => answerQuestion({ cancelled: true }) }),
+      ];
+  return el('div', { class: `question-card${isPlan ? ' plan-card' : ''}` }, [
+    el('div', { class: 'question-head', text: isPlan ? 'План готов — как выполнить?' : 'Агент спрашивает' }),
+    ...(isPlan ? planBody(q) : questionsBody(q)),
+    feedback,
+    el('div', { class: 'question-foot' }, footer.filter(Boolean)),
+  ]);
+}
+
+/** Клавиши карточки: 1–4 — вариант (первый вопрос), Enter — рекомендованное, Esc — пропустить. */
+document.addEventListener('keydown', (event) => {
+  const q = state.question;
+  if (!q || state.approvalOpen) return;
+  const tag = event.target?.tagName || '';
+  if (event.target?.id === 'input') return; // поле ввода чата — своё поведение
+  if (tag === 'BUTTON' && (event.key === 'Enter' || event.key === ' ')) return; // нативный клик
+  const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(tag);
+  // В поле «Другое…» Enter отправляет ответ; в textarea Enter — перевод строки.
+  if (inField && event.key !== 'Escape' && !(event.key === 'Enter' && tag === 'INPUT')) return;
+  if (!inField && q.kind === 'questions' && /^[1-4]$/.test(event.key) && q.questions.length) {
+    const item = q.questions[0];
+    const index = Number(event.key) - 1;
+    if (!item.options[index]) return;
+    q.picks[0] = item.multiSelect ? [...new Set([...(q.picks[0] || []), index])] : [index];
+    renderAll();
+    event.preventDefault();
+  } else if (event.key === 'Enter' && !event.shiftKey) {
+    if (q.kind === 'plan') answerQuestion({ action: 'approve', mode: 'acceptEdits', alternative: q.alternative, feedback: q.feedback });
+    else submitQuestions();
+    event.preventDefault();
+  } else if (event.key === 'Escape') {
+    answerQuestion(q.kind === 'plan' ? { action: 'revise', feedback: q.feedback } : { cancelled: true });
+    event.preventDefault();
+  }
+});
 
 function emptyState() {
   const wrap = el('div', { class: 'empty' }, [
@@ -1148,6 +1338,17 @@ function handleEvent(event) {
     case 'approval':
       askApproval(event);
       break;
+    case 'question':
+      openQuestion(event);
+      break;
+    case 'question:expired':
+      state.question = null;
+      toast('Вопрос агента остался без ответа — агент продолжил по рекомендации', 'err');
+      renderAll();
+      break;
+    case 'mode:changed':
+      refreshPermissionMode();
+      break;
     case 'approval:expired':
       state.approvalOpen = false;
       toast('Подтверждение истекло — действие отменено', 'err');
@@ -1477,6 +1678,22 @@ async function openSettings() {
         field('Модель ревизора', reviewerModel),
         field('Раундов доработки', reviewerRounds),
       ]),
+      el('div', { class: 'docs-group-title', text: 'Ключи и токены' }),
+      el('p', {
+        class: `hint-text secrets-${settings.secretsProtection || 'none'}`,
+        text:
+          settings.secretsProtection === 'os'
+            ? 'Ключи провайдеров, токены Vault и MAS зашифрованы хранилищем ОС: в settings.json их не прочитать.'
+            : settings.secretsProtection === 'weak'
+              ? 'Хранилище ключей ОС недоступно (Linux без keyring): ключи зашифрованы без ключа ОС — это слабая защита.'
+              : 'Хранилище ключей ОС недоступно: ключи лежат в settings.json открытым текстом.',
+      }),
+      settings.secretsUnreadable?.length
+        ? el('p', {
+            class: 'hint-text secrets-none',
+            text: `Не удалось расшифровать: ${settings.secretsUnreadable.join(', ')}. Ключи на диске сохранены; введите их заново, если хранилище ОС сменилось.`,
+          })
+        : null,
       el('div', { class: 'docs-group-title', text: 'Доверие к папкам' }),
       trustSettingsBlock(),
       el('div', { class: 'docs-group-title', text: 'Guardrails' }),

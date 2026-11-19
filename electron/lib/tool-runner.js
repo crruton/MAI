@@ -153,7 +153,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
 
   try {
     // Плагины старого формата сами зовут ctx.approve — вызов уже разрешён.
-    const result = await entry.run({ ...ctx, approve: async () => true }, args);
+    const result = await entry.run({ ...ctx, approve: async () => true, ask: entry.source === 'builtin' ? ctx.ask : undefined }, args);
     return { ok: true, content: String(result), decision, approved: true };
   } catch (err) {
     return { ok: false, content: `Ошибка: ${err?.message || String(err)}`, decision, approved: true };

@@ -27,6 +27,9 @@ const BUILTIN = {
   edit_file: 'write',
   run_shell: 'exec',
   memory_append: 'memory',
+  // Диалоговые инструменты ничего не меняют сами: решение принимает пользователь.
+  ask_user: 'read',
+  exit_plan: 'read',
 };
 
 export function isBuiltinTool(name) {

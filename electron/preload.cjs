@@ -76,6 +76,8 @@ contextBridge.exposeInMainWorld('mai', {
     stop: () => invoke('chat:stop'),
     // extra: { remember: 'session'|'global', rules: [...], feedback: '...' } (ADR 0027)
     approve: (id, allow, extra = {}) => invoke('chat:approval', { id, allow, ...extra }),
+    // Ответ на ask_user или карточку плана exit_plan (CC1.7, CC1.8).
+    answer: (id, answer) => invoke('chat:answer', { id, answer }),
     onEvent: (handler) => {
       const listener = (_event, data) => handler(data);
       ipcRenderer.on('chat:event', listener);
