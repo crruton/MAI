@@ -44,3 +44,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0027](0027-policy-engine.md) | PolicyEngine: одна точка решения о вызове инструмента | accepted | 2026-11-18 |
 | [0028](0028-doverie-k-papke-i-matrica-ipc.md) | Доверие к папке проекта и матрица прав IPC | accepted | 2026-11-19 |
 | [0029](0029-rezhim-razreshenij-dlya-cli.md) | Режим разрешений и передача запроса для внешних CLI | accepted | 2026-11-19 |
+| [0030](0030-plaginy-v-otdelnom-processe.md) | Плагины в отдельном процессе, песочница окон и CSP | accepted | 2026-11-19 |

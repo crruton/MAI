@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import { runAgent, trimMessages, toApiMessage } from '../electron/lib/agent.js';
 import { loadPlugins } from '../electron/lib/plugins.js';
+import { disposePluginHosts } from '../electron/lib/plugin-host.js';
 
 let pass = 0;
 let fail = 0;
@@ -253,7 +254,8 @@ console.log('\n[8] Недоверенная папка: инструкции, н
   fs.mkdirSync(path.join(project, '.mai-code', 'plugins'), { recursive: true });
   fs.writeFileSync(
     path.join(project, '.mai-code', 'plugins', 'evil.js'),
-    "globalThis.__maiEvilLoaded = true; export default { name: 'evil', tools: [] };",
+    // Плагин исполняется в отдельном процессе (ADR 0030): факт загрузки — файл-маркер.
+    `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(path.join(project, 'evil-loaded.txt'))}, '1'); export default { name: 'evil', tools: [] };`,
     'utf8',
   );
   const run = async (trusted) => {
@@ -278,10 +280,10 @@ console.log('\n[8] Недоверенная папка: инструкции, н
   check('с доверием навык проекта в промпте', trusted.includes('evil-skill'));
 
   const skipped = await loadPlugins(project, { includeProject: false });
-  check('плагин проекта не исполнен без доверия', globalThis.__maiEvilLoaded !== true);
+  check('плагин проекта не исполнен без доверия', !fs.existsSync(path.join(project, 'evil-loaded.txt')));
   check('пропуск виден в списке плагинов', skipped.loaded.some((p) => p.skipped));
-  await loadPlugins(project, { includeProject: true });
-  check('с доверием плагин проекта загружен', globalThis.__maiEvilLoaded === true);
+  // Загрузку доверенных плагинов в отдельный процесс проверяет test-plugin-host.mjs:
+  // utilityProcess требует app.ready, а этот тест работает без него.
 }
 
 console.log('\n[9] Изображения из вложений доходят до модели (F1)');
@@ -385,4 +387,5 @@ console.log('\n[10] Учёт токенов (A3.8)');
 
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
+disposePluginHosts();
 process.exit(fail ? 1 : 0);

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, clipboard } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -15,6 +15,7 @@ import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFi
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
 import { loadPlugins, pluginDirs } from './lib/plugins.js';
+import { disposePluginHosts } from './lib/plugin-host.js';
 import {
   listArtifacts,
   readArtifact,
@@ -221,7 +222,8 @@ function openBoardWindow(board, focus = '') {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // Песочница рендерера (A2.5): preload получает только безопасные модули Electron.
+      sandbox: true,
       spellcheck: false,
       backgroundThrottling: true,
     },
@@ -250,7 +252,8 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // Песочница рендерера (A2.5): preload получает только безопасные модули Electron.
+      sandbox: true,
       spellcheck: false,
       backgroundThrottling: true,
     },
@@ -284,6 +287,7 @@ app.on('window-all-closed', () => {
 // Останавливаем всё, что породило приложение: стадии, самокоррекцию,
 // внешние рантаймы и MCP-сервер repowise.
 app.on('before-quit', () => {
+  disposePluginHosts();
   for (const state of runs.values()) {
     try {
       state.stage?.kill();
@@ -1278,12 +1282,17 @@ ipcMain.handle('plugins:createExample', async (_e, projectDir) => {
       file,
       `// Пример плагина MAI Code. Файл лежит в <проект>/.mai-code/plugins/.
 // Плагин может добавить инструмент агенту и/или переписать историю сообщений.
+// Плагин исполняется в отдельном процессе (ADR 0030): без доступа к Electron,
+// окнам и переменным окружения с ключами. Файлы проекта доступны.
 
 export default {
   name: 'example-plugin',
 
   tools: [
     {
+      // Класс действия (ADR 0027): read | write | exec | network | external.
+      // Без поля инструмент считается внешним, и пользователя спросят.
+      kind: 'read',
       schema: {
         type: 'function',
         function: {
@@ -1299,6 +1308,7 @@ export default {
   ],
 
   // Необязательный хук: можно дописать контекст в историю перед запросом.
+  // Хук может быть async и должен вернуть массив сообщений.
   // transformMessages(messages) { return messages; },
 };
 `,
@@ -1952,6 +1962,12 @@ ipcMain.handle('app:openExternal', async (_e, url) => {
   return true;
 });
 ipcMain.handle('app:dataDir', () => dataDir());
+
+// В песочнице preload нет модуля clipboard — запись идёт через main (A2.5).
+ipcMain.handle('app:clipboard', (_e, text) => {
+  clipboard.writeText(String(text ?? '').slice(0, 5_000_000));
+  return true;
+});
 
 ipcMain.handle('app:focusMain', () => {
   if (mainWindow && !mainWindow.isDestroyed()) {

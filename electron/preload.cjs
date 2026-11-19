@@ -1,4 +1,5 @@
-const { contextBridge, ipcRenderer, clipboard, webUtils } = require('electron');
+// Песочница (A2.5): из electron доступны только contextBridge, ipcRenderer, webUtils и подобные.
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
 
@@ -211,11 +212,9 @@ contextBridge.exposeInMainWorld('mai', {
     stopServe: (payload) => invoke('repowise:stopServe', payload),
   },
   clipboard: {
-    // navigator.clipboard на file:// в Electron часто запрещён — используем нативный модуль.
-    writeText: (text) => {
-      clipboard.writeText(String(text ?? ''));
-      return true;
-    },
+    // navigator.clipboard на file:// в Electron часто запрещён, а модуля clipboard
+    // в песочнице нет — пишем через main.
+    writeText: (text) => invoke('app:clipboard', String(text ?? '')),
   },
   openPath: (target) => invoke('app:openPath', target),
   // В Electron 38 у File больше нет свойства path: путь даёт только webUtils.

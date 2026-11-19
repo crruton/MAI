@@ -145,7 +145,7 @@ function priorityBadge(priority) {
     critical: ['red', 'критичный'],
   };
   const [kind, label] = map[priority] || ['', priority || 'обычный'];
-  return `<span class="badge ${kind}">${label}</span>`;
+  return `<span class="badge ${kind}">${esc(label)}</span>`;
 }
 
 function openModal({ title, body = [], footer = [], size = '', onClose }) {
@@ -984,7 +984,7 @@ function architectureDiagrams() {
             ${VIEW_ORDER.map((key) => {
               const item = data.views[key];
               const drift = data.drift?.[key];
-              return `<button class="view-item ${state.openView === key ? 'active' : ''}" data-act="view-select" data-view="${key}">
+              return `<button class="view-item ${state.openView === key ? 'active' : ''}" data-act="view-select" data-view="${esc(key)}">
                 <span>${esc(VIEW_NAMES[key])}</span>
                 ${drift ? '<span class="drift-dot" title="дрейф"></span>' : ''}
               </button>`;
@@ -1454,7 +1454,7 @@ function renderRunners() {
       <div class="stages">
         ${stages
           .map(
-            (stage) => `<div class="stage ${stage.status || 'idle'}">
+            (stage) => `<div class="stage ${esc(stage.status || 'idle')}">
               <div class="stage-head">
                 <span class="stage-name">${esc(stage.name)}</span>
                 ${stage.status === 'running' ? '<span class="spinner"></span>' : statusBadge(stage.status)}
@@ -1910,7 +1910,7 @@ function storageArtifacts() {
                   (item) => `<button class="list-item ${artifact?.id === item.id ? 'selected' : ''}" data-act="artifact-select" data-id="${esc(item.id)}" style="text-align:left;width:100%">
                     <div class="grow">
                       <div class="title">${esc(item.name)}</div>
-                      <div class="sub">${esc(item.kind)} · v${item.current} · ${item.versions} версий · ${fmtDate(item.updatedAt)}</div>
+                      <div class="sub">${esc(item.kind)} · v${esc(item.current)} · ${esc(item.versions)} версий · ${esc(fmtDate(item.updatedAt))}</div>
                     </div>
                   </button>`,
                 )
@@ -2248,7 +2248,7 @@ function storageInfra() {
                     (item) => `<div class="list-item">
                       <div class="grow">
                         <div class="title">${esc(item.name || item.id)}</div>
-                        <div class="sub">${esc(item.kind || '')} · v${item.version ?? '—'} · score ${Number(item.score || 0).toFixed(3)}</div>
+                        <div class="sub">${esc(item.kind || '')} · v${esc(item.version ?? '—')} · score ${Number(item.score || 0).toFixed(3)}</div>
                         <div class="issue-detail">${esc(String(item.snippet || '').slice(0, 400))}</div>
                       </div>
                     </div>`,

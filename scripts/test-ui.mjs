@@ -135,8 +135,15 @@ ipcMain.handle('memory:restore', (_e, payload) => {
 });
 // Окно досок грузится в разделе [9]: без заглушки Electron пишет в лог
 // «No handler registered for 'boards:load'», и это выглядит как дефект.
+// Раздел [16]: доска с задачей из «чужого» boards.json — приоритет с разметкой.
+let craftedBoards = null;
+const clipboardCalls = [];
+ipcMain.handle('app:clipboard', (_e, text) => {
+  clipboardCalls.push(text);
+  return true;
+});
 ipcMain.handle('boards:load', () => ({
-  boards: loadBoards(root),
+  boards: craftedBoards || loadBoards(root),
   projectDir: root,
   settings: { projectDir: root, activeModel: 'test-model' },
 }));
@@ -151,6 +158,8 @@ app.whenReady().then(async () => {
       preload: path.join(root, 'electron', 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Как в приложении (A2.5): preload работает в песочнице.
+      sandbox: true,
     },
   });
 
@@ -655,6 +664,34 @@ app.whenReady().then(async () => {
       'значок «ограниченно» у папки',
       (await win.webContents.executeJavaScript(`document.querySelector('#project-trust')?.textContent`)) === 'ограниченно',
     );
+
+    console.log('\n[16] Песочница, CSP и экранирование данных проекта (A2.5)');
+    const csp = await win.webContents.executeJavaScript(
+      `document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content || ''`,
+    );
+    check('CSP задан в главном окне', /script-src 'self'/.test(csp) && /object-src 'none'/.test(csp), csp);
+    const copied = await win.webContents.executeJavaScript(`window.mai.clipboard.writeText('скопировано').then(() => true)`);
+    check('буфер обмена через main работает в песочнице', copied === true && clipboardCalls.includes('скопировано'), JSON.stringify(clipboardCalls));
+    const crafted = loadBoards(root);
+    crafted.delivery.tasks = [
+      { id: 't1', title: 'задача', column: 'backlog', status: 'backlog', priority: '<img src=x id=pwned onerror="window.__pwned=1">' },
+    ];
+    craftedBoards = crafted;
+    await win.loadFile(path.join(root, 'renderer', 'board.html'), { query: { board: 'delivery' } });
+    await new Promise((r) => setTimeout(r, 1200));
+    const xss = await win.webContents.executeJavaScript(`(() => ({
+      injected: Boolean(document.getElementById('pwned')),
+      ran: window.__pwned === 1,
+      text: document.body.innerText.includes('<img src=x'),
+      csp: Boolean(document.querySelector('meta[http-equiv="Content-Security-Policy"]')),
+    }))()`);
+    check('разметка из boards.json не стала элементом', xss.injected === false, JSON.stringify(xss));
+    check('скрипт из boards.json не выполнен', xss.ran === false);
+    check('приоритет показан как текст', xss.text === true, JSON.stringify(xss));
+    check('CSP задан в окне досок', xss.csp === true);
+    craftedBoards = null;
+    const cspErrors = errors.filter((e) => /Content Security Policy|Refused to/i.test(e));
+    check('нет нарушений CSP за весь прогон', cspErrors.length === 0, cspErrors.join(' | '));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

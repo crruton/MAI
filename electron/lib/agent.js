@@ -243,7 +243,9 @@ export async function runAgent({
     const system = systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted });
     for (const transform of transforms) {
       try {
-        history = transform(history) || history;
+        // Плагины живут в отдельном процессе (ADR 0030): хук асинхронный.
+        const next = await transform(history);
+        if (Array.isArray(next)) history = next;
       } catch {
         /* плагин не должен ломать диалог */
       }

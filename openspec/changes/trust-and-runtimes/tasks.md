@@ -13,4 +13,4 @@
 - [x] Блокировать папку на время пишущего прогона.
 - [x] Учитывать токены по шагам.
 - [x] Добавить тесты `test-trust`, `test-ipc-permissions`, `test-runtimes`, `test-vision`, `test-usage`, `test-project-lock`.
-- [ ] Вынести плагины в `utilityProcess` (A2.4).
+- [x] Вынести плагины в `utilityProcess` (A2.4, ADR 0030).

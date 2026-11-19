@@ -199,6 +199,7 @@ export const IPC_PERMISSIONS = {
   'app:showItem': ANY,
   'app:openExternal': ANY,
   'app:dataDir': ANY,
+  'app:clipboard': ANY,
   'app:focusMain': ANY,
 };
 

@@ -44,6 +44,7 @@ jobs:
         run: |
           xvfb-run -a npx electron --no-sandbox scripts/test-agent-loop.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-memory-tools.mjs
+          xvfb-run -a npx electron --no-sandbox scripts/test-plugin-host.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-ui.mjs
 
       - name: Ссылки в документации

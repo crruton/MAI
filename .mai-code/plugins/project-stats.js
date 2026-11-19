@@ -33,6 +33,8 @@ export default {
 
   tools: [
     {
+      // Класс действия для PolicyEngine (ADR 0027): только чтение — без вопросов.
+      kind: 'read',
       schema: {
         type: 'function',
         function: {
