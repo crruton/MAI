@@ -22,9 +22,11 @@ export function skillDirs(projectDir) {
   ];
 }
 
-export function listSkills(projectDir) {
+/** Навыки. Без доверия к папке навыки проекта не попадают к агенту (ADR 0028). */
+export function listSkills(projectDir, { includeProject = true } = {}) {
   const skills = [];
   for (const { scope, dir } of skillDirs(projectDir)) {
+    if (!includeProject && scope === 'project') continue;
     if (!dir || !fs.existsSync(dir)) continue;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;

@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { runAgent, trimMessages, toApiMessage } from '../electron/lib/agent.js';
+import { loadPlugins } from '../electron/lib/plugins.js';
 
 let pass = 0;
 let fail = 0;
@@ -30,6 +31,7 @@ function stream(step) {
   return {
     async *[Symbol.asyncIterator]() {
       if (step.text) yield { choices: [{ delta: { content: step.text } }] };
+      if (step.usage) yield { choices: [], usage: step.usage };
       for (const [index, call] of (step.calls || []).entries()) {
         yield {
           choices: [
@@ -241,6 +243,144 @@ console.log('\n[7] Обрезка не разрывает пары tool_calls �
   const ids2 = new Set(cut.filter((m) => m.tool_calls).flatMap((m) => m.tool_calls.map((c) => c.id)));
   check('длинный ход без user: начало — user-заметка', cut[0].role === 'user', cut[0].role);
   check('длинный ход без user: пары целы', cut.filter((m) => m.role === 'tool').every((m) => ids2.has(m.tool_call_id)));
+}
+
+console.log('\n[8] Недоверенная папка: инструкции, навыки и плагины проекта не загружаются (ADR 0028)');
+{
+  fs.writeFileSync(path.join(project, 'AGENTS.md'), 'СЕКРЕТНОЕ-ПРАВИЛО-ПРОЕКТА', 'utf8');
+  fs.mkdirSync(path.join(project, '.mai-code', 'skills', 'evil'), { recursive: true });
+  fs.writeFileSync(path.join(project, '.mai-code', 'skills', 'evil', 'SKILL.md'), '---\nname: evil-skill\ndescription: x\n---\nтело', 'utf8');
+  fs.mkdirSync(path.join(project, '.mai-code', 'plugins'), { recursive: true });
+  fs.writeFileSync(
+    path.join(project, '.mai-code', 'plugins', 'evil.js'),
+    "globalThis.__maiEvilLoaded = true; export default { name: 'evil', tools: [] };",
+    'utf8',
+  );
+  const run = async (trusted) => {
+    const bodies = [];
+    await runAgent(
+      base({
+        messages: [{ role: 'user', content: 'x' }],
+        mcp: fakeMcp(),
+        trusted,
+        clientFactory: fakeClient([{ text: 'ок' }], bodies),
+        policy: { getMode: () => 'manual', getRules: () => ({}) },
+      }),
+    );
+    return bodies[0].messages[0].content;
+  };
+  const untrusted = await run(false);
+  const trusted = await run(true);
+  check('без доверия AGENTS.md проекта не в промпте', !untrusted.includes('СЕКРЕТНОЕ-ПРАВИЛО-ПРОЕКТА'));
+  check('без доверия навык проекта не в промпте', !untrusted.includes('evil-skill'));
+  check('без доверия в промпте предупреждение', /Папка не доверена/.test(untrusted));
+  check('с доверием AGENTS.md проекта в промпте', trusted.includes('СЕКРЕТНОЕ-ПРАВИЛО-ПРОЕКТА'));
+  check('с доверием навык проекта в промпте', trusted.includes('evil-skill'));
+
+  const skipped = await loadPlugins(project, { includeProject: false });
+  check('плагин проекта не исполнен без доверия', globalThis.__maiEvilLoaded !== true);
+  check('пропуск виден в списке плагинов', skipped.loaded.some((p) => p.skipped));
+  await loadPlugins(project, { includeProject: true });
+  check('с доверием плагин проекта загружен', globalThis.__maiEvilLoaded === true);
+}
+
+console.log('\n[9] Изображения из вложений доходят до модели (F1)');
+{
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  fs.mkdirSync(path.join(project, '.mai-code', 'uploads', 's'), { recursive: true });
+  fs.writeFileSync(path.join(project, '.mai-code', 'uploads', 's', 'shot.png'), png);
+  const messages = [{ role: 'user', content: 'что на скриншоте?', images: ['.mai-code/uploads/s/shot.png'] }];
+  const run = async (model, clientFactory) => {
+    const bodies = [];
+    const notices = [];
+    await runAgent(
+      base({
+        model,
+        messages,
+        mcp: fakeMcp(),
+        emit: (e) => e.type === 'notice' && notices.push(e.text),
+        clientFactory: clientFactory || fakeClient([{ text: 'кот' }], bodies),
+        policy: { getMode: () => 'manual', getRules: () => ({}) },
+      }),
+    );
+    return { bodies, notices };
+  };
+  const vision = await run('gpt-4o');
+  const user = vision.bodies[0].messages.find((m) => m.role === 'user');
+  check('модели с vision ушла картинка', Array.isArray(user.content) && user.content.some((p) => p.type === 'image_url' && p.image_url.url.startsWith('data:image/png')));
+  const plain = await run('deepseek-v4.1-flash');
+  check('модели без vision картинка не ушла', typeof plain.bodies[0].messages.find((m) => m.role === 'user').content === 'string');
+
+  // Шлюз отвечает 400 на картинку — шаг повторяется без неё.
+  const bodies = [];
+  let calls = 0;
+  const rejecting = () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          calls += 1;
+          bodies.push(JSON.parse(JSON.stringify(body)));
+          if (calls === 1) {
+            const err = new Error('400 image_url is not supported');
+            err.status = 400;
+            throw err;
+          }
+          return stream({ text: 'без картинки' });
+        },
+      },
+    },
+  });
+  const rejected = await run('gpt-4o', rejecting);
+  check('после отказа запрос повторён', calls === 2, String(calls));
+  check('повтор без картинки', typeof bodies[1].messages.find((m) => m.role === 'user').content === 'string');
+  check('пользователь предупреждён', rejected.notices.some((t) => /не принял изображение/.test(t)), JSON.stringify(rejected.notices));
+}
+
+console.log('\n[10] Учёт токенов (A3.8)');
+{
+  const bodies = [];
+  const events = [];
+  const history = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'x' }],
+      mcp: fakeMcp(),
+      emit: (e) => events.push(e),
+      clientFactory: fakeClient([{ text: 'ок', usage: { prompt_tokens: 120, completion_tokens: 7, total_tokens: 127 } }], bodies),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  check('запрошен usage в потоке', bodies[0].stream_options?.include_usage === true);
+  const answer = history.find((m) => m.role === 'assistant');
+  check('токены сохранены в ответе', answer.usage?.input === 120 && answer.usage?.output === 7, JSON.stringify(answer.usage));
+  check('событие usage отправлено', events.some((e) => e.type === 'usage' && e.run.total === 127));
+
+  let calls = 0;
+  const strict = [];
+  const noOptions = () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          calls += 1;
+          strict.push(JSON.parse(JSON.stringify(body)));
+          if (body.stream_options) {
+            const err = new Error('400 Unrecognized request argument: stream_options');
+            err.status = 400;
+            throw err;
+          }
+          return stream({ text: 'ок' });
+        },
+      },
+    },
+  });
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'x' }],
+      mcp: fakeMcp(),
+      clientFactory: noOptions,
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  check('шлюз без stream_options: повтор без параметра', calls === 2 && !strict[1].stream_options, String(calls));
 }
 
 fs.rmSync(project, { recursive: true, force: true });

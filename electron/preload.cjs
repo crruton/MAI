@@ -39,6 +39,13 @@ contextBridge.exposeInMainWorld('mai', {
     status: (payload) => invoke('ocr:status', payload),
     recognize: (payload) => invoke('ocr:recognize', payload),
   },
+  // Доверие к папке проекта (ADR 0028).
+  trust: {
+    get: (projectDir) => invoke('trust:get', projectDir),
+    set: (projectDir, state) => invoke('trust:set', { projectDir, state }),
+    list: () => invoke('trust:list'),
+    remove: (projectDir) => invoke('trust:remove', projectDir),
+  },
   permissions: {
     modes: (sessionId) => invoke('permissions:modes', sessionId),
     set: (mode, sessionId) => invoke('permissions:set', { mode, sessionId }),

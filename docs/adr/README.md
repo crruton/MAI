@@ -42,3 +42,5 @@ ADR фиксируют решения, которые дорого менять:
 | [0024](0024-versii-pamyati.md) | Версии памяти в хранилище артефактов | accepted | 2026-11-15 |
 | [0026](0026-vtoroj-transport-responses-api.md) | Второй транспорт к шлюзу: OpenAI Responses API | accepted | 2026-11-16 |
 | [0027](0027-policy-engine.md) | PolicyEngine: одна точка решения о вызове инструмента | accepted | 2026-11-18 |
+| [0028](0028-doverie-k-papke-i-matrica-ipc.md) | Доверие к папке проекта и матрица прав IPC | accepted | 2026-11-19 |
+| [0029](0029-rezhim-razreshenij-dlya-cli.md) | Режим разрешений и передача запроса для внешних CLI | accepted | 2026-11-19 |

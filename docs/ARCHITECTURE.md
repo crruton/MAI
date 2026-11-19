@@ -143,6 +143,29 @@ IPC-каналы:
 - `permissions:audit({ limit })` — последние записи `audit.jsonl`, только admin;
 - `chat:approval({ id, allow, remember, rules, feedback })` — ответ на запрос.
 
+## Доверие к папке и матрица прав IPC
+
+Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или
+`unknown`, хранится в `%APPDATA%/mai-code/trust.json`, наследуется вложенными
+папками; песочницы приложения доверены всегда. Без доверия `mcpConfigs` не
+берёт `.mai-code/mcp.json`, `loadPluginsFor` пропускает плагины проекта,
+`runAgent({ trusted: false })` не подмешивает `AGENTS.md`, память и навыки
+проекта, `boards:stageRun` отказывает. `chat:start`, `runtimes:run`,
+`runtimes:runMany`, `boards:correction` при `unknown` возвращают
+`{ needTrust: true, found }`, окно спрашивает и повторяет запуск.
+
+IPC: `trust:get(projectDir)`, `trust:set({ projectDir, state })` (`trusted` —
+только admin), `trust:list`, `trust:remove(projectDir)` (admin).
+
+Матрица прав (`electron/lib/ipc-permissions.js`): `guardIpc` оборачивает
+`ipcMain.handle` до регистрации обработчиков; канал `admin` отказывает гостю
+ответом `{ ok: false, forbidden: true }`. Канал вне матрицы считается `admin`.
+`scripts/test-ipc-permissions.mjs` падает, если канал не внесён в матрицу.
+
+Блокировка проекта (`electron/lib/project-lock.js`): чат, самокоррекция и
+рантайм с правом записи берут папку на время прогона; второй получает
+`{ busy: true }`.
+
 ## Вложения
 
 Вложение — файл в папке проекта плюс запись манифеста в промпте (ADR 0016).
@@ -156,6 +179,12 @@ IPC-каналы:
    запасной путь).
 4. В промпт уходит манифест: имя, размер, тип, путь, путь к тексту, счётчики.
    Агент читает файл через `read_file` и `grep`.
+5. Изображения (PNG, JPEG, GIF, WebP) модели с поддержкой изображений получают
+   частью `image_url` (`electron/lib/vision.js`). В сессии хранится путь
+   (`message.images`), base64 собирается на каждый запрос: до 5 МБ на файл,
+   20 МБ и 10 картинок на запрос, с последних сообщений. Поддержка — флаг
+   `vision` у модели провайдера или эвристика по имени. Если шлюз отвечает 400
+   на картинку, шаг повторяется без неё.
 
 IPC-каналы: `attachments:add`, `attachments:addImage`, `attachments:pick`,
 `attachments:remove`, `attachments:open`. Удаление и открытие проверяют, что

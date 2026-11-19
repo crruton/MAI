@@ -74,12 +74,20 @@ ok('роль tool становится function_call_output', () => {
 ok('пустые сообщения отбрасываются', () => {
   assert.equal(toInput([{ role: 'assistant', content: '' }]).length, 0);
 });
-ok('изображение не ломает input', () => {
+ok('изображение уходит частью input_image, а не текстом', () => {
   const input = toInput([
-    { role: 'user', content: [{ type: 'text', text: 'смотри' }, { type: 'image_url', image_url: { url: 'data:,' } }] },
+    { role: 'user', content: [{ type: 'text', text: 'смотри' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] },
   ]);
+  assert.equal(input[0].content[0].type, 'input_text');
   assert.match(input[0].content[0].text, /смотри/);
-  assert.match(input[0].content[0].text, /изображение/);
+  assert.equal(input[0].content[1].type, 'input_image');
+  assert.equal(input[0].content[1].image_url, 'data:image/png;base64,AAAA');
+});
+ok('картинка в ответе инструмента не превращается в base64-текст', () => {
+  const input = toInput([
+    { role: 'tool', tool_call_id: 'c1', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] },
+  ]);
+  assert.doesNotMatch(input[0].output, /base64/);
 });
 
 console.log('\n[3] Схемы инструментов');

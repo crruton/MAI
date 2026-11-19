@@ -24,6 +24,7 @@ const state = {
   permissionMode: 'manual',
   permissionModes: [],
   approvalOpen: false,
+  trust: null,
 };
 
 /* ---------- утилиты ---------- */
@@ -377,6 +378,155 @@ async function setPermissionMode(mode) {
   }
 }
 
+/* ---------- доверие к папке (ADR 0028) ---------- */
+
+async function refreshTrust() {
+  if (!api.trust || !state.projectDir) {
+    state.trust = null;
+    updateChrome();
+    return null;
+  }
+  try {
+    state.trust = await api.trust.get(state.projectDir);
+  } catch {
+    state.trust = null;
+  }
+  updateChrome();
+  return state.trust;
+}
+
+/**
+ * Окно «Доверять папке?». Показывает, что в папке исполняется или влияет на
+ * агента. Если есть плагины или MCP, рекомендован ответ «Ограниченно».
+ * Возвращает 'trusted', 'restricted' или null (окно закрыто без ответа).
+ */
+function askTrust(info = {}) {
+  return new Promise((resolve) => {
+    const found = info.found || {};
+    const recommended = found.executable ? 'restricted' : 'trusted';
+    const items = [];
+    if (found.plugins) items.push(`плагины .mai-code/plugins: ${found.plugins} — исполняются в приложении`);
+    if (found.mcpServers?.length) items.push(`MCP-серверы .mai-code/mcp.json: ${found.mcpServers.join(', ')} — запускают процессы`);
+    if (found.agents) items.push('AGENTS.md — инструкции агенту');
+    if (found.memory) items.push('.mai-code/memory.md — память проекта');
+    if (found.skills) items.push(`навыки проекта: ${found.skills}`);
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      resolve(value);
+    };
+    const option = (key, label, value, hint) =>
+      el(
+        'button',
+        {
+          class: `btn approve-option${value === recommended ? ' primary recommended' : ''}`,
+          type: 'button',
+          'data-trust': value,
+          onclick: () => {
+            finish(value);
+            modal.close();
+          },
+        },
+        [
+          el('span', { class: 'approve-key', text: key }),
+          el('span', { class: 'trust-option-text' }, [el('b', { text: label }), el('small', { text: hint })]),
+          value === recommended ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+        ],
+      );
+    const isAdmin = (state.auth?.role || 'admin') === 'admin';
+    const modal = openModal({
+      title: 'Доверять этой папке?',
+      small: true,
+      onClose: () => finish(null),
+      body: [
+        el('div', { class: 'approve-args', text: info.projectDir || state.projectDir || '' }),
+        el('p', {
+          text: items.length
+            ? 'В папке найдено то, что исполняется или влияет на агента:'
+            : 'В папке нет плагинов, MCP-серверов и инструкций для агента.',
+        }),
+        items.length ? el('ul', { class: 'trust-list' }, items.map((t) => el('li', { text: t }))) : null,
+        el('p', {
+          class: 'hint-text',
+          text: 'Доверяйте только своим папкам и проверенным репозиториям. Решение действует и для вложенных папок, его можно изменить в «Настройках».',
+        }),
+      ],
+      footer: [
+        isAdmin ? option('1', 'Доверяю', 'trusted', 'загрузить плагины, MCP, AGENTS.md, память и навыки проекта') : null,
+        option(isAdmin ? '2' : '1', 'Ограниченно', 'restricted', 'работать без кода и инструкций проекта; «Без вопросов» не действует'),
+      ].filter(Boolean),
+    });
+    modal.modal.classList.add('approve-modal', 'trust-modal');
+    modal.footEl.querySelector('.recommended')?.focus();
+  });
+}
+
+/** Блок «Доверие к папкам» в настройках: текущая папка и список решений. */
+function trustSettingsBlock() {
+  const box = el('div', { class: 'trust-settings' });
+  const label = { trusted: 'доверена', restricted: 'ограниченно', unknown: 'нет решения' };
+  const render = async () => {
+    const [current, list] = await Promise.all([refreshTrust(), api.trust?.list ? api.trust.list() : []]);
+    box.replaceChildren(
+      el('div', { class: 'hint-text', text: `Текущая папка: ${label[current?.state] || 'нет решения'}${current?.inherited ? ` (наследуется от ${current.folder})` : ''}` }),
+      el('div', { class: 'row' }, [
+        el('button', {
+          class: 'btn small',
+          type: 'button',
+          text: 'Решить заново',
+          onclick: async () => {
+            if (await decideTrust(await api.trust.get(state.projectDir))) render();
+          },
+        }),
+      ]),
+      ...(list || []).map((item) =>
+        el('div', { class: 'trust-row' }, [
+          el('span', { class: `project-trust trust-${item.state}`, text: label[item.state] || item.state }),
+          el('span', { class: 'trust-folder', text: item.folder, title: item.folder }),
+          el('button', {
+            class: 'btn ghost small',
+            type: 'button',
+            text: 'Забыть',
+            onclick: async () => {
+              const result = await api.trust.remove(item.folder).catch((err) => ({ ok: false, error: err.message }));
+              if (result?.ok === false) toast(result.error || 'Не удалось', 'err');
+              render();
+            },
+          }),
+        ]),
+      ),
+    );
+  };
+  render();
+  return box;
+}
+
+/** Решение о доверии с сохранением. true — решение принято. */
+async function decideTrust(info) {
+  const decision = await askTrust(info);
+  if (!decision) return false;
+  const result = await api.trust.set(info.projectDir || state.projectDir, decision);
+  if (result?.ok === false) {
+    toast(result.error || 'Решение не сохранено', 'err');
+    return false;
+  }
+  await refreshTrust();
+  toast(decision === 'trusted' ? 'Папка доверена' : 'Папка открыта ограниченно', 'ok');
+  return true;
+}
+
+/** Запуск, которому может понадобиться решение о доверии: спрашиваем и повторяем один раз. */
+async function withTrust(start) {
+  let result = await start();
+  if (result?.needTrust) {
+    const decided = await decideTrust(result);
+    if (!decided) return { ok: false, error: 'Запуск отменён: нет решения о доверии к папке' };
+    result = await start();
+  }
+  return result;
+}
+
 /* ---------- модальные окна ---------- */
 
 function openModal({ title, body, footer, small = false, wide = false, onClose }) {
@@ -547,6 +697,17 @@ function messageNode(message) {
     const head = el('div', { class: 'msg-head' }, [
       el('div', { class: 'msg-name', text: `MAI · ${modelLabel(message.model || state.model)}` }),
     ]);
+    if (message.usage) {
+      // Токены шага (A3.8): вход · выход, из входа — кэш.
+      const u = message.usage;
+      head.append(
+        el('span', {
+          class: 'msg-usage',
+          text: `↑${contextLabel(u.input)} ↓${contextLabel(u.output)}`,
+          title: `Токены шага: вход ${u.input}${u.cached ? ` (из кэша ${u.cached})` : ''}, выход ${u.output}, всего ${u.total}`,
+        }),
+      );
+    }
     if (message.content) head.append(exportMenu(message.content));
     const body = el('div', { class: 'msg-body' }, [head]);
     if (message.reasoning) body.append(thinkingBlock(message.reasoning));
@@ -719,6 +880,17 @@ function renderRuntimes() {
 function updateChrome() {
   $('#project-name').textContent = shortPath(state.projectDir);
   $('#project-name').title = state.projectDir || '';
+  const badge = $('#project-trust');
+  if (badge) {
+    const trust = state.trust?.projectDir === state.projectDir ? state.trust.state : '';
+    badge.hidden = !trust || trust === 'trusted';
+    badge.className = `project-trust trust-${trust || 'none'}`;
+    badge.textContent = trust === 'restricted' ? 'ограниченно' : trust === 'unknown' ? 'не доверена' : '';
+    badge.title =
+      trust === 'restricted'
+        ? 'Плагины, MCP, AGENTS.md, память и навыки проекта не загружаются'
+        : 'Решение о доверии к папке спросим перед первым запуском';
+  }
   const provider = providerOf(state.model);
   const ready = Boolean(provider?.apiKeySet);
   $('#conn').classList.toggle('bad', !ready);
@@ -741,6 +913,7 @@ async function loadSession(id) {
   state.messages = session.messages || [];
   state.model = session.model || state.model;
   if (session.projectDir) state.projectDir = session.projectDir;
+  refreshTrust();
   state.toolResults = {};
   state.live = null;
   state.liveRuntimes = [];
@@ -798,6 +971,8 @@ async function send() {
   if (!text && !hasFiles) return;
   const display = text || 'Прикреплённые файлы';
   const prompt = text + attachmentBlock();
+  // Картинки уходят модели как изображения, если она их принимает (F1).
+  const images = state.attachments.filter((item) => item.kind === 'image').map((item) => item.path);
 
   const runtime = activeRuntime();
   const multi = state.runtime === '__all__';
@@ -834,14 +1009,17 @@ async function send() {
   setRunning(true);
   renderAll();
 
-  const result = await api.chat.start({
-    sessionId: state.sessionId,
-    text: prompt,
-    displayText: display,
-    model: state.model,
-    projectDir: state.projectDir,
-    permissionMode: state.permissionMode,
-  });
+  const result = await withTrust(() =>
+    api.chat.start({
+      sessionId: state.sessionId,
+      text: prompt,
+      displayText: display,
+      model: state.model,
+      projectDir: state.projectDir,
+      permissionMode: state.permissionMode,
+      images,
+    }),
+  );
   if (!result.ok) {
     toast(result.error, 'err');
     state.running = false;
@@ -865,14 +1043,16 @@ async function sendRuntime(runtime, prompt, display = prompt) {
   setRunning(true);
   renderAll();
 
-  const result = await api.runtimes.run({
-    sessionId: state.sessionId,
-    runtime: id,
-    text: prompt,
-    displayText: display,
-    model: state.model,
-    projectDir: state.projectDir,
-  });
+  const result = await withTrust(() =>
+    api.runtimes.run({
+      sessionId: state.sessionId,
+      runtime: id,
+      text: prompt,
+      displayText: display,
+      model: state.model,
+      projectDir: state.projectDir,
+    }),
+  );
 
   if (!result.ok) {
     toast(result.error, 'err');
@@ -903,14 +1083,16 @@ async function sendRuntimeMany(prompt, display = prompt) {
   setRunning(true);
   renderAll();
 
-  const result = await api.runtimes.runMany({
-    sessionId: state.sessionId,
-    runtimes: ids,
-    text: prompt,
-    displayText: display,
-    model: state.model,
-    projectDir: state.projectDir,
-  });
+  const result = await withTrust(() =>
+    api.runtimes.runMany({
+      sessionId: state.sessionId,
+      runtimes: ids,
+      text: prompt,
+      displayText: display,
+      model: state.model,
+      projectDir: state.projectDir,
+    }),
+  );
 
   if (!result.ok) {
     toast(result.error, 'err');
@@ -1295,6 +1477,8 @@ async function openSettings() {
         field('Модель ревизора', reviewerModel),
         field('Раундов доработки', reviewerRounds),
       ]),
+      el('div', { class: 'docs-group-title', text: 'Доверие к папкам' }),
+      trustSettingsBlock(),
       el('div', { class: 'docs-group-title', text: 'Guardrails' }),
       el('label', { class: 'hint-text' }, [guardEnabled, ' включить guardrails для встроенного агента']),
       el('label', { class: 'hint-text' }, [guardDangerous, ' блокировать разрушительные команды (rm -rf /, format, pipe-to-shell и т. п.)']),
@@ -2731,6 +2915,9 @@ async function pickProject() {
   if (!dir) return;
   state.projectDir = dir;
   updateChrome();
+  // Решение о доверии — сразу при выборе папки, как в Claude Code (ADR 0028).
+  const trust = await refreshTrust();
+  if (trust?.state === 'unknown') await decideTrust(trust);
 }
 
 /* ---------- голосовой ввод через MAS ---------- */
@@ -2963,6 +3150,7 @@ async function init() {
   renderModels();
   renderRuntimes();
   renderModeSelect();
+  await refreshTrust();
   await loadModels();
   await refreshSessions();
   renderAll();

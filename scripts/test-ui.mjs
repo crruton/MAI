@@ -39,6 +39,27 @@ const MODES = [
   { id: 'dontAsk', label: 'Только разрешённое', description: 'Только по правилам' },
   { id: 'bypass', label: 'Без вопросов', description: 'Всё без подтверждения', warning: true, adminOnly: true, disabled: true },
 ];
+// Доверие к папке (раздел [15]): выбранная папка не доверена, в ней плагин и MCP.
+const trustCalls = [];
+let trustStateValue = 'trusted';
+const PICKED = path.join(os.tmpdir(), 'mai-ui-untrusted');
+ipcMain.handle('trust:get', (_e, dir) => ({
+  projectDir: dir,
+  state: dir === PICKED ? trustStateValue : 'trusted',
+  folder: dir,
+  inherited: false,
+  found: { plugins: 1, mcpServers: ['fs'], agents: true, memory: false, skills: 0, executable: true },
+}));
+ipcMain.handle('trust:set', (_e, payload) => {
+  trustCalls.push(payload);
+  trustStateValue = payload.state;
+  return { ok: true, projectDir: payload.projectDir, state: payload.state };
+});
+ipcMain.handle('trust:list', () => []);
+ipcMain.handle('project:pick', () => {
+  trustStateValue = 'unknown';
+  return PICKED;
+});
 // Ответы на запросы разрешения из окна (раздел [14]).
 const approvals = [];
 ipcMain.handle('chat:approval', (_e, payload) => {
@@ -606,6 +627,34 @@ app.whenReady().then(async () => {
     const a2 = approvals.find((a) => a.id === 'appr-2');
     check('клавиша 3: отказ с пояснением', a2?.allow === false && a2?.feedback === 'сначала прочитай файл', JSON.stringify(a2));
     check('модалка закрыта', await win.webContents.executeJavaScript(`!document.querySelector('.approve-modal')`));
+
+    console.log('\n[15] Доверие к папке при выборе проекта (ADR 0028)');
+    await win.webContents.executeJavaScript(`document.querySelector('#project-btn').click()`);
+    await new Promise((r) => setTimeout(r, 600));
+    const trustModal = await win.webContents.executeJavaScript(`(() => {
+      const m = document.querySelector('.trust-modal');
+      if (!m) return { found: false };
+      const rec = m.querySelector('.recommended');
+      return {
+        found: true,
+        recommended: rec?.dataset.trust || '',
+        focused: document.activeElement === rec,
+        items: [...m.querySelectorAll('.trust-list li')].map((li) => li.textContent),
+        badge: document.querySelector('#project-trust')?.textContent || '',
+      };
+    })()`);
+    check('окно доверия открыто после выбора папки', trustModal.found === true, JSON.stringify(trustModal));
+    check('при плагинах и MCP рекомендовано «Ограниченно»', trustModal.recommended === 'restricted', JSON.stringify(trustModal));
+    check('рекомендованный ответ в фокусе', trustModal.focused === true);
+    check('найденное перечислено', trustModal.items.some((t) => t.includes('плагины')) && trustModal.items.some((t) => t.includes('fs')), JSON.stringify(trustModal.items));
+    check('значок «не доверена» у папки', trustModal.badge === 'не доверена', trustModal.badge);
+    await win.webContents.executeJavaScript(`document.querySelector('.trust-modal [data-trust="restricted"]').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('решение сохранено через trust:set', trustCalls.some((c) => c.state === 'restricted'), JSON.stringify(trustCalls));
+    check(
+      'значок «ограниченно» у папки',
+      (await win.webContents.executeJavaScript(`document.querySelector('#project-trust')?.textContent`)) === 'ограниченно',
+    );
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

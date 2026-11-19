@@ -8,7 +8,7 @@ import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent 
 import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel } from './lib/models.js';
-import { startRuntime, describeRuntime, probeRuntime } from './lib/runtimes.js';
+import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
 import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, addSessionRules, removeSessionRules } from './lib/sessions.js';
 import { runAgent } from './lib/agent.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
@@ -57,6 +57,10 @@ import { ocrStatus } from './lib/ocr.js';
 import { normalizeMode, MODE_INFO, PERMISSION_MODES } from './lib/permissions.js';
 import { effectiveMode, mergeRules, parseRule } from './lib/policy.js';
 import { createAuditLog, readAudit } from './lib/audit.js';
+import { trustState, setTrust, removeTrust, listTrust, inspectProject } from './lib/trust.js';
+import { guardIpc } from './lib/ipc-permissions.js';
+import { isImageFile } from './lib/vision.js';
+import { acquireProject } from './lib/project-lock.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
@@ -91,6 +95,12 @@ const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
 
 let mainWindow = null;
 
+// Матрица прав IPC (ADR 0028): роль проверяется до любого обработчика.
+// Канал без записи в матрице считается admin-only.
+guardIpc(ipcMain, requireAdmin, {
+  onUnknown: (channel) => console.warn(`[ipc] канал ${channel} не внесён в матрицу прав — доступен только admin`),
+});
+
 /**
  * MCP-серверы проекта лежат в <проект>/.mai-code/mcp.json и дополняют
  * глобальные настройки. Проектные записи имеют приоритет.
@@ -106,9 +116,41 @@ function projectMcpConfig(projectDir) {
   }
 }
 
+/** Доверие к папке проекта (ADR 0028). Песочницы, созданные приложением, доверены. */
+function projectTrust(projectDir) {
+  return trustState(dataDir(), projectDir, { autoTrusted: [sandboxRoot()] });
+}
+
+function isTrusted(projectDir) {
+  return projectTrust(projectDir).state === 'trusted';
+}
+
+/** Ответ IPC, когда решения о доверии ещё нет: окно спросит и повторит запуск. */
+function needTrust(projectDir) {
+  const trust = projectTrust(projectDir);
+  if (trust.state !== 'unknown') return null;
+  return { ok: false, needTrust: true, projectDir, found: inspectProject(projectDir), error: 'Папка проекта не доверена' };
+}
+
 function mcpConfigs(projectDir) {
   const settings = loadSettings();
-  return { ...(settings.mcpServers || {}), ...projectMcpConfig(projectDir || settings.projectDir) };
+  const dir = projectDir || settings.projectDir;
+  // MCP проекта запускает процессы из чужого репозитория — только после доверия.
+  return { ...(settings.mcpServers || {}), ...(isTrusted(dir) ? projectMcpConfig(dir) : {}) };
+}
+
+/** Режим разрешений для внешнего рантайма: тот же, что у встроенного агента в этом чате. */
+function runtimeMode(sessionId, projectDir) {
+  const settings = loadSettings();
+  const session = sessionId ? getSession(sessionId) : null;
+  let mode = effectiveMode(session?.permissionMode || settings.permissionMode, authStatus().role);
+  if (mode === 'bypass' && projectDir && !isTrusted(projectDir)) mode = 'manual';
+  return mode;
+}
+
+/** loadPlugins с учётом доверия: плагины проекта исполняются в main-процессе. */
+function loadPluginsFor(projectDir) {
+  return loadPlugins(projectDir, { includeProject: isTrusted(projectDir) });
 }
 
 function send(window, event) {
@@ -475,9 +517,21 @@ ipcMain.handle('runtimes:run', async (event, payload) => {
   if (!runtime.command) return { ok: false, error: 'У рантайма не задана команда' };
 
   const projectDir = payload.projectDir || settings.projectDir;
+  const trustGate = needTrust(projectDir);
+  if (trustGate) return trustGate;
   const model = payload.model || settings.activeModel || '';
   const prompt = String(payload.text || '').trim();
   if (!prompt) return { ok: false, error: 'Пустой запрос' };
+
+  // Режим проверяется до записи сообщения в чат: отказ — это ошибка запуска, а не ответ рантайма.
+  const permissionMode = runtimeMode(payload.sessionId, projectDir);
+  const permission = permissionPlan(runtime, permissionMode);
+  if (!permission.ok) return { ok: false, error: permission.error, permissionDenied: true };
+  // Рантайм с правом записи занимает папку (A3.6); только чтение — нет.
+  const lock = permission.readOnly || permissionMode === 'plan'
+    ? { ok: true, release: () => {} }
+    : acquireProject(projectDir, { label: `рантайм ${runtime.name || payload.runtime}` });
+  if (!lock.ok) return { ok: false, busy: true, error: lock.error };
 
   const session = runtimeSession(payload, settings, prompt, model, projectDir, payload.displayText || prompt);
   const startedAt = Date.now();
@@ -487,9 +541,11 @@ ipcMain.handle('runtimes:run', async (event, payload) => {
     prompt,
     model,
     projectDir,
+    permissionMode,
     onData: (text) => send(window, { type: 'runtime:chunk', runtimeId: payload.runtime, text }),
     onExit: ({ code, error, output }) => {
       state.runtime = null;
+      lock.release();
       emitSpan('runtime.run', {
         startMs: startedAt,
         endMs: Date.now(),
@@ -528,7 +584,7 @@ ipcMain.handle('runtimes:run', async (event, payload) => {
     type: 'runtime:start',
     runtimeId: payload.runtime,
     name: runtime.name || payload.runtime,
-    command: describeRuntime(runtime, { prompt, model, projectDir, target: runtime.target || '' }),
+    command: describeRuntime(runtime, { prompt, model, projectDir, target: runtime.target || '' }, permissionMode),
   });
 
   return { ok: true, sessionId: session.id, title: session.title };
@@ -551,9 +607,32 @@ ipcMain.handle('runtimes:runMany', async (event, payload) => {
   if (!selected.length) return { ok: false, error: 'Нет включённых рантаймов с командой' };
 
   const projectDir = payload.projectDir || settings.projectDir;
+  const trustGate = needTrust(projectDir);
+  if (trustGate) return trustGate;
   const model = payload.model || settings.activeModel || '';
   const prompt = String(payload.text || '').trim();
   if (!prompt) return { ok: false, error: 'Пустой запрос' };
+
+  const permissionMode = runtimeMode(payload.sessionId, projectDir);
+  const refused = selected
+    .map(({ id, runtime }) => ({ id, plan: permissionPlan(runtime, permissionMode) }))
+    .filter((item) => !item.plan.ok);
+  if (refused.length) {
+    return { ok: false, permissionDenied: true, error: refused.map((item) => item.plan.error).join('\n') };
+  }
+  // Несколько агентов с правом записи в одной папке — та же гонка, что A3.6:
+  // группа занимает папку целиком, пока не завершится последний.
+  const writers = permissionMode !== 'plan' && selected.some(({ runtime }) => !permissionPlan(runtime, permissionMode).readOnly);
+  if (writers && selected.length > 1) {
+    return {
+      ok: false,
+      error:
+        'Несколько рантаймов с правом записи в одну папку перезапишут правки друг друга. ' +
+        'Запустите их в режиме «План» или по одному.',
+    };
+  }
+  const lock = writers ? acquireProject(projectDir, { label: 'группа рантаймов' }) : { ok: true, release: () => {} };
+  if (!lock.ok) return { ok: false, busy: true, error: lock.error };
 
   const session = runtimeSession(payload, settings, prompt, model, projectDir, payload.displayText || prompt);
   let pending = selected.length;
@@ -567,13 +646,14 @@ ipcMain.handle('runtimes:runMany', async (event, payload) => {
       type: 'runtime:start',
       runtimeId: id,
       name,
-      command: describeRuntime(runtime, { prompt, model, projectDir, target: runtime.target || '' }),
+      command: describeRuntime(runtime, { prompt, model, projectDir, target: runtime.target || '' }, permissionMode),
     });
     const handle = startRuntime({
       runtime,
       prompt,
       model,
       projectDir,
+      permissionMode,
       onData: (text) => send(window, { type: 'runtime:chunk', runtimeId: id, text }),
       onExit: ({ code, error, output }) => {
         emitSpan('runtime.run', {
@@ -588,7 +668,10 @@ ipcMain.handle('runtimes:runMany', async (event, payload) => {
           logError({ source: 'runtime', runtime: id, message: error || `Рантайм завершился с кодом ${code}` });
         }
         pending -= 1;
-        if (pending <= 0) state.runtimeGroup = null;
+        if (pending <= 0) {
+          state.runtimeGroup = null;
+          lock.release();
+        }
         send(window, {
           type: 'runtime:exit',
           runtimeId: id,
@@ -623,6 +706,35 @@ ipcMain.handle('project:pick', async () => {
   if (result.canceled || !result.filePaths[0]) return null;
   saveSettings({ projectDir: result.filePaths[0] });
   return result.filePaths[0];
+});
+
+// ---------- доверие к папке (ADR 0028) ----------
+
+ipcMain.handle('trust:get', (_e, projectDir) => {
+  const dir = projectDir || loadSettings().projectDir;
+  return { projectDir: dir, ...projectTrust(dir), found: inspectProject(dir) };
+});
+
+/**
+ * Доверить папку может только admin: это включает исполнение её кода.
+ * «Ограниченно» доступно всем — это только сужает возможности.
+ */
+ipcMain.handle('trust:set', async (_e, payload) => {
+  const { projectDir, state } = payload || {};
+  if (state === 'trusted') requireAdmin();
+  const result = setTrust(dataDir(), projectDir, state);
+  // MCP проекта подключается или отключается сразу.
+  await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
+  return { ok: true, projectDir, ...result, found: inspectProject(projectDir) };
+});
+
+ipcMain.handle('trust:list', () => listTrust(dataDir()));
+
+ipcMain.handle('trust:remove', async (_e, projectDir) => {
+  requireAdmin();
+  const result = removeTrust(dataDir(), projectDir);
+  await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
+  return { ok: true, projectDir, ...result };
 });
 
 // ---------- режимы разрешений ----------
@@ -808,6 +920,12 @@ ipcMain.handle('chat:start', async (event, payload) => {
   }
 
   const projectDir = payload.projectDir || settings.projectDir;
+  const trustGate = needTrust(projectDir);
+  if (trustGate) return trustGate;
+  const trusted = isTrusted(projectDir);
+  // Один пишущий прогон на папку (A3.6): иначе чат и самокоррекция перезаписывают друг друга.
+  const lock = acquireProject(projectDir, { label: 'чат агента' });
+  if (!lock.ok) return { ok: false, busy: true, error: lock.error };
   const model = activeKey;
 
   // Ревизор опционален: если модель не разрешилась, работаем без него.
@@ -846,9 +964,15 @@ ipcMain.handle('chat:start', async (event, payload) => {
   if (adopted && payload.text) {
     payload.text = String(payload.text).split(adopted.from).join(adopted.to);
   }
+  // Пути изображений из вложений: в сессии храним путь, base64 собирается на запрос (F1).
+  const images = (Array.isArray(payload.images) ? payload.images : [])
+    .map((p) => String(p || ''))
+    .map((p) => (adopted ? p.split(adopted.from).join(adopted.to) : p))
+    .filter((p) => isImageFile(p))
+    .slice(0, 20);
   if (payload.text) {
     const display = payload.displayText || payload.text;
-    session.messages.push({ role: 'user', content: payload.text, display });
+    session.messages.push({ role: 'user', content: payload.text, display, ...(images.length ? { images } : {}) });
     if (!session.title || session.title === 'Новый чат') {
       session.title = display.trim().slice(0, 60) || 'Новый чат';
     }
@@ -858,7 +982,15 @@ ipcMain.handle('chat:start', async (event, payload) => {
   const controller = new AbortController();
   state.controller = controller;
 
-  const { tools: pluginTools, transforms, loaded } = await loadPlugins(projectDir);
+  let plugins;
+  try {
+    plugins = await loadPluginsFor(projectDir);
+  } catch (err) {
+    state.controller = null;
+    lock.release();
+    return { ok: false, error: `Плагины не загрузились: ${err?.message || String(err)}` };
+  }
+  const { tools: pluginTools, transforms, loaded } = plugins;
 
   (async () => {
     try {
@@ -874,8 +1006,9 @@ ipcMain.handle('chat:start', async (event, payload) => {
         transforms,
         reviewer,
         permissionMode: session.permissionMode || '',
-        policy: policyFor(session.id),
+        policy: policyFor(session.id, projectDir),
         audit,
+        trusted,
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -904,6 +1037,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
     } finally {
       state.controller = null;
       state.approvals.clear();
+      lock.release();
     }
   })();
 
@@ -921,13 +1055,16 @@ function auditLog() {
  * Политика для прогона агента: режим, правила и роль читаются на каждый
  * вызов, поэтому переключение в интерфейсе действует сразу (ADR 0027).
  */
-function policyFor(sessionId) {
+function policyFor(sessionId, projectDir = '') {
   return {
     role: authStatus().role,
     getMode: () => {
       const settings = loadSettings();
       const session = sessionId ? getSession(sessionId) : null;
-      return effectiveMode(session?.permissionMode || settings.permissionMode, authStatus().role);
+      const mode = effectiveMode(session?.permissionMode || settings.permissionMode, authStatus().role);
+      // В недоверенной папке «Без вопросов» не действует (ADR 0028).
+      if (mode === 'bypass' && projectDir && !isTrusted(projectDir)) return 'manual';
+      return mode;
     },
     getRules: () => {
       const settings = loadSettings();
@@ -1123,7 +1260,7 @@ ipcMain.handle('mcp:remove', async (_e, name) => {
 // ---------- плагины ----------
 
 ipcMain.handle('plugins:list', async (_e, projectDir) => {
-  const { loaded } = await loadPlugins(projectDir);
+  const { loaded } = await loadPluginsFor(projectDir);
   return { plugins: loaded, dirs: pluginDirs(projectDir) };
 });
 ipcMain.handle('plugins:openFolder', async (_e, projectDir) => {
@@ -1327,7 +1464,7 @@ ipcMain.handle('boards:baseline', async (_e, payload) => {
 });
 
 ipcMain.handle('boards:scan', async (_e, payload) =>
-  scanQuality(projectOf(payload), { loadPlugins }),
+  scanQuality(projectOf(payload), { loadPlugins: loadPluginsFor }),
 );
 
 ipcMain.handle('boards:git', (_e, payload) => gitStatus(projectOf(payload)));
@@ -1340,6 +1477,11 @@ ipcMain.handle('boards:stageRun', (event, payload) => {
   if (state.stage) return { ok: false, error: 'Стадия уже выполняется' };
 
   const projectDir = projectOf(payload);
+  // Команда стадии лежит в boards.json проекта: её мог подложить чужой
+  // репозиторий. Без доверия к папке стадии не запускаются (A1.11, ADR 0028).
+  if (!isTrusted(projectDir)) {
+    return { ok: false, error: 'Стадии запускают команды из boards.json проекта — сначала доверьте папку в главном окне.' };
+  }
   const data = loadBoards(projectDir);
   const stage = (data.runners.stages || []).find((s) => s.id === payload.stageId);
   if (!stage) return { ok: false, error: 'Стадия не найдена' };
@@ -1422,15 +1564,19 @@ ipcMain.handle('boards:correction', async (event, payload) => {
   if (state.correction) return { ok: false, error: 'Самокоррекция уже выполняется' };
 
   const projectDir = projectOf(payload);
+  const trustGate = needTrust(projectDir);
+  if (trustGate) return trustGate;
+  const trusted = isTrusted(projectDir);
   const settings = loadSettings();
   const resolved = resolveModel(settings, payload.model || settings.activeModel);
   if (!resolved.provider.apiKey) return { ok: false, error: 'Нет ключа выбранного провайдера' };
-
   const boards = loadBoards(projectDir);
   const selected = (boards.quality.issues || []).filter(
     (issue) => issue.status !== 'ignored' && (!payload.issueIds?.length || payload.issueIds.includes(issue.id)),
   );
   if (!selected.length) return { ok: false, error: 'Нет проблем для исправления' };
+  const lock = acquireProject(projectDir, { label: 'самокоррекция' });
+  if (!lock.ok) return { ok: false, busy: true, error: lock.error };
 
   const session = createSession({
     title: `Самокоррекция · ${new Date().toLocaleString('ru-RU')}`,
@@ -1450,7 +1596,15 @@ ipcMain.handle('boards:correction', async (event, payload) => {
 
   const controller = new AbortController();
   state.correction = controller;
-  const { tools: pluginTools, transforms } = await loadPlugins(projectDir);
+  let plugins;
+  try {
+    plugins = await loadPluginsFor(projectDir);
+  } catch (err) {
+    state.correction = null;
+    lock.release();
+    return { ok: false, error: `Плагины не загрузились: ${err?.message || String(err)}` };
+  }
+  const { tools: pluginTools, transforms } = plugins;
 
   (async () => {
     try {
@@ -1465,8 +1619,9 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         pluginTools,
         transforms,
         permissionMode: session.permissionMode || '',
-        policy: policyFor(session.id),
+        policy: policyFor(session.id, projectDir),
         audit,
+        trusted,
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -1479,7 +1634,7 @@ ipcMain.handle('boards:correction', async (event, payload) => {
       session.messages = history;
       saveSession(session);
       if (controller.signal.aborted) throw new Error('Остановлено пользователем');
-      const scan = await scanQuality(projectDir, { loadPlugins });
+      const scan = await scanQuality(projectDir, { loadPlugins: loadPluginsFor });
       updateCorrection(projectDir, correction.id, {
         status: 'done',
         finishedAt: new Date().toISOString(),
@@ -1508,6 +1663,7 @@ ipcMain.handle('boards:correction', async (event, payload) => {
     } finally {
       state.correction = null;
       state.approvals.clear();
+      lock.release();
     }
   })();
 
@@ -1746,9 +1902,12 @@ ipcMain.handle('repowise:context', (_e, payload) =>
 ipcMain.handle('repowise:risk', (_e, payload) =>
   repowiseResult(() => repowise.risk(projectOf(payload), payload.range)),
 );
-ipcMain.handle('repowise:distill', (_e, payload) =>
-  repowiseResult(() => repowise.distill(projectOf(payload), payload.command)),
-);
+ipcMain.handle('repowise:distill', (_e, payload) => {
+  // Команда выполняется в оболочке: те же guardrails, что у run_shell.
+  const guard = checkCommand(String(payload?.command || ''), { guardrails: loadSettings().guardrails });
+  if (!guard.allowed) return { ok: false, output: `Guardrails заблокировали команду: ${guard.reason}` };
+  return repowiseResult(() => repowise.distill(projectOf(payload), payload.command));
+});
 
 ipcMain.handle('repowise:connectMcp', async (_e, payload) => {
   const projectDir = projectOf(payload);
@@ -1772,7 +1931,14 @@ ipcMain.handle('repowise:stopServe', (_e, payload) => repowise.stopServe(project
 // ---------- прочее ----------
 
 ipcMain.handle('app:openPath', async (_e, target) => {
+  // shell.openPath запускает файл ассоциированной программой — это исполнение.
+  // Окну нужно только открывать папки, поэтому файлы не открываем (ADR 0028).
   if (!target) return false;
+  try {
+    if (!fs.statSync(target).isDirectory()) return false;
+  } catch {
+    return false;
+  }
   await shell.openPath(target);
   return true;
 });

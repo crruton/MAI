@@ -476,6 +476,19 @@ button { cursor: pointer; }
 .approve-always .approve-option { flex: 1; }
 .approve-scope { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0 8px; }
 
+/* ---------- доверие к папке (ADR 0028) ---------- */
+.project-trust { font-size: 10px; padding: 1px 6px; border-radius: 999px; margin-left: 6px; border: 1px solid var(--border); }
+.project-trust.trust-restricted { color: var(--amber); border-color: rgba(251, 191, 36, 0.5); }
+.project-trust.trust-unknown { color: var(--text-dim); border-style: dashed; }
+.trust-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; }
+.trust-folder { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); font-family: var(--mono); }
+.trust-list { margin: 6px 0 10px; padding-left: 18px; font-size: 13px; color: var(--text-dim); }
+.trust-option-text { display: flex; flex-direction: column; gap: 2px; }
+.trust-option-text small { color: var(--text-dim); font-size: 11px; }
+
+/* ---------- токены ответа (A3.8) ---------- */
+.msg-usage { font-size: 11px; color: var(--text-faint); font-family: var(--mono); margin-left: 8px; }
+
 /* ---------- ревизор ---------- */
 .msg-review { display: flex; justify-content: center; }
 .review-card {

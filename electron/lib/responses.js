@@ -40,7 +40,8 @@ function textOf(content) {
       if (part?.type === 'text' || part?.type === 'input_text' || part?.type === 'output_text') {
         return part.text || '';
       }
-      if (part?.type === 'image_url') return `[изображение: ${part.image_url?.url || ''}]`;
+      // data URL в текст не кладём: это мегабайты base64 вместо картинки.
+      if (part?.type === 'image_url') return '[изображение]';
       return '';
     })
     .filter(Boolean)
@@ -74,6 +75,16 @@ export function toInput(messages) {
         call_id: message.tool_call_id,
         output: textOf(message.content),
       });
+      continue;
+    }
+    // Сообщение пользователя с картинками: input_text + input_image (бэклог F1).
+    if (message.role === 'user' && Array.isArray(message.content) && message.content.some((p) => p?.type === 'image_url')) {
+      const parts = [];
+      for (const part of message.content) {
+        if (part?.type === 'image_url' && part.image_url?.url) parts.push({ type: 'input_image', image_url: part.image_url.url });
+        else if (part?.type === 'text' && part.text) parts.push({ type: 'input_text', text: part.text });
+      }
+      if (parts.length) input.push({ role: 'user', content: parts });
       continue;
     }
     const text = textOf(message.content);
@@ -131,6 +142,7 @@ export async function streamResponseTurn({
 
   let content = '';
   let reasoning = '';
+  let usage = null;
   const calls = new Map(); // call_id -> { id, name, arguments }
   const order = [];
 
@@ -176,6 +188,7 @@ export async function streamResponseTurn({
     }
     // Некоторые шлюзы не отдают дельты, а присылают готовый объект ответа.
     if ((type === 'response.completed' || type === 'response.incomplete') && event.response) {
+      if (event.response.usage) usage = event.response.usage;
       const built = collectFromResponse(event.response);
       if (built.content && !content) {
         emit({ type: 'delta', text: built.content });
@@ -196,7 +209,7 @@ export async function streamResponseTurn({
     .filter((c) => c && c.name)
     .map((c) => ({ id: c.id, name: c.name, arguments: c.arguments || '{}' }));
 
-  return { content, reasoning, toolCalls };
+  return { content, reasoning, toolCalls, usage };
 }
 
 /** Разобрать готовый объект ответа (fallback, если дельт не было). */

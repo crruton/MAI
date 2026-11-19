@@ -7,11 +7,20 @@ export function pluginDirs(projectDir) {
   return [path.join(projectDir || '', '.mai-code', 'plugins'), path.join(dataDir(), 'plugins')];
 }
 
-export async function loadPlugins(projectDir) {
+/**
+ * Загружает плагины. Плагины проекта — код из чужого репозитория, который
+ * исполняется в main-процессе, поэтому без доверия к папке они пропускаются
+ * (ADR 0028). Глобальные плагины пользователь положил сам.
+ */
+export async function loadPlugins(projectDir, { includeProject = true } = {}) {
   const loaded = [];
   const tools = [];
   const transforms = [];
-  for (const dir of pluginDirs(projectDir)) {
+  const [projectDirPlugins, globalDir] = pluginDirs(projectDir);
+  if (!includeProject && fs.existsSync(projectDirPlugins)) {
+    loaded.push({ name: 'плагины проекта', file: projectDirPlugins, tools: 0, skipped: true, error: 'папка проекта не доверена' });
+  }
+  for (const dir of includeProject ? [projectDirPlugins, globalDir] : [globalDir]) {
     if (!dir || !fs.existsSync(dir)) continue;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.js')) continue;
