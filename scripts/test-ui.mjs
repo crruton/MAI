@@ -847,6 +847,68 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 300));
     const p1 = answers.find((a) => a.id === 'p-1');
     check('«Доработать» уходит с замечаниями', p1?.answer?.action === 'revise' && p1?.answer?.feedback === 'добавь тесты', JSON.stringify(p1));
+
+    console.log('\n[18] Задачи агента, очередь, живой вывод, клавиши (CC1.5, CC7.4–CC7.6)');
+    win.webContents.send('chat:event', {
+      type: 'todos',
+      todos: [
+        { content: 'Прочитать код', status: 'completed' },
+        { content: 'Добавить тест', activeForm: 'Добавляю тест', status: 'in_progress' },
+        { content: 'Обновить docs', status: 'pending' },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const todos = await win.webContents.executeJavaScript(`(() => {
+      const box = document.querySelector('#todos');
+      return {
+        visible: box && !box.hidden,
+        head: box?.querySelector('.todos-head')?.textContent || '',
+        items: [...(box?.querySelectorAll('.todo') || [])].map((li) => li.className + ':' + li.textContent),
+      };
+    })()`);
+    check('панель задач видна', todos.visible === true, JSON.stringify(todos));
+    check('счётчик выполненных', /1 из 3/.test(todos.head), todos.head);
+    check('задача в работе — в форме «делаю»', todos.items.some((t) => t.includes('todo-in_progress') && t.includes('Добавляю тест')), JSON.stringify(todos.items));
+    check('выполненная отмечена', todos.items.some((t) => t.includes('todo-completed')));
+
+    win.webContents.send('chat:event', { type: 'queued:returned', items: [{ id: 'x', text: 'не успел уйти' }] });
+    await new Promise((r) => setTimeout(r, 300));
+    check('невзятое из очереди вернулось в поле ввода', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === 'не успел уйти');
+    await win.webContents.executeJavaScript(`document.querySelector('#input').value = ''`);
+
+    const modeBefore = await win.webContents.executeJavaScript(`document.querySelector('#mode-select').value`);
+    await win.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('#input');
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+    })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const modeAfter = await win.webContents.executeJavaScript(`document.querySelector('#mode-select').value`);
+    check('Shift+Tab переключает режим', modeBefore !== modeAfter, `${modeBefore} → ${modeAfter}`);
+    check('Shift+Tab не выбирает недоступный режим', modeAfter !== 'bypass', modeAfter);
+
+
+    win.webContents.send('chat:event', { type: 'tool_progress', id: 'tc-live', text: 'сборка 42%\n' });
+    win.webContents.send('chat:event', {
+      type: 'done',
+      messages: [
+        { role: 'user', content: 'собери' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'tc-live', type: 'function', function: { name: 'run_shell', arguments: JSON.stringify({ command: 'npm run build' }) } }] },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const live = await win.webContents.executeJavaScript(`(() => {
+      const pre = document.querySelector('.tool-live');
+      return { text: pre?.textContent || '', open: Boolean(pre?.closest('.tool-card.open')) };
+    })()`);
+    check('живой вывод в раскрытой карточке', /сборка 42%/.test(live.text) && live.open, JSON.stringify(live));
+    await win.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('#input');
+      input.value = '';
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    })()`);
+    check('↑ в пустом поле возвращает последнее сообщение', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === 'собери');
+
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

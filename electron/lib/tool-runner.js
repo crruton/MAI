@@ -169,7 +169,19 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
 
   try {
     // Плагины старого формата сами зовут ctx.approve — вызов уже разрешён.
-    const result = await entry.run({ ...ctx, approve: async () => true, ask: entry.source === 'builtin' ? ctx.ask : undefined }, args);
+    // ask, progress и signal — только встроенным инструментам; плагину уходят данные (ADR 0030).
+    const builtin = entry.source === 'builtin';
+    const result = await entry.run(
+      {
+        ...ctx,
+        approve: async () => true,
+        ask: builtin ? ctx.ask : undefined,
+        progress: builtin ? ctx.progress : undefined,
+        signal: builtin ? ctx.signal : undefined,
+        todos: builtin ? ctx.todos : undefined,
+      },
+      args,
+    );
     return { ok: true, content: String(result), decision, approved: true, diff: shortDiff };
   } catch (err) {
     return { ok: false, content: `Ошибка: ${err?.message || String(err)}`, decision, approved: true };

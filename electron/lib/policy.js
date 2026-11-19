@@ -30,6 +30,7 @@ const BUILTIN = {
   // Диалоговые инструменты ничего не меняют сами: решение принимает пользователь.
   ask_user: 'read',
   exit_plan: 'read',
+  todo_write: 'read',
 };
 
 export function isBuiltinTool(name) {

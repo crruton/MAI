@@ -449,6 +449,54 @@ console.log('\n[11] ask_user и exit_plan: ответ пользователя �
   check('в «Только разрешённое» ask_user скрыт', !silent[0].tools.map((t) => t.function.name).includes('ask_user'));
 }
 
+console.log('\n[12] Очередь сообщений, живой вывод и список задач (CC7.5, CC7.4, CC1.5)');
+{
+  const bodies = [];
+  const events = [];
+  const queue = [{ id: 'q1', text: 'и ещё добавь README', display: 'и ещё добавь README' }];
+  let pulls = 0;
+  const history = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'сделай' }],
+      mcp: fakeMcp(),
+      emit: (e) => events.push(e),
+      // Сообщение «приходит» после первого шага.
+      pullQueued: () => (pulls++ === 0 ? [] : queue.splice(0)),
+      clientFactory: fakeClient(
+        [
+          { calls: [{ name: 'todo_write', args: { todos: [{ content: 'Сделать', status: 'in_progress' }] } }, { name: 'run_shell', args: { command: 'echo живой' } }] },
+          { text: 'готово' },
+          { text: 'и README тоже' },
+        ],
+        bodies,
+      ),
+      policy: { getMode: () => 'bypass', getRules: () => ({}) },
+    }),
+  );
+  const queuedIndex = history.findIndex((m) => m.queued);
+  check('сообщение из очереди попало в историю', queuedIndex > 0 && history[queuedIndex].content === 'и ещё добавь README');
+  check('оно стоит после результатов инструментов', history[queuedIndex - 1].role === 'tool' || history[queuedIndex - 1].role === 'assistant');
+  check('агент увидел его в следующем запросе', bodies.some((b) => b.messages.some((m) => m.role === 'user' && m.content === 'и ещё добавь README')));
+  check('окно получило queued:consumed', events.some((e) => e.type === 'queued:consumed' && e.ids[0] === 'q1'));
+  check('живой вывод команды пришёл событием', events.some((e) => e.type === 'tool_progress' && /живой/.test(e.text)));
+  check('список задач пришёл событием', events.some((e) => e.type === 'todos' && e.todos[0].content === 'Сделать'));
+
+  // Сообщение пришло, когда агент уже собирался закончить: прогон продолжается.
+  const late = [{ id: 'q2', text: 'стоп, поправь', display: 'стоп, поправь' }];
+  const lateBodies = [];
+  let lateCalls = 0;
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'x' }],
+      mcp: fakeMcp(),
+      pullQueued: () => (lateCalls++ === 0 ? late.splice(0) : []),
+      clientFactory: fakeClient([{ text: 'ответ' }, { text: 'поправил' }], lateBodies),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  check('сообщение перед концом ответа продлевает прогон', lateBodies.length === 2, String(lateBodies.length));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

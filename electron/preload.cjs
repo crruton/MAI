@@ -78,6 +78,9 @@ contextBridge.exposeInMainWorld('mai', {
     approve: (id, allow, extra = {}) => invoke('chat:approval', { id, allow, ...extra }),
     // Ответ на ask_user или карточку плана exit_plan (CC1.7, CC1.8).
     answer: (id, answer) => invoke('chat:answer', { id, answer }),
+    // Очередь сообщений во время работы агента (CC7.5).
+    queue: (text, displayText) => invoke('chat:queue', { text, displayText }),
+    unqueue: (id) => invoke('chat:unqueue', { id }),
     onEvent: (handler) => {
       const listener = (_event, data) => handler(data);
       ipcRenderer.on('chat:event', listener);

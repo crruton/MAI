@@ -14,6 +14,7 @@ import { skillTools } from './tools/skills.js';
 import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
 import { interactiveTools } from './tools/interactive.js';
+import { todoTools } from './tools/todo.js';
 import { listSkills, readAgents, readMemory } from './skills.js';
 import { reviewAnswer } from './reviewer.js';
 import { modePrompt } from './permissions.js';
@@ -31,6 +32,7 @@ const BASE_PROMPT = `Ты — MAI Code, агент для программиро
 - Не выдумывай содержимое файлов: если не читал — прочитай.
 - Команды оболочки запускай только когда это действительно нужно. Что требует подтверждения, описано в разделе «Режим».
 - Если вызов отклонён, не повторяй его тем же способом: учти причину и пояснение пользователя.
+- Для задачи из трёх шагов и больше веди список задач инструментом todo_write и обновляй его по ходу.
 - После изменений проверяй результат (тесты, сборка, линтер), если это возможно.
 - Не коммить в git и не удалять данные без явной просьбы.`;
 
@@ -157,6 +159,7 @@ export async function runAgent({
   audit = null,
   trusted = true,
   ask = null,
+  pullQueued = null,
   onHistory = null,
   clientFactory = null,
 }) {
@@ -203,7 +206,7 @@ export async function runAgent({
     getRules: () => (policy?.getRules ? policy.getRules() : mergeRules(settings.permissions)),
   };
 
-  const builtin = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools].map((t) =>
+  const builtin = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
     toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview }),
   );
   const builtinNames = new Set(builtin.map((t) => t.name));
@@ -243,8 +246,28 @@ export async function runAgent({
     }
   };
 
+  // Сообщения, написанные пользователем во время работы (CC7.5), встают в историю
+  // перед следующим шагом — после результатов инструментов, не разрывая пары.
+  const takeQueued = () => {
+    let queued = [];
+    try {
+      queued = pullQueued?.() || [];
+    } catch {
+      queued = [];
+    }
+    for (const item of queued) {
+      history.push({ role: 'user', content: item.text, display: item.display || item.text, queued: true });
+    }
+    if (queued.length) {
+      emit({ type: 'queued:consumed', ids: queued.map((item) => item.id) });
+      snapshot();
+    }
+    return queued.length;
+  };
+
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
     if (signal.aborted) break;
+    if (iteration > 0) takeQueued();
     const mode = currentMode();
     const tools = buildTools(mode);
     const system = systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted });
@@ -388,6 +411,8 @@ export async function runAgent({
     emit({ type: 'assistant', message: assistantMessage });
 
     if (!validCalls.length) {
+      // Пользователь дописал что-то, пока агент отвечал: продолжаем с новым сообщением.
+      if (takeQueued()) continue;
       // Ревизор проверяет финальный ответ. При revise причина добавляется
       // в историю как сообщение пользователя, и цикл продолжается.
       if (reviewerClient && reviewRound < maxReviewRounds) {
@@ -446,7 +471,14 @@ export async function runAgent({
         if (!entry) {
           outcome = { ok: false, content: `Ошибка: инструмент ${call.function.name} недоступен в текущем режиме или не существует` };
         } else {
-          outcome = await runToolCall({ entry, args, ctx: toolCtx, policy: policyCtx, approve, audit });
+          // Живой вывод команды в карточку (CC7.4) и «Стоп», который останавливает процесс.
+          const callCtx = {
+            ...toolCtx,
+            signal,
+            progress: (text) => emit({ type: 'tool_progress', id: call.id, text: String(text).slice(0, 8000) }),
+            todos: (todos) => emit({ type: 'todos', todos }),
+          };
+          outcome = await runToolCall({ entry, args, ctx: callCtx, policy: policyCtx, approve, audit });
         }
       }
       emit({ type: 'tool_result', id: call.id, name: call.function.name, content: outcome.content, ok: outcome.ok, diff: outcome.diff || null });

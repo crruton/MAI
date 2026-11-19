@@ -163,7 +163,7 @@ function send(window, event) {
 
 function runState(window) {
   const id = window.id;
-  if (!runs.has(id)) runs.set(id, { controller: null, runtime: null, runtimeGroup: null, stage: null, correction: null, approvals: new Map(), questions: new Map() });
+  if (!runs.has(id)) runs.set(id, { controller: null, runtime: null, runtimeGroup: null, stage: null, correction: null, approvals: new Map(), questions: new Map(), queue: [] });
   return runs.get(id);
 }
 
@@ -1030,6 +1030,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
         emit: (e) => send(window, e),
         approve: makeApprover(window, state, session.id),
         ask: makeAsker(window, state, session.id, projectDir),
+        // Очередь сообщений, написанных во время работы (CC7.5).
+        pullQueued: () => state.queue.splice(0),
       });
       session.messages = history;
       saveSession(session);
@@ -1051,6 +1053,9 @@ ipcMain.handle('chat:start', async (event, payload) => {
       state.controller = null;
       state.approvals.clear();
       state.questions.clear();
+      // Не взятые агентом сообщения возвращаем в поле ввода, чтобы они не пропали.
+      const leftover = state.queue.splice(0);
+      if (leftover.length) send(window, { type: 'queued:returned', items: leftover });
       lock.release();
     }
   })();
@@ -1177,6 +1182,27 @@ ipcMain.handle('chat:stop', (event) => {
   denyApprovals(state);
   state.controller?.abort();
   return true;
+});
+
+/** Сообщение во время работы агента: встанет в историю перед следующим шагом. */
+ipcMain.handle('chat:queue', (event, payload = {}) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const state = runState(window);
+  if (!state.controller) return { ok: false, idle: true };
+  const text = String(payload.text || '').trim();
+  if (!text) return { ok: false, error: 'Пустое сообщение' };
+  if (state.queue.length >= 10) return { ok: false, error: 'В очереди уже 10 сообщений' };
+  const item = { id: crypto.randomUUID(), text: text.slice(0, 100_000), display: String(payload.displayText || text).slice(0, 100_000) };
+  state.queue.push(item);
+  return { ok: true, id: item.id, size: state.queue.length };
+});
+
+ipcMain.handle('chat:unqueue', (event, payload = {}) => {
+  const state = runState(BrowserWindow.fromWebContents(event.sender));
+  const index = state.queue.findIndex((item) => item.id === payload.id);
+  if (index === -1) return { ok: false, error: 'Сообщение уже передано агенту' };
+  const [item] = state.queue.splice(index, 1);
+  return { ok: true, item };
 });
 
 ipcMain.handle('chat:answer', (event, payload = {}) => {

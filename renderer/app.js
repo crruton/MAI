@@ -29,6 +29,12 @@ const state = {
   question: null,
   // Запрос разрешения — карточкой в ленте (CC7.1).
   approval: null,
+  // Живой вывод команд по id вызова (CC7.4).
+  liveOutput: {},
+  // Список задач агента (CC1.5) и очередь сообщений (CC7.5).
+  todos: [],
+  todosCollapsed: false,
+  queue: [],
 };
 
 /* ---------- утилиты ---------- */
@@ -1004,7 +1010,9 @@ function toolTitle(name, argsText, result) {
 function toolCard(id, name, argsText) {
   const result = state.toolResults[id];
   const status = result ? (result.ok ? 'ok' : 'err') : 'run';
-  const card = el('div', { class: `tool-card${result && !result.ok ? ' open' : ''}` });
+  const live = !result ? state.liveOutput[id] : '';
+  // Пока команда идёт, карточка раскрыта и показывает живой вывод (CC7.4).
+  const card = el('div', { class: `tool-card${(result && !result.ok) || live ? ' open' : ''}` });
   const title = toolTitle(name, argsText, result);
   const head = el('div', { class: 'tool-head' }, [
     el('span', { class: `tool-dot ${status}` }),
@@ -1015,6 +1023,10 @@ function toolCard(id, name, argsText) {
   const body = el('div', { class: 'tool-body' });
   body.append(el('div', { class: 'tool-label', text: 'Аргументы' }));
   body.append(el('pre', { text: String(argsText || '') }));
+  if (live) {
+    body.append(el('div', { class: 'tool-label', text: 'Вывод (идёт)' }));
+    body.append(el('pre', { class: 'tool-live', text: live.slice(-6000) }));
+  }
   if (result?.diff) body.append(diffView(result.diff, { limit: 200 }));
   if (result) {
     body.append(el('div', { class: 'tool-label', text: result.ok ? 'Результат' : 'Ошибка' }));
@@ -1148,6 +1160,9 @@ async function loadSession(id) {
   if (session.projectDir) state.projectDir = session.projectDir;
   refreshTrust();
   state.toolResults = {};
+  state.liveOutput = {};
+  state.todos = todosFromHistory(state.messages);
+  renderTodos();
   state.live = null;
   state.liveRuntimes = [];
   clearAttachments();
@@ -1171,6 +1186,9 @@ function newChat() {
   state.sessionId = null;
   state.messages = [];
   state.toolResults = {};
+  state.liveOutput = {};
+  state.todos = [];
+  renderTodos();
   state.live = null;
   state.liveRuntimes = [];
   clearAttachments();
@@ -1198,7 +1216,10 @@ async function loadModels(force = false) {
 /* ---------- отправка ---------- */
 
 async function send() {
-  if (state.running) return;
+  if (state.running) {
+    await queueMessage();
+    return;
+  }
   const input = $('#input');
   const text = input.value.trim();
   const hasFiles = state.attachments.length > 0;
@@ -1347,9 +1368,165 @@ function setRunning(running) {
   $('#composer-hint').textContent = running
     ? state.liveRuntimes.length
       ? 'Рантайм работает…'
-      : 'Агент работает…'
+      : 'Агент работает · Enter — в очередь · Esc — остановить'
     : '';
 }
+
+/* ---------- очередь сообщений, задачи, клавиши (CC7.5, CC1.5, CC7.6) ---------- */
+
+/** Сообщение во время работы агента уходит в очередь и встанет в историю перед следующим шагом. */
+async function queueMessage() {
+  const input = $('#input');
+  const text = input.value.trim();
+  if (!text) return;
+  if (state.liveRuntimes.length) {
+    toast('Внешний рантайм не принимает сообщения на ходу — дождитесь ответа', 'err');
+    return;
+  }
+  if (state.attachments.length) toast('Вложения уйдут со следующим запросом, после ответа агента');
+  const result = await api.chat.queue(text, text);
+  if (result?.idle) {
+    // Агент как раз закончил — отправляем обычным запросом.
+    state.running = false;
+    await send();
+    return;
+  }
+  if (!result?.ok) {
+    toast(result?.error || 'Сообщение не поставлено в очередь', 'err');
+    return;
+  }
+  state.queue.push({ id: result.id, text });
+  input.value = '';
+  autosize();
+  renderQueue();
+}
+
+function renderQueue() {
+  const box = $('#queue');
+  if (!box) return;
+  box.hidden = !state.queue.length;
+  box.replaceChildren(
+    ...state.queue.map((item) =>
+      el('div', { class: 'queue-item', title: 'Агент прочитает это перед следующим шагом' }, [
+        el('span', { class: 'queue-label', text: 'в очереди' }),
+        el('span', { class: 'queue-text', text: item.text }),
+        el('button', {
+          class: 'queue-remove',
+          type: 'button',
+          title: 'Убрать из очереди и вернуть в поле ввода',
+          text: '✕',
+          onclick: async () => {
+            const result = await api.chat.unqueue(item.id);
+            state.queue = state.queue.filter((q) => q.id !== item.id);
+            if (result?.ok) {
+              const input = $('#input');
+              input.value = [item.text, input.value].filter(Boolean).join('\n');
+              autosize();
+            } else {
+              toast(result?.error || 'Уже передано агенту');
+            }
+            renderQueue();
+          },
+        }),
+      ]),
+    ),
+  );
+}
+
+/** Последний список задач из истории — при открытии чата. */
+function todosFromHistory(messages) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const calls = messages[i]?.tool_calls || [];
+    for (let j = calls.length - 1; j >= 0; j -= 1) {
+      if (calls[j]?.function?.name !== 'todo_write') continue;
+      try {
+        const todos = JSON.parse(calls[j].function.arguments || '{}').todos;
+        return Array.isArray(todos) ? todos : [];
+      } catch {
+        return [];
+      }
+    }
+  }
+  return [];
+}
+
+function renderTodos() {
+  const box = $('#todos');
+  if (!box) return;
+  const todos = state.todos || [];
+  box.hidden = !todos.length;
+  if (!todos.length) {
+    box.replaceChildren();
+    return;
+  }
+  const done = todos.filter((t) => t.status === 'completed').length;
+  const icon = { pending: '☐', in_progress: '◐', completed: '☑' };
+  box.replaceChildren(
+    el(
+      'button',
+      {
+        class: 'todos-head',
+        type: 'button',
+        onclick: () => {
+          state.todosCollapsed = !state.todosCollapsed;
+          renderTodos();
+        },
+      },
+      [el('span', { text: `Задачи агента: ${done} из ${todos.length}` }), el('span', { class: 'hint-text', text: state.todosCollapsed ? '▸' : '▾' })],
+    ),
+    state.todosCollapsed
+      ? null
+      : el(
+          'ul',
+          { class: 'todos-list' },
+          todos.map((t) =>
+            el('li', { class: `todo todo-${t.status}` }, [
+              el('span', { class: 'todo-icon', text: icon[t.status] || '☐' }),
+              el('span', { text: t.status === 'in_progress' && t.activeForm ? t.activeForm : t.content }),
+            ]),
+          ),
+        ),
+  );
+}
+
+function stopRun() {
+  if (state.liveRuntimes.length) api.runtimes.stop();
+  else api.chat.stop();
+}
+
+/** Режимы по кругу для Shift+Tab: недоступные пропускаются, «Без вопросов» — с подтверждением. */
+function nextMode() {
+  const modes = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).filter((m) => !m.disabled);
+  const index = modes.findIndex((m) => m.id === state.permissionMode);
+  return modes[(index + 1) % modes.length]?.id || 'manual';
+}
+
+/**
+ * Горячие клавиши (CC7.6): Esc — остановить агента, Shift+Tab — следующий
+ * режим, ↑ в пустом поле — вернуть последнее сообщение.
+ */
+document.addEventListener('keydown', (event) => {
+  if (state.approval || state.question || document.querySelector('.modal-backdrop')) return;
+  const input = $('#input');
+  if (event.key === 'Escape' && state.running) {
+    event.preventDefault();
+    stopRun();
+    return;
+  }
+  if (event.key === 'Tab' && event.shiftKey && (event.target === input || event.target === document.body)) {
+    event.preventDefault();
+    setPermissionMode(nextMode());
+    return;
+  }
+  if (event.key === 'ArrowUp' && event.target === input && !input.value) {
+    const last = [...state.messages].reverse().find((m) => m.role === 'user');
+    if (last) {
+      event.preventDefault();
+      input.value = last.display || last.content || '';
+      autosize();
+    }
+  }
+});
 
 /* ---------- события ---------- */
 
@@ -1385,6 +1562,39 @@ function handleEvent(event) {
     case 'question':
       openQuestion(event);
       break;
+    case 'tool_progress': {
+      const previous = state.liveOutput[event.id] || '';
+      state.liveOutput[event.id] = (previous + event.text).slice(-20000);
+      scheduleRender();
+      break;
+    }
+    case 'todos':
+      state.todos = event.todos || [];
+      renderTodos();
+      break;
+    case 'queued:consumed': {
+      const ids = new Set(event.ids || []);
+      for (const item of state.queue.filter((q) => ids.has(q.id))) {
+        state.messages.push({ role: 'user', content: item.text, display: item.text, queued: true });
+      }
+      state.queue = state.queue.filter((q) => !ids.has(q.id));
+      renderQueue();
+      scheduleRender();
+      break;
+    }
+    case 'queued:returned': {
+      // Агент закончил, не взяв сообщения: возвращаем их в поле ввода.
+      const input = $('#input');
+      const texts = (event.items || []).map((item) => item.text);
+      state.queue = [];
+      renderQueue();
+      if (texts.length) {
+        input.value = [...texts, input.value].filter(Boolean).join('\n');
+        autosize();
+        toast('Сообщения из очереди возвращены в поле ввода');
+      }
+      break;
+    }
     case 'question:expired':
       state.question = null;
       toast('Вопрос агента остался без ответа — агент продолжил по рекомендации', 'err');
@@ -3454,10 +3664,7 @@ $('#export-chat').addEventListener('click', async (event) => {
   $('#mode-select').addEventListener('change', (event) => setPermissionMode(event.target.value));
   $('#send').addEventListener('click', send);
   $('#mic').addEventListener('click', toggleVoice);
-  $('#stop').addEventListener('click', () => {
-    if (state.liveRuntimes.length) api.runtimes.stop();
-    else api.chat.stop();
-  });
+  $('#stop').addEventListener('click', stopRun);
 
   $('#model-select').addEventListener('change', async (event) => {
     state.model = event.target.value;

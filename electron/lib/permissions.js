@@ -71,6 +71,7 @@ const READ_TOOLS = new Set([
   'repowise_search',
   'ask_user',
   'exit_plan',
+  'todo_write',
 ]);
 
 export function normalizeMode(value) {
