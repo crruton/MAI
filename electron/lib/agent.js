@@ -204,7 +204,7 @@ export async function runAgent({
   };
 
   const builtin = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools].map((t) =>
-    toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck }),
+    toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview }),
   );
   const builtinNames = new Set(builtin.map((t) => t.name));
   const fromPlugins = pluginTools
@@ -449,12 +449,13 @@ export async function runAgent({
           outcome = await runToolCall({ entry, args, ctx: toolCtx, policy: policyCtx, approve, audit });
         }
       }
-      emit({ type: 'tool_result', id: call.id, name: call.function.name, content: outcome.content, ok: outcome.ok });
+      emit({ type: 'tool_result', id: call.id, name: call.function.name, content: outcome.content, ok: outcome.ok, diff: outcome.diff || null });
       history.push({
         role: 'tool',
         tool_call_id: call.id,
         name: call.function.name,
         content: outcome.content,
+        ...(outcome.diff ? { diff: outcome.diff } : {}),
       });
       snapshot();
     }

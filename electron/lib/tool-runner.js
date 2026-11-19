@@ -10,6 +10,7 @@
  */
 import { classifyTool, evaluate, subjectOf, summarize, suggestRules } from './policy.js';
 import { effectiveCommand } from './tools/shell.js';
+import { unifiedDiff } from './diff.js';
 
 const ARGS_PREVIEW = 2000;
 
@@ -27,6 +28,7 @@ export function toolEntry(schema, meta = {}) {
     cls: classifyTool(name, meta),
     run: meta.run,
     precheck: meta.precheck,
+    preview: meta.preview,
   };
 }
 
@@ -104,6 +106,17 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
     }
   }
 
+  // Diff правки — в запрос разрешения и в карточку результата (CC7.3).
+  let diff = null;
+  if (typeof entry.preview === 'function') {
+    try {
+      const { before, after } = entry.preview(ctx, args) || {};
+      if (before !== undefined && after !== undefined) diff = unifiedDiff(before, after);
+    } catch {
+      diff = null;
+    }
+  }
+
   const decision = evaluate({
     tool: entry.name,
     cls: entry.cls,
@@ -133,6 +146,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
           rule: decision.rule || null,
           suggestions: suggestRules({ tool: entry.name, cls: entry.cls, subject }),
           mode: decision.mode,
+          diff,
         }),
       );
     }
@@ -150,11 +164,13 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
   if (!allowed) {
     return { ok: false, content: deniedText(entry, decision, answer), decision, approved: false };
   }
+  // В историю — укороченный diff: полный размер сессии не нужен.
+  const shortDiff = diff ? { added: diff.added, removed: diff.removed, created: diff.created, lines: diff.lines.slice(0, 120), truncated: diff.truncated || diff.lines.length > 120 } : null;
 
   try {
     // Плагины старого формата сами зовут ctx.approve — вызов уже разрешён.
     const result = await entry.run({ ...ctx, approve: async () => true, ask: entry.source === 'builtin' ? ctx.ask : undefined }, args);
-    return { ok: true, content: String(result), decision, approved: true };
+    return { ok: true, content: String(result), decision, approved: true, diff: shortDiff };
   } catch (err) {
     return { ok: false, content: `Ошибка: ${err?.message || String(err)}`, decision, approved: true };
   }

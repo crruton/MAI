@@ -16,6 +16,8 @@ function assertNotSecret(ctx, file, action = 'чтение') {
   }
 }
 
+const PREVIEW_BYTES = 1024 * 1024;
+
 function resolveInside(ctx, target) {
   const base = ctx.projectDir || process.cwd();
   const resolved = path.resolve(base, target || '.');
@@ -203,6 +205,12 @@ export const fsTools = [
       assertNotSecret(ctx, file, 'запись');
       return null;
     },
+    /** Было/стало для diff в запросе разрешения (CC7.3). Большие файлы не сравниваем. */
+    preview(ctx, args) {
+      const file = resolveInside(ctx, args.path);
+      const before = fs.existsSync(file) && fs.statSync(file).size <= PREVIEW_BYTES ? fs.readFileSync(file, 'utf8') : '';
+      return { before, after: String(args.content ?? '') };
+    },
     async run(ctx, args) {
       const file = resolveInside(ctx, args.path);
       assertNotSecret(ctx, file, 'запись');
@@ -241,6 +249,14 @@ export const fsTools = [
       if (count === 0) return `Фрагмент не найден в ${file}`;
       if (count > 1) return `Фрагмент встречается ${count} раз — уточните old_string`;
       return null;
+    },
+    preview(ctx, args) {
+      const file = resolveInside(ctx, args.path);
+      if (fs.statSync(file).size > PREVIEW_BYTES) {
+        return { before: String(args.old_string ?? ''), after: String(args.new_string ?? '') };
+      }
+      const before = fs.readFileSync(file, 'utf8');
+      return { before, after: before.replace(args.old_string, () => args.new_string) };
     },
     async run(ctx, args) {
       const file = resolveInside(ctx, args.path);

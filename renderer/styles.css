@@ -525,6 +525,26 @@ button { cursor: pointer; }
 .plan-alt-pros { font-size: 12px; color: var(--green); }
 .plan-alt-cons { font-size: 12px; color: var(--red); }
 
+/* ---------- подтверждение в ленте и diff (CC7.1, CC7.3) ---------- */
+.approval-card {
+  max-width: 760px; margin: 12px auto; border: 1px solid var(--amber); border-radius: var(--radius);
+  background: var(--bg-elev); padding: 14px 16px; box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.12);
+}
+.approve-actions { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.diff-view { margin: 8px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg); }
+.diff-stats { font-size: 12px; padding: 4px 10px; border-bottom: 1px solid var(--border-soft); color: var(--text-dim); font-family: var(--mono); }
+.diff-plus { color: var(--green); }
+.diff-minus { color: var(--red); }
+.diff-body { max-height: 320px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
+.diff-row { display: flex; white-space: pre; }
+.diff-sign { width: 18px; flex: none; text-align: center; color: var(--text-faint); user-select: none; }
+.diff-text { padding-right: 10px; }
+.diff-add { background: rgba(52, 211, 153, 0.1); }
+.diff-add .diff-sign { color: var(--green); }
+.diff-del { background: rgba(248, 113, 113, 0.1); }
+.diff-del .diff-sign { color: var(--red); }
+.diff-hunk { color: var(--accent-2); background: var(--accent-soft); }
+
 /* ---------- ревизор ---------- */
 .msg-review { display: flex; justify-content: center; }
 .review-card {

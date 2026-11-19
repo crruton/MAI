@@ -175,6 +175,15 @@ IPC-каналы:
 (`setSessionMode`) и шлёт `mode:changed`. Таймаут — 10 минут, «Стоп»
 отвечает `cancelled`.
 
+### Подтверждение в ленте и diff
+
+`runToolCall` вызывает `preview(ctx, args)` у инструментов записи и строит
+unified diff (`electron/lib/diff.js`: LCS по строкам, общие начало и конец
+отсекаются, не больше 400 строк). Diff уходит в запрос разрешения (`approval.diff`)
+и в результат (`tool_result.diff`, в истории — до 120 строк). Окно показывает
+запрос карточкой в ленте (`state.approval`), карточки инструментов — с
+заголовком по смыслу (`toolTitle`).
+
 ## Доверие к папке и матрица прав IPC
 
 Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или

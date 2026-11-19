@@ -593,7 +593,7 @@ app.whenReady().then(async () => {
     });
     await new Promise((r) => setTimeout(r, 400));
     const modal1 = await win.webContents.executeJavaScript(`(() => {
-      const m = document.querySelector('.approve-modal');
+      const m = document.querySelector('.approval-card');
       if (!m) return { found: false };
       const rec = m.querySelector('.approve-option.recommended');
       return {
@@ -628,7 +628,7 @@ app.whenReady().then(async () => {
     });
     await new Promise((r) => setTimeout(r, 400));
     const modal2 = await win.webContents.executeJavaScript(`(() => {
-      const m = document.querySelector('.approve-modal');
+      const m = document.querySelector('.approval-card');
       const rec = m?.querySelector('.approve-option.recommended');
       const area = m?.querySelector('.approve-feedback');
       if (area) area.value = 'сначала прочитай файл';
@@ -640,7 +640,60 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 300));
     const a2 = approvals.find((a) => a.id === 'appr-2');
     check('клавиша 3: отказ с пояснением', a2?.allow === false && a2?.feedback === 'сначала прочитай файл', JSON.stringify(a2));
-    check('модалка закрыта', await win.webContents.executeJavaScript(`!document.querySelector('.approve-modal')`));
+    check('карточка запроса закрыта', await win.webContents.executeJavaScript(`!document.querySelector('.approval-card')`));
+
+    console.log('\n[14b] Запрос в ленте с diff и заголовки карточек инструментов (CC7.1–CC7.3)');
+    win.webContents.send('chat:event', {
+      type: 'approval',
+      id: 'appr-3',
+      tool: 'edit_file',
+      cls: 'write',
+      summary: 'Изменить файл src/a.js',
+      risk: 'medium',
+      recommended: 'allow',
+      suggestions: ['write_file(src/**)', 'edit_file(src/**)'],
+      diff: { added: 1, removed: 1, lines: [{ type: '@', text: '@@ строка 1 @@' }, { type: '-', text: 'old()' }, { type: '+', text: 'new()' }] },
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const feedCard = await win.webContents.executeJavaScript(`(() => {
+      const c = document.querySelector('.approval-card');
+      return {
+        found: Boolean(c),
+        inFeed: Boolean(c?.closest('#messages')),
+        modal: Boolean(c?.closest('.modal')),
+        del: c?.querySelector('.diff-del .diff-text')?.textContent || '',
+        add: c?.querySelector('.diff-add .diff-text')?.textContent || '',
+        stats: c?.querySelector('.diff-stats')?.textContent || '',
+      };
+    })()`);
+    check('запрос — карточкой в ленте, без модалки', feedCard.found && feedCard.inFeed && !feedCard.modal, JSON.stringify(feedCard));
+    check('diff показан: было и стало', feedCard.del === 'old()' && feedCard.add === 'new()', JSON.stringify(feedCard));
+    check('счётчики +1 −1', /\+1/.test(feedCard.stats) && /−1/.test(feedCard.stats), feedCard.stats);
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('клавиша 1 разрешила', approvals.find((x) => x.id === 'appr-3')?.allow === true);
+
+    // Живые карточки рисуются через requestAnimationFrame, а в скрытом окне он не идёт:
+    // результат приходит событием, отрисовку делает done.
+    win.webContents.send('chat:event', { type: 'tool_result', id: 'tc-1', name: 'edit_file', ok: true, content: 'Изменено', diff: { added: 3, removed: 1, lines: [{ type: '+', text: 'x' }] } });
+    win.webContents.send('chat:event', {
+      type: 'done',
+      messages: [
+        { role: 'user', content: 'правь' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            { id: 'tc-1', type: 'function', function: { name: 'edit_file', arguments: JSON.stringify({ path: 'src/deep/main.js', old_string: 'a', new_string: 'b' }) } },
+            { id: 'tc-2', type: 'function', function: { name: 'run_shell', arguments: JSON.stringify({ command: 'npm test' }) } },
+          ],
+        },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const titles = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.tool-head')].map((h) => h.querySelector('.tool-name').textContent + ' ' + h.querySelector('.tool-args').textContent)`);
+    check('Edit с файлом и счётчиками', titles.some((t) => t === 'Edit deep/main.js +3 −1'), JSON.stringify(titles));
+    check('Bash с командой', titles.some((t) => t === 'Bash npm test'), JSON.stringify(titles));
 
     console.log('\n[15] Доверие к папке при выборе проекта (ADR 0028)');
     await win.webContents.executeJavaScript(`document.querySelector('#project-btn').click()`);

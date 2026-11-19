@@ -34,7 +34,7 @@ reset();
 const builtin = Object.fromEntries(
   [...fsTools, ...shellTools].map((t) => [
     t.schema.function.name,
-    toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck }),
+    toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview }),
   ]),
 );
 
@@ -218,6 +218,20 @@ console.log('\n[9] Секретный файл не пишется даже в �
   const out = await h.run(builtin.write_file, { path: '.env', content: 'SECRET=1' });
   check('запись .env отклонена', !out.ok && /секретн/i.test(out.content), out.content);
   check('.env не создан', !fs.existsSync(path.join(project, '.env')));
+}
+
+console.log('\n[10] Diff правки в запросе и в результате (CC7.3)');
+{
+  reset('первая\nвторая\nтретья\n');
+  const h = harness('manual', { answer: true });
+  const out = await h.run(builtin.edit_file, { path: 'note.txt', old_string: 'вторая', new_string: 'ВТОРАЯ' });
+  const diff = h.prompts[0]?.diff;
+  check('в запросе есть diff', diff?.added === 1 && diff?.removed === 1, JSON.stringify(diff));
+  check('в diff строки до и после', diff?.lines.some((l) => l.type === '-' && l.text === 'вторая') && diff?.lines.some((l) => l.type === '+' && l.text === 'ВТОРАЯ'));
+  check('diff есть и в результате', out.diff?.added === 1, JSON.stringify(out.diff));
+  const created = harness('manual', { answer: false });
+  await created.run(builtin.write_file, { path: 'new.txt', content: 'a\nb\n' });
+  check('новый файл помечен в запросе', created.prompts[0]?.diff?.created === true);
 }
 
 fs.rmSync(project, { recursive: true, force: true });

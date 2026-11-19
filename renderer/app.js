@@ -27,6 +27,8 @@ const state = {
   trust: null,
   // Открытый вопрос ask_user или карточка плана exit_plan (CC1.7, CC1.8).
   question: null,
+  // Запрос разрешения — карточкой в ленте (CC7.1).
+  approval: null,
 };
 
 /* ---------- утилиты ---------- */
@@ -577,7 +579,7 @@ function renderAll() {
   const stick = isNearBottom();
   box.replaceChildren();
 
-  if (!state.messages.length && !state.live && !state.liveRuntimes.length && !state.question) {
+  if (!state.messages.length && !state.live && !state.liveRuntimes.length && !state.question && !state.approval) {
     box.append(emptyState());
     return;
   }
@@ -591,7 +593,8 @@ function renderAll() {
     box.append(runtimeNode(live.name, live.output, null, true));
   }
   if (state.question) box.append(questionCard());
-  if (stick || state.question) box.scrollTop = box.scrollHeight;
+  if (state.approval) box.append(approvalCard());
+  if (stick || state.question || state.approval) box.scrollTop = box.scrollHeight;
 }
 
 /* ---------- вопросы агента и карточка плана (CC1.7, CC1.8) ---------- */
@@ -960,19 +963,59 @@ function safeJson(raw) {
   }
 }
 
+/** Заголовок карточки инструмента по-человечески (CC7.2): «Edit main.js +3 −1», «Bash npm test». */
+function toolTitle(name, argsText, result) {
+  let args = {};
+  try {
+    args = JSON.parse(argsText || '{}');
+  } catch {
+    args = {};
+  }
+  const file = (value) => String(value || '').split(/[\\/]/).filter(Boolean).slice(-2).join('/');
+  const stats = result?.diff ? ` +${result.diff.added} −${result.diff.removed}` : '';
+  switch (name) {
+    case 'read_file': {
+      const range = args.offset || args.limit ? `:${args.offset || 1}${args.limit ? `-${(args.offset || 1) + args.limit - 1}` : ''}` : '';
+      return { verb: 'Read', detail: `${file(args.path)}${range}` };
+    }
+    case 'list_files':
+      return { verb: 'List', detail: file(args.path) || '.' };
+    case 'grep':
+      return { verb: 'Grep', detail: `${args.pattern || ''}${args.path ? ` в ${file(args.path)}` : ''}` };
+    case 'write_file':
+      return { verb: result?.diff?.created ? 'Create' : 'Write', detail: `${file(args.path)}${stats}` };
+    case 'edit_file':
+      return { verb: 'Edit', detail: `${file(args.path)}${stats}` };
+    case 'run_shell':
+      return { verb: 'Bash', detail: String(args.command || '') };
+    case 'memory_append':
+      return { verb: 'Memory', detail: `+ ${args.scope || 'project'}` };
+    case 'ask_user':
+      return { verb: 'Ask', detail: args.questions?.[0]?.question || '' };
+    case 'exit_plan':
+      return { verb: 'Plan', detail: 'план на согласование' };
+    case 'load_skill':
+      return { verb: 'Skill', detail: args.name || '' };
+    default:
+      return { verb: name.startsWith('mcp__') ? `MCP ${name.split('__')[1]}` : name, detail: String(argsText || '').slice(0, 160) };
+  }
+}
+
 function toolCard(id, name, argsText) {
   const result = state.toolResults[id];
   const status = result ? (result.ok ? 'ok' : 'err') : 'run';
   const card = el('div', { class: `tool-card${result && !result.ok ? ' open' : ''}` });
+  const title = toolTitle(name, argsText, result);
   const head = el('div', { class: 'tool-head' }, [
     el('span', { class: `tool-dot ${status}` }),
-    el('span', { class: 'tool-name', text: name }),
-    el('span', { class: 'tool-args', text: String(argsText || '').slice(0, 160) }),
+    el('span', { class: 'tool-name', text: title.verb, title: name }),
+    el('span', { class: 'tool-args', text: String(title.detail || '').slice(0, 200) }),
   ]);
   head.addEventListener('click', () => card.classList.toggle('open'));
   const body = el('div', { class: 'tool-body' });
   body.append(el('div', { class: 'tool-label', text: 'Аргументы' }));
   body.append(el('pre', { text: String(argsText || '') }));
+  if (result?.diff) body.append(diffView(result.diff, { limit: 200 }));
   if (result) {
     body.append(el('div', { class: 'tool-label', text: result.ok ? 'Результат' : 'Ошибка' }));
     body.append(el('pre', { text: String(result.content || '').slice(0, 20000) }));
@@ -1114,6 +1157,7 @@ async function loadSession(id) {
       state.toolResults[message.tool_call_id] = {
         ok: !String(message.content || '').startsWith('Ошибка'),
         content: message.content,
+        diff: message.diff || null,
       };
     }
   }
@@ -1332,7 +1376,7 @@ function handleEvent(event) {
       scheduleRender();
       break;
     case 'tool_result':
-      state.toolResults[event.id] = { ok: event.ok, content: event.content };
+      state.toolResults[event.id] = { ok: event.ok, content: event.content, diff: event.diff || null };
       scheduleRender();
       break;
     case 'approval':
@@ -1351,6 +1395,8 @@ function handleEvent(event) {
       break;
     case 'approval:expired':
       state.approvalOpen = false;
+      state.approval = null;
+      renderAll();
       toast('Подтверждение истекло — действие отменено', 'err');
       break;
     case 'notice':
@@ -1439,120 +1485,130 @@ const CLASS_LABEL = {
   external: 'внешний инструмент',
 };
 
+/** Diff правки: строки с подсветкой, счётчики +/−. */
+function diffView(diff, { limit = 400 } = {}) {
+  if (!diff?.lines?.length) return null;
+  const rows = diff.lines.slice(0, limit).map((line) =>
+    el('div', { class: `diff-row diff-${line.type === '+' ? 'add' : line.type === '-' ? 'del' : line.type === '@' ? 'hunk' : 'ctx'}` }, [
+      el('span', { class: 'diff-sign', text: line.type === '@' ? '' : line.type }),
+      el('span', { class: 'diff-text', text: line.text }),
+    ]),
+  );
+  return el('div', { class: 'diff-view' }, [
+    el('div', { class: 'diff-stats' }, [
+      diff.created ? el('span', { text: 'новый файл · ' }) : null,
+      el('span', { class: 'diff-plus', text: `+${diff.added}` }),
+      el('span', { text: ' ' }),
+      el('span', { class: 'diff-minus', text: `−${diff.removed}` }),
+      diff.truncated ? el('span', { class: 'hint-text', text: ' · показано не всё' }) : null,
+    ]),
+    el('div', { class: 'diff-body' }, rows),
+  ]);
+}
+
 /**
- * Запрос разрешения (ADR 0027). Три ответа, как в Claude Code:
- * 1 — да; 2 — да и не спрашивать (правило на чат или всегда); 3 — нет,
- * с пояснением для агента. Рекомендованный ответ подсвечен и получает фокус.
+ * Запрос разрешения (ADR 0027, CC7.1) — карточкой в ленте. Три ответа, как в
+ * Claude Code: 1 — да; 2 — да и не спрашивать (правило на чат или всегда);
+ * 3 — нет, с пояснением для агента. Рекомендованный ответ подсвечен и в фокусе.
  */
 function askApproval(event) {
-  // Второе подтверждение не должно открываться поверх первого: нижняя модалка
-  // осталась бы без ответа, и её промис не резолвился бы никогда.
-  if (state.approvalOpen) {
+  // Второй запрос не должен перекрывать первый: первый остался бы без ответа.
+  if (state.approval) {
     api.chat.approve(event.id, false, { feedback: 'Предыдущий запрос ещё открыт.' });
     toast('Предыдущее подтверждение ещё открыто — новое действие отклонено', 'err');
     return;
   }
   state.approvalOpen = true;
-  let answered = false;
-  const answer = (allow, extra = {}) => {
-    if (answered) return;
-    answered = true;
-    state.approvalOpen = false;
-    document.removeEventListener('keydown', onKey, true);
-    api.chat.approve(event.id, allow, extra);
-  };
+  state.approval = { ...event, feedback: '', scope: 'session' };
+  renderAll();
+  setTimeout(() => document.querySelector('.approval-card .recommended')?.focus(), 0);
+}
 
-  const recommended = event.recommended === 'deny' ? 'deny' : 'allow';
-  const suggestions = Array.isArray(event.suggestions) ? event.suggestions : [];
+function answerApproval(allow, extra = {}) {
+  const current = state.approval;
+  if (!current) return;
+  // Пояснение берём из поля: вставка и автозаполнение не всегда шлют input.
+  const typed = document.querySelector('.approval-card .approve-feedback')?.value;
+  if (!allow && typed !== undefined) extra = { ...extra, feedback: typed };
+  state.approval = null;
+  state.approvalOpen = false;
+  api.chat.approve(current.id, allow, extra);
+  renderAll();
+}
+
+function approvalCard() {
+  const a = state.approval;
+  const recommended = a.recommended === 'deny' ? 'deny' : 'allow';
+  const suggestions = Array.isArray(a.suggestions) ? a.suggestions : [];
+  const risk = a.risk || 'medium';
   const feedback = el('textarea', {
     class: 'approve-feedback',
     rows: '2',
     placeholder: 'Что сделать иначе (необязательно, уйдёт агенту при отказе)',
+    oninput: (e) => {
+      a.feedback = e.target.value;
+    },
   });
-  const scope = el('select', { class: 'approve-scope' }, [
+  feedback.value = a.feedback || '';
+  const scope = el('select', { class: 'approve-scope', onchange: (e) => (a.scope = e.target.value) }, [
     el('option', { value: 'session', text: 'в этом чате' }),
     el('option', { value: 'global', text: 'всегда (все чаты)' }),
   ]);
-
-  const risk = event.risk || 'medium';
-  const body = [
-    el('div', { class: 'approve-meta' }, [
-      el('span', { class: `risk-badge risk-${risk}`, text: RISK_LABEL[risk] || risk }),
-      el('span', { class: 'approve-class', text: CLASS_LABEL[event.cls] || event.cls || '' }),
-      el('span', { class: 'hint-text', text: event.tool || event.name || '' }),
-    ]),
-    el('div', { class: 'approve-args', text: event.summary || '' }),
-    event.why ? el('p', { class: 'hint-text', text: `Почему спрашиваем: ${event.why}.` }) : null,
-    event.rule ? el('p', { class: 'hint-text', text: `Сработало правило ask: ${event.rule}` }) : null,
-    event.args && event.cls === 'external'
-      ? el('details', { class: 'approve-details' }, [el('summary', { text: 'Аргументы' }), el('pre', { text: event.args })])
-      : null,
-    feedback,
-  ];
-
-  const option = (key, label, kind, onclick, extraClass = '') =>
+  scope.value = a.scope || 'session';
+  const option = (key, label, kind, onclick) =>
     el(
       'button',
-      {
-        class: `btn approve-option${kind === recommended ? ' primary recommended' : ''}${extraClass}`,
-        type: 'button',
-        'data-key': key,
-        onclick,
-      },
+      { class: `btn approve-option${kind === recommended ? ' primary recommended' : ''}`, type: 'button', 'data-key': key, onclick },
       [
         el('span', { class: 'approve-key', text: key }),
         el('span', { text: label }),
         kind === recommended ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
       ],
     );
-
-  const close = () => modal.close();
-  const allowOnce = () => {
-    answer(true);
-    close();
-  };
-  const allowAlways = () => {
-    answer(true, { remember: scope.value, rules: suggestions });
-    close();
-  };
-  const deny = () => {
-    answer(false, { feedback: feedback.value });
-    close();
-  };
-
-  const footer = [
-    option('1', 'Да', 'allow', allowOnce),
-    suggestions.length
-      ? el('div', { class: 'approve-always' }, [
-          option('2', `Да, и не спрашивать: ${suggestions.join(', ')}`, 'always', allowAlways),
-          scope,
-        ])
+  return el('div', { class: 'approval-card' }, [
+    el('div', { class: 'question-head', text: 'Разрешить действие?' }),
+    el('div', { class: 'approve-meta' }, [
+      el('span', { class: `risk-badge risk-${risk}`, text: RISK_LABEL[risk] || risk }),
+      el('span', { class: 'approve-class', text: CLASS_LABEL[a.cls] || a.cls || '' }),
+      el('span', { class: 'hint-text', text: a.tool || a.name || '' }),
+    ]),
+    el('div', { class: 'approve-args', text: a.summary || '' }),
+    diffView(a.diff),
+    a.why ? el('p', { class: 'hint-text', text: `Почему спрашиваем: ${a.why}.` }) : null,
+    a.rule ? el('p', { class: 'hint-text', text: `Сработало правило ask: ${a.rule}` }) : null,
+    a.args && a.cls === 'external'
+      ? el('details', { class: 'approve-details' }, [el('summary', { text: 'Аргументы' }), el('pre', { text: a.args })])
       : null,
-    option('3', 'Нет', 'deny', deny),
-  ].filter(Boolean);
-
-  const modal = openModal({
-    title: 'Разрешить действие?',
-    body,
-    small: true,
-    // Закрытие крестиком или кликом по фону — это отказ, а не «пусть висит».
-    onClose: () => answer(false, { feedback: feedback.value }),
-    footer,
-  });
-  modal.modal.classList.add('approve-modal');
-
-  function onKey(e) {
-    if (e.target === feedback) return;
-    if (e.key === '1') allowOnce();
-    else if (e.key === '2' && suggestions.length) allowAlways();
-    else if (e.key === '3' || e.key === 'Escape') deny();
-    else return;
-    e.preventDefault();
-    e.stopPropagation();
-  }
-  document.addEventListener('keydown', onKey, true);
-  modal.footEl.querySelector('.recommended')?.focus();
+    feedback,
+    el('div', { class: 'approve-actions' }, [
+      option('1', 'Да', 'allow', () => answerApproval(true)),
+      suggestions.length
+        ? el('div', { class: 'approve-always' }, [
+            option('2', `Да, и не спрашивать: ${suggestions.join(', ')}`, 'always', () =>
+              answerApproval(true, { remember: a.scope || 'session', rules: suggestions }),
+            ),
+            scope,
+          ])
+        : null,
+      option('3', 'Нет', 'deny', () => answerApproval(false, { feedback: a.feedback })),
+    ]),
+  ]);
 }
+
+/** Клавиши запроса разрешения: 1 — да, 2 — да и не спрашивать, 3/Esc — нет. */
+document.addEventListener('keydown', (event) => {
+  const a = state.approval;
+  if (!a) return;
+  const tag = event.target?.tagName || '';
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag) && event.key !== 'Escape') return;
+  const suggestions = Array.isArray(a.suggestions) ? a.suggestions : [];
+  if (event.key === '1') answerApproval(true);
+  else if (event.key === '2' && suggestions.length) answerApproval(true, { remember: a.scope || 'session', rules: suggestions });
+  else if (event.key === '3' || event.key === 'Escape') answerApproval(false, { feedback: a.feedback });
+  else return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
 
 /* ---------- настройки ---------- */
 
