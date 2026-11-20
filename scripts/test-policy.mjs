@@ -11,7 +11,10 @@ import {
   suggestRules,
   effectiveMode,
   relativeSubject,
+  classifyAuto,
 } from '../electron/lib/policy.js';
+import { PERMISSION_MODES, MODE_INFO, normalizeMode } from '../electron/lib/permissions.js';
+import { permissionPlan, RUNTIME_PRESETS } from '../electron/lib/runtimes.js';
 import { DEFAULT_GUARDRAILS } from '../electron/lib/guardrails.js';
 
 let pass = 0;
@@ -112,6 +115,41 @@ const merged = mergeRules({ allow: ['a', 'bad rule('] }, { allow: ['a', 'b'], de
 check('дубли убраны, мусор отброшен', JSON.stringify(merged.allow) === '["a","b"]', JSON.stringify(merged));
 check('deny сохранён', merged.deny[0] === 'c');
 check('путь относительно проекта', relativeSubject('/p', '/p/src/a.js') === 'src/a.js');
+
+console.log('[Авто] классификатор режима smart (ADR 0039)');
+const auto = (cls, subject) => classifyAuto({ cls, subject }).action;
+check('режим «Авто» есть и без adminOnly', PERMISSION_MODES.includes('smart') && MODE_INFO.smart.label === 'Авто' && !MODE_INFO.smart.adminOnly);
+check('старое auto по-прежнему = «Без вопросов»', normalizeMode('auto') === 'bypass' && normalizeMode('smart') === 'smart');
+check('правка в проекте — молча', auto('write', 'src/a.js') === 'allow');
+check('правка вне проекта — спросить', auto('write', '../x.js') === 'ask');
+check('правка .git — спросить', auto('write', '.git/config') === 'ask');
+check('память — молча', auto('memory', 'project') === 'allow');
+check('npm test — молча', auto('exec', 'npm test') === 'allow');
+check('составная безопасная — молча', auto('exec', 'npm run build && npm test') === 'allow');
+check('перенаправление в проект — молча', auto('exec', 'git status > out.txt') === 'allow');
+check('git push — спросить', auto('exec', 'git push origin dev') === 'ask');
+check('удаление — спросить', auto('exec', 'rm -rf build') === 'ask');
+check('сеть — спросить', auto('exec', 'curl https://x') === 'ask');
+check('установка пакетов — спросить', auto('exec', 'npm install left-pad') === 'ask');
+check('путь вне проекта — спросить', auto('exec', 'cat /etc/passwd') === 'ask');
+check('выход через .. — спросить', auto('exec', 'ls ../other') === 'ask');
+check('путь Windows — спросить', auto('exec', 'dir C:\\Windows') === 'ask');
+check('домашняя папка — спросить', auto('exec', 'cat ~/.ssh/id_rsa') === 'ask');
+check('путь в значении опции — спросить', auto('exec', 'tool --out=/tmp/x') === 'ask');
+check('URL в аргументе не путь', auto('exec', 'python app.py --url https://a.b/c') === 'allow');
+check('встроенный код — спросить', auto('exec', 'node -e "require(1)"') === 'ask' && auto('exec', 'python3 -c "1"') === 'ask' && auto('exec', 'pwsh -Command ls') === 'ask');
+check('подстановка — спросить', auto('exec', 'echo $(whoami)') === 'ask');
+check('MCP — спросить', auto('external', null) === 'ask');
+const smartCall = (tool, cls, subject, rules = {}) => evaluate({ tool, cls, subject, mode: 'smart', rules, role: 'guest' });
+check('решение классификатора помечено', smartCall('run_shell', 'exec', 'npm test').source === 'classifier');
+check('причина вопроса — от классификатора', /вне папки/.test(smartCall('run_shell', 'exec', 'cat /etc/hosts').why));
+check('deny сильнее классификатора', smartCall('run_shell', 'exec', 'npm test', { deny: ['run_shell(npm test)'] }).action === 'deny');
+check('ask-правило сильнее классификатора', smartCall('write_file', 'write', 'src/a.js', { ask: ['write_file(src/**)'] }).action === 'ask');
+check('guardrails в «Авто»', smartCall('run_shell', 'exec', 'rm -rf /').action === 'deny');
+check('гостю «Авто» доступен', smartCall('write_file', 'write', 'src/a.js').mode === 'smart');
+const cc = permissionPlan(RUNTIME_PRESETS.claude, 'smart');
+check('внешний CLI в «Авто» = «Принимать правки»', cc.ok && cc.args.join(' ') === '--permission-mode acceptEdits', JSON.stringify(cc));
+check('docker в «Авто» — запись разрешена', permissionPlan({ mode: 'docker' }, 'smart').readOnly === false);
 
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

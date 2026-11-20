@@ -737,8 +737,10 @@ app.whenReady().then(async () => {
       id: 'appr-2',
       tool: 'write_file',
       cls: 'write',
-      summary: 'Записать файл src/a.js',
+      summary: 'Записать файл ../a.js',
       risk: 'medium',
+      why: 'файл вне папки проекта',
+      decisionSource: 'classifier',
       recommended: 'allow',
       suggestions: [],
     });
@@ -752,6 +754,8 @@ app.whenReady().then(async () => {
     })()`);
     check('средний риск: рекомендовано «Да»', /^1Да/.test(modal2.recommended), JSON.stringify(modal2));
     check('без подсказки правила — два варианта', modal2.options === 2, JSON.stringify(modal2));
+    const why2 = await win.webContents.executeJavaScript(`document.querySelector('.approval-card .approve-why')?.textContent || ''`);
+    check('решение «Авто» видно в карточке', why2 === 'Авто спрашивает: файл вне папки проекта.', why2);
     await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true }))`);
     await new Promise((r) => setTimeout(r, 300));
     const a2 = approvals.find((a) => a.id === 'appr-2');

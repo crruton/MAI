@@ -157,6 +157,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
           args: preview(args),
           risk: decision.risk,
           why: decision.why,
+          decisionSource: decision.source,
           recommended: decision.recommended,
           rule: decision.rule || null,
           suggestions: suggestRules({ tool: entry.name, cls: entry.cls, subject }),

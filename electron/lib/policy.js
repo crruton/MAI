@@ -190,6 +190,54 @@ export function assessRisk(cls, subject = '') {
   return { risk: 'medium', why: 'внешний инструмент: MCP или плагин, действие заранее неизвестно' };
 }
 
+/* ---------- классификатор режима «Авто» (CC2.2, ADR 0039) ---------- */
+
+/** Путь вне проекта: абсолютный, домашний, сетевой или с выходом через `..`. */
+function outsideProjectToken(token) {
+  const raw = String(token);
+  const eq = raw.indexOf('=');
+  if (eq > 0 && eq < raw.length - 1 && outsideProjectToken(raw.slice(eq + 1))) return true;
+  const t = String(token).replace(/^['"]|['"]$/g, '').replace(/^[<>]+/, '');
+  if (!t || /^https?:\/\//i.test(t)) return false;
+  if (/^(?:\/|~(?:\/|$)|\\\\|[a-z]:[\\/])/i.test(t)) return true;
+  if (/^%(?:userprofile|appdata|programdata|windir|systemroot)%/i.test(t) || /^\$(?:home|env:)/i.test(t)) return true;
+  return t.split(/[\\/]/).includes('..');
+}
+
+/** Интерпретатор со встроенным кодом: что он сделает, заранее не проверить. */
+const INLINE_CODE = /\b(?:node|deno|bun)\s+(?:-e|--eval|-p|--print)\b|\bpython[0-9.]*\s+-c\b|\b(?:ruby|perl)\s+-e\b|\b(?:bash|sh|zsh|cmd)\s+(?:-c|\/c)\b|\b(?:powershell|pwsh)\b[^\n]*-(?:c|command)\b/i;
+
+/**
+ * Решение режима «Авто» для вызова, который не покрыли правила.
+ * Молча — то, что легко откатить и не выходит за проект: правки файлов
+ * проекта (чекпоинты, ADR 0033), память (версии), команды без высокого
+ * риска внутри проекта. Спросить — сеть, установка пакетов, удаление,
+ * `git push`, всё вне проекта, непроверяемое и внешние инструменты.
+ * @returns {{ action: 'allow'|'ask', why: string }}
+ */
+export function classifyAuto({ cls, subject = '' }) {
+  const text = String(subject ?? '');
+  if (cls === 'read') return { action: 'allow', why: 'только чтение' };
+  if (cls === 'memory') return { action: 'allow', why: 'запись в память с версией и откатом' };
+  if (cls === 'write') {
+    if (outsideProjectToken(text)) return { action: 'ask', why: 'файл вне папки проекта' };
+    if (/^\.git(?:\/|$)/.test(text)) return { action: 'ask', why: 'служебные файлы git' };
+    return { action: 'allow', why: 'правка файла проекта — откатывается кнопкой ↺' };
+  }
+  if (cls === 'exec') {
+    const { parts, opaque } = splitCommand(text);
+    if (!text.trim()) return { action: 'ask', why: 'пустая команда' };
+    if (opaque) return { action: 'ask', why: 'подстановка команды — содержимое нельзя проверить заранее' };
+    if (HIGH_RISK_COMMAND.test(text)) return { action: 'ask', why: 'удаление, сеть, установка пакетов или необратимая операция git' };
+    if (INLINE_CODE.test(text)) return { action: 'ask', why: 'интерпретатор со встроенным кодом — действие заранее неизвестно' };
+    const tokens = parts.flatMap((p) => p.split(/\s+/)).filter(Boolean);
+    if (tokens.some(outsideProjectToken)) return { action: 'ask', why: 'команда обращается к путям вне папки проекта' };
+    return { action: 'allow', why: 'команда без высокого риска в папке проекта' };
+  }
+  if (cls === 'network') return { action: 'ask', why: 'обращение к сети' };
+  return { action: 'ask', why: 'внешний инструмент: MCP или плагин, действие заранее неизвестно' };
+}
+
 /* ---------- решение ---------- */
 
 const PLAN_REASON =
@@ -241,6 +289,10 @@ export function evaluate({ tool, cls, subject = null, mode, rules = {}, guardrai
   if (allow) return result('allow', { source: 'rule', rule: allow.text });
 
   switch (current) {
+    case 'smart': {
+      const verdict = classifyAuto({ cls: call.cls, subject });
+      return result(verdict.action, { source: 'classifier', why: verdict.why });
+    }
     case 'bypass':
       return result('allow', { source: 'mode' });
     case 'dontAsk':

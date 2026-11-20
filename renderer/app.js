@@ -335,6 +335,7 @@ async function pickAttachments() {
 const MODE_FALLBACK = [
   { id: 'manual', label: 'Вручную', description: 'Спрашивать перед каждой правкой, командой и внешним инструментом.' },
   { id: 'acceptEdits', label: 'Принимать правки', description: 'Правки файлов — без вопросов, команды и внешние инструменты — с подтверждением.' },
+  { id: 'smart', label: 'Авто', description: 'Правки проекта и безопасные команды — без вопросов; рискованное — с подтверждением.' },
   { id: 'plan', label: 'План', description: 'Только чтение и план с альтернативами.' },
   { id: 'dontAsk', label: 'Только разрешённое', description: 'Только то, что разрешено правилами; остальное отклоняется.' },
   { id: 'bypass', label: 'Без вопросов', description: 'Всё без подтверждения, кроме guardrails и правил deny.', warning: true, adminOnly: true },
@@ -2773,7 +2774,7 @@ function approvalCard() {
     ]),
     el('div', { class: 'approve-args', text: a.summary || '' }),
     diffView(a.diff),
-    a.why ? el('p', { class: 'hint-text', text: `Почему спрашиваем: ${a.why}.` }) : null,
+    a.why ? el('p', { class: 'hint-text approve-why', text: `${a.decisionSource === 'classifier' ? 'Авто спрашивает' : 'Почему спрашиваем'}: ${a.why}.` }) : null,
     a.rule ? el('p', { class: 'hint-text', text: `Сработало правило ask: ${a.rule}` }) : null,
     a.args && a.cls === 'external'
       ? el('details', { class: 'approve-details' }, [el('summary', { text: 'Аргументы' }), el('pre', { text: a.args })])

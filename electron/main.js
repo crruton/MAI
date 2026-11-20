@@ -1334,7 +1334,7 @@ function makeAsker(window, state, sessionId, projectDir) {
         clearTimeout(timer);
         if (request.kind === 'plan' && answer?.action === 'approve') {
           const wanted = normalizeMode(answer.mode);
-          let mode = ['manual', 'acceptEdits', 'bypass'].includes(wanted) ? wanted : 'manual';
+          let mode = ['manual', 'acceptEdits', 'smart', 'bypass'].includes(wanted) ? wanted : 'manual';
           // Те же ограничения, что у селектора режима: гостю и в недоверенной папке — без «Без вопросов».
           if (mode === 'bypass' && bypassBlocked(projectDir)) mode = 'manual';
           if (sessionId) setSessionMode(sessionId, mode);
