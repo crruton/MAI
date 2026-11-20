@@ -730,3 +730,14 @@ button { cursor: pointer; }
   .docs-shell { grid-template-columns: 190px minmax(0, 1fr); }
   .docs-toc { display: none; }
 }
+
+/* панель «Разрешения» (ADR 0038) */
+.perm-row { grid-template-columns: 56px 1fr auto auto; align-items: center; }
+.perm-kind { font-size: 11px; text-transform: uppercase; font-weight: 600; }
+.perm-deny { color: var(--danger, #d9534f); }
+.perm-ask { color: var(--warn, #c98a1b); }
+.perm-allow { color: var(--ok, #3c9a5f); }
+.perm-check { display: flex; gap: 8px; align-items: center; }
+.perm-check .perm-subject { flex: 1; }
+.perm-verdict[data-action='deny'] { color: var(--danger, #d9534f); }
+.perm-verdict[data-action='allow'] { color: var(--ok, #3c9a5f); }

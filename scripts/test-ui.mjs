@@ -191,7 +191,35 @@ ipcMain.handle('export:chat', (_e, payload) => {
   exportCalls.push({ channel: 'chat', format: payload?.format, messages: payload?.messages });
   return { ok: true, file: 'C:/tmp/chat.' + (payload?.format || 'md'), format: payload?.format };
 });
-ipcMain.handle('permissions:modes', () => ({ current: 'manual', fallback: 'manual', sessionId: null, modes: MODES }));
+// Уровни правил (раздел [26]).
+const permCalls = [];
+const permRules = {
+  managed: { allow: [], ask: [], deny: ['run_shell(curl *)'] },
+  global: { allow: ['run_shell(npm test)'], ask: [], deny: [] },
+  project: { allow: ['run_shell(npm run lint)'], ask: [], deny: [] },
+  local: { allow: ['run_shell(make)'], ask: [], deny: [] },
+  session: { allow: [], ask: [], deny: [] },
+};
+ipcMain.handle('permissions:modes', () => ({
+  current: 'manual',
+  fallback: 'manual',
+  sessionId: null,
+  role: 'admin',
+  trusted: true,
+  modes: MODES,
+  rules: permRules,
+  managed: { present: true, file: '/etc/mai-code/managed-settings.json', disableBypassMode: true },
+  files: { project: '/p/.mai-code/settings.json', local: '/p/.mai-code/settings.local.json' },
+}));
+ipcMain.handle('permissions:rules', (_e, payload) => {
+  permCalls.push({ type: 'rules', ...payload });
+  if (payload?.scope === 'local') permRules.local.allow = permRules.local.allow.filter((r) => !(payload.remove || []).includes(r));
+  return { ok: true };
+});
+ipcMain.handle('permissions:explain', (_e, payload) => {
+  permCalls.push({ type: 'explain', ...payload });
+  return { action: 'deny', rule: 'run_shell(curl *)', levels: ['managed'], reason: 'Запрещено правилом run_shell(curl *)' };
+});
 ipcMain.handle('permissions:set', (_e, payload) => ({ ok: true, mode: payload?.mode, scope: 'default' }));
 ipcMain.handle('attachments:list', () => []);
 ipcMain.handle('chat:onEvent', () => {});
@@ -696,6 +724,8 @@ app.whenReady().then(async () => {
     check('бейдж высокого риска', /risk-high/.test(modal1.risk), modal1.risk);
     check('три варианта ответа', modal1.options.length === 3, JSON.stringify(modal1.options));
     check('вариант 2 показывает правило', modal1.options.some((t) => t.includes('run_shell(git push*)')), JSON.stringify(modal1.options));
+    const scopes = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.approval-card .approve-scope option')].map((o) => o.value)`);
+    check('запомнить: чат, проект (только у меня), все чаты', scopes.join(',') === 'session,local,global', JSON.stringify(scopes));
 
     await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }))`);
     await new Promise((r) => setTimeout(r, 300));
@@ -1184,6 +1214,27 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`(() => { const m = document.querySelector('.modal'); const i = m.querySelector('input.sessions-search'); i.value = 'https://example.com/git-kit.git'; [...m.querySelectorAll('button')].find((b) => b.textContent === 'Установить').click(); })()`);
     await new Promise((r) => setTimeout(r, 300));
     check('установка из git-URL уходит в main', packageCalls.some((c) => c.type === 'install' && c.from === 'https://example.com/git-kit.git'), JSON.stringify(packageCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[26] Разрешения: /permissions, уровни, проверка вызова (ADR 0038)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/permissions'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const permRows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.perm-row')].map((r) => r.dataset.level + ':' + r.dataset.kind + ':' + r.querySelector('code').textContent)`);
+    check('правила всех уровней в панели', ['managed:deny:run_shell(curl *)', 'global:allow:run_shell(npm test)', 'project:allow:run_shell(npm run lint)', 'local:allow:run_shell(make)'].every((r) => permRows.includes(r)), JSON.stringify(permRows));
+    const permText = await win.webContents.executeJavaScript(`document.querySelector('.modal')?.textContent || ''`);
+    check('файл организации и запрет «Без вопросов» показаны', /managed-settings\.json/.test(permText) && /Без вопросов» запрещён/.test(permText), permText.slice(0, 300));
+    const removable = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.perm-row')].filter((r) => r.querySelector('button')).map((r) => r.dataset.level)`);
+    check('правила организации и проекта (git) не убираются из панели', !removable.includes('managed') && !removable.includes('project') && removable.includes('local'), JSON.stringify(removable));
+    await win.webContents.executeJavaScript(`document.querySelector('.perm-row[data-level=local] button').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('«Убрать» уходит в main с уровнем local', permCalls.some((c) => c.type === 'rules' && c.scope === 'local' && c.remove?.[0] === 'run_shell(make)'), JSON.stringify(permCalls));
+    const localLeft = await win.webContents.executeJavaScript(`document.querySelectorAll('.perm-row[data-level=local]').length`);
+    check('список обновился после удаления', localLeft === 0, String(localLeft));
+    await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('.perm-subject'); s.value = 'curl https://x'; [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Проверить').click(); })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    const verdict = await win.webContents.executeJavaScript(`(() => { const v = document.querySelector('.perm-verdict'); return v.dataset.action + '|' + v.textContent; })()`);
+    check('проверка показывает решение, правило и уровень', /^deny\|запрещено — правило run_shell\(curl \*\) \(организация\)/.test(verdict), verdict);
+    check('проверка уходит с инструментом и командой', permCalls.some((c) => c.type === 'explain' && c.tool === 'run_shell' && c.subject === 'curl https://x'), JSON.stringify(permCalls));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;

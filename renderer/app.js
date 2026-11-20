@@ -350,7 +350,7 @@ async function renderModeSelect() {
       el('option', {
         value: mode.id,
         text: mode.warning ? `⚠ ${mode.label}` : mode.label,
-        title: mode.disabled ? `${mode.description} Недоступно для вашей роли.` : mode.description || '',
+        title: mode.disabled ? `${mode.description} Недоступно: ${mode.reason || 'для вашей роли или этой папки'}.` : mode.description || '',
         disabled: mode.disabled ? 'disabled' : null,
       }),
     );
@@ -1614,6 +1614,10 @@ async function runSlash(text) {
       clear();
       await openHooks();
       return;
+    case 'permissions':
+      clear();
+      await openPermissions();
+      return;
     case 'agents':
       clear();
       await openSubagents();
@@ -1650,7 +1654,7 @@ async function openHooks() {
               el('div', { class: 'help-row hook-row' }, [
                 el('code', { text: `${r.event}${r.matcher && r.matcher !== '*' ? ` · ${r.matcher}` : ''}` }),
                 el('span', { class: 'suggest-path', text: r.command }),
-                el('span', { class: 'hint-text', text: `${r.source === 'project' ? 'проект' : 'глобальный'} · ${r.timeout} с` }),
+                el('span', { class: 'hint-text', text: `${{ project: 'проект', managed: 'организация' }[r.source] || (r.source?.startsWith?.('package') ? r.source : 'глобальный')} · ${r.timeout} с` }),
               ]),
             ),
           )
@@ -1659,6 +1663,99 @@ async function openHooks() {
       el('p', {
         class: 'hint-text',
         text: `Хуки проекта — ${info.projectFile}; глобальные — поле hooks в settings.json. Команда получает JSON на stdin; код 2 блокирует действие (причина — stderr), JSON { "decision", "reason", "additionalContext" } на stdout — решение и контекст.`,
+      }),
+    ],
+  });
+}
+
+/* ---------- панель «Разрешения» (CC2.9, ADR 0038) ---------- */
+
+const LEVEL_LABEL = {
+  managed: 'организация',
+  global: 'пользователь',
+  project: 'проект (git)',
+  local: 'проект (только у меня)',
+  session: 'этот чат',
+};
+const ACTION_LABEL = { allow: 'разрешено', ask: 'спросит', deny: 'запрещено' };
+
+async function openPermissions() {
+  const info = await api.permissions.modes(state.sessionId);
+  const editable = { session: Boolean(info.sessionId), local: info.trusted && info.role === 'admin', global: info.role === 'admin' };
+  const list = el('div', { class: 'help-table perm-rules' });
+  const render = (data) => {
+    list.replaceChildren();
+    let count = 0;
+    for (const level of ['managed', 'global', 'project', 'local', 'session']) {
+      const rules = data.rules?.[level] || {};
+      for (const kind of ['deny', 'ask', 'allow']) {
+        for (const rule of rules[kind] || []) {
+          count += 1;
+          list.append(
+            el('div', { class: 'help-row perm-row', 'data-level': level, 'data-kind': kind }, [
+              el('span', { class: `perm-kind perm-${kind}`, text: kind }),
+              el('code', { text: rule }),
+              el('span', { class: 'hint-text', text: LEVEL_LABEL[level] }),
+              editable[level]
+                ? el('button', {
+                    class: 'btn ghost small',
+                    type: 'button',
+                    text: 'Убрать',
+                    onclick: async () => {
+                      const result = await api.permissions.rules({ sessionId: state.sessionId, scope: level, kind, remove: [rule] });
+                      if (result?.ok === false) return toast(result.error, 'error');
+                      render(await api.permissions.modes(state.sessionId));
+                    },
+                  })
+                : el('span'),
+            ]),
+          );
+        }
+      }
+    }
+    if (!count) list.append(el('p', { class: 'hint-text', text: 'Правил нет — решения принимает режим.' }));
+  };
+  render(info);
+
+  const tool = el('select', { class: 'perm-tool' }, [
+    el('option', { value: 'run_shell', text: 'команда (run_shell)' }),
+    el('option', { value: 'write_file', text: 'запись файла (write_file)' }),
+    el('option', { value: 'edit_file', text: 'правка файла (edit_file)' }),
+    el('option', { value: 'read_file', text: 'чтение файла (read_file)' }),
+  ]);
+  const subject = el('input', { class: 'perm-subject', placeholder: 'npm test или src/app.js' });
+  const verdict = el('p', { class: 'perm-verdict hint-text' });
+  const check = async () => {
+    const r = await api.permissions.explain({ sessionId: state.sessionId, tool: tool.value, subject: subject.value });
+    const where = r.levels?.length ? ` (${r.levels.map((l) => LEVEL_LABEL[l === 'user' ? 'global' : l] || l).join(', ')})` : '';
+    verdict.textContent = `${ACTION_LABEL[r.action] || r.action}${r.rule ? ` — правило ${r.rule}${where}` : ''}${r.reason ? ` · ${r.reason}` : ''}`;
+    verdict.dataset.action = r.action;
+  };
+  subject.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') check();
+  });
+
+  const modeLabel = info.modes?.find((m) => m.id === info.current)?.label || info.current;
+  openModal({
+    title: 'Разрешения',
+    body: [
+      el('p', { text: `Режим: ${modeLabel}. Запрет (deny) с любого уровня сильнее любого разрешения.` }),
+      info.managed?.present
+        ? el('p', {
+            class: 'hint-text',
+            text: `Настройки организации: ${info.managed.file}${info.managed.disableBypassMode ? ' · «Без вопросов» запрещён' : ''}`,
+          })
+        : null,
+      info.trusted ? null : el('p', { class: 'hint-text', text: 'Папка не доверена: правила проекта не действуют.' }),
+      list,
+      el('h4', { text: 'Что будет с вызовом' }),
+      el('div', { class: 'perm-check' }, [tool, subject, el('button', { class: 'btn', type: 'button', text: 'Проверить', onclick: check })]),
+      verdict,
+      el('p', {
+        class: 'hint-text',
+        text: info.files
+          ? `Проект: ${info.files.project} (в git) и ${info.files.local} (только у вас). Пользователь — поле permissions в settings.json.`
+          : 'Откройте проект, чтобы видеть его правила.',
       }),
     ],
   });
@@ -2653,6 +2750,7 @@ function approvalCard() {
   feedback.value = a.feedback || '';
   const scope = el('select', { class: 'approve-scope', onchange: (e) => (a.scope = e.target.value) }, [
     el('option', { value: 'session', text: 'в этом чате' }),
+    el('option', { value: 'local', text: 'в этом проекте (только у меня)' }),
     el('option', { value: 'global', text: 'всегда (все чаты)' }),
   ]);
   scope.value = a.scope || 'session';

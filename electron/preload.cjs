@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('mai', {
     modes: (sessionId) => invoke('permissions:modes', sessionId),
     set: (mode, sessionId) => invoke('permissions:set', { mode, sessionId }),
     rules: (payload) => invoke('permissions:rules', payload),
+    explain: (payload) => invoke('permissions:explain', payload),
     audit: (limit) => invoke('permissions:audit', { limit }),
   },
   workspace: {

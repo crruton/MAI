@@ -25,6 +25,7 @@ export const BUILTIN_COMMANDS = [
   { name: 'compact', description: 'Сжать раннюю часть диалога в сводку', argumentHint: '[что сохранить]' },
   { name: 'cost', description: 'Токены и стоимость чата' },
   { name: 'hooks', description: 'Хуки на события агента' },
+  { name: 'permissions', description: 'Правила разрешений по уровням и проверка вызова' },
   { name: 'agents', description: 'Типы субагентов' },
   { name: 'packages', description: 'Пакеты плагинов: список, установка, включение' },
 ];

@@ -68,6 +68,7 @@ export const IPC_PERMISSIONS = {
   'permissions:modes': ANY,
   'permissions:set': SELF,
   'permissions:rules': SELF,
+  'permissions:explain': ANY,
   'permissions:audit': ADMIN,
 
   // вложения: только внутри папки вложений проекта

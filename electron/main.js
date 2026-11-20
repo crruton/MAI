@@ -15,6 +15,7 @@ import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
 import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
 import { listAgentDefs } from './lib/agent-defs.js';
+import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
@@ -61,7 +62,7 @@ import * as sandbox from './lib/container.js';
 import { saveFromPaths, saveImage, uploadsRoot, removeSessionUploads, adoptDraftUploads, recognizeAttachment } from './lib/attachments.js';
 import { ocrStatus } from './lib/ocr.js';
 import { normalizeMode, MODE_INFO, PERMISSION_MODES } from './lib/permissions.js';
-import { effectiveMode, mergeRules, parseRule } from './lib/policy.js';
+import { effectiveMode, mergeRules, parseRule, classifyTool, evaluate, relativeSubject } from './lib/policy.js';
 import { createAuditLog, readAudit } from './lib/audit.js';
 import { trustState, setTrust, removeTrust, listTrust, inspectProject } from './lib/trust.js';
 import { guardIpc } from './lib/ipc-permissions.js';
@@ -154,12 +155,42 @@ function mcpConfigs(projectDir) {
   return { ...(settings.mcpServers || {}), ...packageMcpServers(packagesFor(dir)), ...(isTrusted(dir) ? projectMcpConfig(dir) : {}) };
 }
 
+/** Управляемые настройки организации (ADR 0038): читаются при каждом решении — правка файла действует сразу. */
+function managed() {
+  return readManaged();
+}
+
+function managedHooks() {
+  const org = managed();
+  return org.hooks ? [{ source: 'managed', config: org.hooks }] : [];
+}
+
+/** «Без вопросов» недоступен: гость, недоверенная папка или запрет организации. */
+function bypassBlocked(projectDir) {
+  return authStatus().role !== 'admin' || (projectDir && !isTrusted(projectDir)) || managed().disableBypassMode;
+}
+
+/** Правила всех уровней для PolicyEngine и откуда каждое пришло. */
+function rulesFor(sessionId, projectDir) {
+  const settings = loadSettings();
+  const session = sessionId ? getSession(sessionId) : null;
+  const dir = projectDir || session?.projectDir || settings.projectDir;
+  const levels = readProjectLevels(dir, { trusted: isTrusted(dir) });
+  return mergeLevels([
+    { level: 'managed', rules: managed().permissions },
+    { level: 'user', rules: settings.permissions },
+    { level: 'project', rules: levels.project },
+    { level: 'local', rules: levels.local },
+    { level: 'session', rules: session?.permissionRules },
+  ]);
+}
+
 /** Режим разрешений для внешнего рантайма: тот же, что у встроенного агента в этом чате. */
 function runtimeMode(sessionId, projectDir) {
   const settings = loadSettings();
   const session = sessionId ? getSession(sessionId) : null;
   let mode = effectiveMode(session?.permissionMode || settings.permissionMode, authStatus().role);
-  if (mode === 'bypass' && projectDir && !isTrusted(projectDir)) mode = 'manual';
+  if (mode === 'bypass' && bypassBlocked(projectDir)) mode = 'manual';
   return mode;
 }
 
@@ -818,17 +849,32 @@ ipcMain.handle('permissions:modes', (_e, sessionId) => {
   const settings = loadSettings();
   const session = sessionId ? getSession(sessionId) : null;
   const role = authStatus().role;
+  const dir = session?.projectDir || settings.projectDir;
+  const org = managed();
+  const levels = readProjectLevels(dir, { trusted: isTrusted(dir) });
+  const blocked = bypassBlocked(dir);
+  const clamp = (mode) => (effectiveMode(mode, role) === 'bypass' && blocked ? 'manual' : effectiveMode(mode, role));
   return {
-    current: effectiveMode(session?.permissionMode || settings.permissionMode, role),
-    fallback: effectiveMode(settings.permissionMode, role),
+    current: clamp(session?.permissionMode || settings.permissionMode),
+    fallback: clamp(settings.permissionMode),
     sessionId: session?.id || null,
     role,
-    // Режим «Без вопросов» гостю не показываем выбираемым (ADR 0027).
-    modes: PERMISSION_MODES.map((id) => ({ ...MODE_INFO[id], disabled: Boolean(MODE_INFO[id].adminOnly && role !== 'admin') })),
+    // «Без вопросов» недоступен гостю, в недоверенной папке и при запрете организации.
+    modes: PERMISSION_MODES.map((id) => ({
+      ...MODE_INFO[id],
+      disabled: Boolean(id === 'bypass' && blocked),
+      ...(id === 'bypass' && org.disableBypassMode ? { reason: 'запрещён настройками организации' } : {}),
+    })),
     rules: {
+      managed: org.permissions,
       global: mergeRules(settings.permissions),
+      project: levels.project,
+      local: levels.local,
       session: mergeRules(session?.permissionRules),
     },
+    managed: { present: org.present, file: org.file, disableBypassMode: org.disableBypassMode },
+    files: dir ? projectSettingsFiles(dir) : null,
+    trusted: isTrusted(dir),
   };
 });
 
@@ -843,6 +889,9 @@ ipcMain.handle('permissions:set', (_e, payload) => {
   if (MODE_INFO[next]?.adminOnly && authStatus().role !== 'admin') {
     return { ok: false, error: `Режим «${MODE_INFO[next].label}» доступен только роли admin`, mode: effectiveMode(next, 'guest') };
   }
+  if (next === 'bypass' && managed().disableBypassMode) {
+    return { ok: false, error: 'Режим «Без вопросов» запрещён настройками организации', mode: 'manual' };
+  }
   if (sessionId) {
     const session = setSessionMode(sessionId, next);
     if (session) return { ok: true, mode: next, sessionId: session.id, scope: 'session' };
@@ -851,10 +900,31 @@ ipcMain.handle('permissions:set', (_e, payload) => {
   return { ok: true, mode: next, sessionId: null, scope: 'default' };
 });
 
+/** Что будет с вызовом при текущих режиме и правилах — для панели «Разрешения» (CC2.9). */
+ipcMain.handle('permissions:explain', (_e, payload = {}) => {
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  const dir = session?.projectDir || loadSettings().projectDir;
+  const tool = String(payload.tool || 'run_shell');
+  const cls = classifyTool(tool);
+  const { rules, origin } = rulesFor(session?.id, dir);
+  const mode = policyFor(session?.id, dir).getMode();
+  const subject = cls === 'exec' ? String(payload.subject || '') : payload.subject ? relativeSubject(dir, payload.subject) : null;
+  const decision = evaluate({ tool, cls, subject, mode, rules, guardrails: loadSettings().guardrails, role: authStatus().role });
+  return { ...decision, tool, cls, subject, levels: decision.rule ? origin[`${decision.action}:${decision.rule}`] || origin[`allow:${decision.rule}`] || [] : [] };
+});
+
 /** Правила разрешений: сессия или глобально. Глобальные меняет только admin. */
 ipcMain.handle('permissions:rules', (_e, payload) => {
   const { sessionId, scope = 'session', kind = 'allow', add = [], remove = [] } = payload || {};
   const valid = (list) => (list || []).map(String).filter((rule) => parseRule(rule));
+  if (scope === 'local') {
+    // Личные правила проекта (ADR 0038): только для доверенной папки, меняет admin.
+    requireAdmin();
+    const session = sessionId ? getSession(sessionId) : null;
+    const dir = session?.projectDir || loadSettings().projectDir;
+    if (!isTrusted(dir)) return { ok: false, error: 'Папка не доверена — правила проекта не сохраняются' };
+    return { ok: true, rules: updateLocalRules(dir, { kind, add: valid(add), remove: valid(remove) }) };
+  }
   if (scope === 'global') {
     requireAdmin();
     const current = mergeRules(loadSettings().permissions);
@@ -1169,15 +1239,12 @@ function policyFor(sessionId, projectDir = '') {
       const settings = loadSettings();
       const session = sessionId ? getSession(sessionId) : null;
       const mode = effectiveMode(session?.permissionMode || settings.permissionMode, authStatus().role);
-      // В недоверенной папке «Без вопросов» не действует (ADR 0028).
-      if (mode === 'bypass' && projectDir && !isTrusted(projectDir)) return 'manual';
+      // «Без вопросов» не действует в недоверенной папке (ADR 0028) и при запрете организации (ADR 0038).
+      if (mode === 'bypass' && bypassBlocked(projectDir)) return 'manual';
       return mode;
     },
-    getRules: () => {
-      const settings = loadSettings();
-      const session = sessionId ? getSession(sessionId) : null;
-      return mergeRules(settings.permissions, session?.permissionRules);
-    },
+    // Правила всех уровней: организация, пользователь, проект, локальные, чат (ADR 0038).
+    getRules: () => rulesFor(sessionId, projectDir).rules,
   };
 }
 
@@ -1188,7 +1255,8 @@ function policyFor(sessionId, projectDir = '') {
 function hookRunnerFor(window, { projectDir, sessionId, trusted }) {
   const settings = loadSettings();
   return createHookRunner({
-    hooks: collectHooks({ settingsHooks: settings.hooks, projectDir, trusted, packageHooks: packageHooks(packagesFor(projectDir)) }),
+    // Хуки организации (ADR 0038) идут первыми и не выключаются пользователем.
+    hooks: collectHooks({ settingsHooks: settings.hooks, projectDir, trusted, packageHooks: [...managedHooks(), ...packageHooks(packagesFor(projectDir))] }),
     projectDir,
     sessionId,
     onRun: (record) => {
@@ -1226,6 +1294,12 @@ function makeApprover(window, state, sessionId) {
               const current = mergeRules(loadSettings().permissions);
               current.allow = [...current.allow, ...rules.filter((r) => !current.allow.includes(r))];
               saveSettings({ permissions: current });
+            } else if (answer.remember === 'local') {
+              // Личные правила проекта — .mai-code/settings.local.json (ADR 0038).
+              const dir = (sessionId && getSession(sessionId)?.projectDir) || loadSettings().projectDir;
+              if (!isTrusted(dir)) throw new Error('папка не доверена — правила проекта не сохраняются');
+              requireAdmin();
+              updateLocalRules(dir, { kind: 'allow', add: rules });
             } else if (sessionId) {
               addSessionRules(sessionId, 'allow', rules);
             }
@@ -1262,7 +1336,7 @@ function makeAsker(window, state, sessionId, projectDir) {
           const wanted = normalizeMode(answer.mode);
           let mode = ['manual', 'acceptEdits', 'bypass'].includes(wanted) ? wanted : 'manual';
           // Те же ограничения, что у селектора режима: гостю и в недоверенной папке — без «Без вопросов».
-          if (mode === 'bypass' && (authStatus().role !== 'admin' || !isTrusted(projectDir))) mode = 'manual';
+          if (mode === 'bypass' && bypassBlocked(projectDir)) mode = 'manual';
           if (sessionId) setSessionMode(sessionId, mode);
           answer = { ...answer, mode };
           send(window, { type: 'mode:changed', sessionId, mode });
@@ -1393,7 +1467,7 @@ ipcMain.handle('agents:defs', (_e, projectDir) => {
 ipcMain.handle('hooks:list', (_e, projectDir) => {
   const dir = projectDir || loadSettings().projectDir;
   const trusted = isTrusted(dir);
-  const config = collectHooks({ settingsHooks: loadSettings().hooks, projectDir: dir, trusted, packageHooks: packageHooks(packagesFor(dir)) });
+  const config = collectHooks({ settingsHooks: loadSettings().hooks, projectDir: dir, trusted, packageHooks: [...managedHooks(), ...packageHooks(packagesFor(dir))] });
   const rows = [];
   for (const event of HOOK_EVENTS) {
     for (const group of config[event] || []) {
@@ -1507,7 +1581,7 @@ ipcMain.handle('chat:approval', (event, payload = {}) => {
     // allow === undefined означает «модалку закрыли без ответа» — это отказ.
     resolve({
       allow: allow === true,
-      remember: remember === 'global' || remember === 'session' ? remember : null,
+      remember: ['global', 'session', 'local'].includes(remember) ? remember : null,
       rules: Array.isArray(rules) ? rules.map(String) : [],
       feedback: String(feedback || '').slice(0, 2000),
     });

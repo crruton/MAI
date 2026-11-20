@@ -276,6 +276,22 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
 
+### Уровни настроек и панель «Разрешения»
+
+ADR 0038. `electron/lib/settings-levels.js`: `readManaged()` (файл организации,
+путь — `managedSettingsPath()` или `MAI_MANAGED_SETTINGS`), `readProjectLevels`
+(только для доверенной папки), `mergeLevels` (правила и их источник),
+`updateLocalRules` (атомарная запись `settings.local.json` и строка в
+`.mai-code/.gitignore`). В main: `rulesFor(sessionId, dir)` питает
+`policyFor().getRules`; `bypassBlocked(dir)` (гость, недоверенная папка,
+`disableBypassMode`) опускает «Без вопросов» до «Вручную» в `policyFor().getMode`,
+`runtimeMode`, `makeAsker`, а `permissions:set` его отклоняет; `managedHooks()`
+ставится первым в `collectHooks`. `permissions:modes` отдаёт правила по уровням,
+файл организации и пути файлов проекта; `permissions:rules` принимает
+`scope: 'local'`; `permissions:explain({ sessionId, tool, subject })` возвращает
+решение `evaluate` и уровни найденного правила. Ответ на запрос
+`remember: 'local'` пишет правило в `settings.local.json` (admin, доверенная папка).
+
 ## Доверие к папке и матрица прав IPC
 
 Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или
