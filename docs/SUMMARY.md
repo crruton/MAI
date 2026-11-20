@@ -3,6 +3,7 @@
 ## Обзор
 
 - [MAI Code](../README.md)
+- [Руководство пользователя](USER-GUIDE.md)
 - [Документация](README.md)
 - [Архитектура](ARCHITECTURE.md)
 - [Провайдеры и рантаймы](PROVIDERS.md)
