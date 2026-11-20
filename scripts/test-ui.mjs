@@ -62,6 +62,21 @@ ipcMain.handle('project:pick', () => {
 });
 // Ответы на запросы разрешения из окна (раздел [14]).
 const approvals = [];
+// Слэш-команды и @файл (раздел [19]).
+const expandCalls = [];
+ipcMain.handle('commands:list', () => [
+  { name: 'help', description: 'Список команд', source: 'builtin' },
+  { name: 'clear', description: 'Новый чат', source: 'builtin' },
+  { name: 'mode', description: 'Режим', argumentHint: '<режим>', source: 'builtin' },
+  { name: 'init', description: 'AGENTS.md', source: 'builtin' },
+  { name: 'review', description: 'Ревью изменений', argumentHint: '<путь>', source: 'project' },
+  { name: 'handoff', description: 'навык передачи', argumentHint: '<задача>', source: 'skill' },
+]);
+ipcMain.handle('commands:expand', (_e, payload) => {
+  expandCalls.push(payload);
+  return { ok: true, prompt: `Ревью ${payload.args}` };
+});
+ipcMain.handle('files:search', (_e, payload) => (String(payload.query).startsWith('sr') ? ['src/', 'src/app.js', 'scripts/sr.mjs'] : []));
 const answers = [];
 ipcMain.handle('chat:answer', (_e, payload) => {
   answers.push(payload);
@@ -909,6 +924,63 @@ app.whenReady().then(async () => {
     })()`);
     check('↑ в пустом поле возвращает последнее сообщение', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === 'собери');
 
+
+    console.log('\n[19] Слэш-команды и @файл (CC7.7–CC7.9)');
+    const type = (text) =>
+      win.webContents.executeJavaScript(`(() => {
+        const input = document.querySelector('#input');
+        input.focus();
+        input.value = ${JSON.stringify(text)};
+        input.setSelectionRange(input.value.length, input.value.length);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      })()`);
+    const key = (k) =>
+      win.webContents.executeJavaScript(`document.querySelector('#input').dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(k)}, bubbles: true, cancelable: true }))`);
+    const menu = () =>
+      win.webContents.executeJavaScript(`(() => {
+        const box = document.querySelector('#suggest');
+        return { open: box && !box.hidden, items: [...(box?.querySelectorAll('.suggest-item') || [])].map((b) => b.textContent), active: box?.querySelector('.active')?.textContent || '' };
+      })()`);
+    await type('/re');
+    await new Promise((r) => setTimeout(r, 300));
+    let m = await menu();
+    check('/ открывает меню команд', m.open && m.items.some((t) => t.startsWith('/review')), JSON.stringify(m));
+    check('команда проекта помечена', m.items.some((t) => t.includes('/review') && t.includes('проект')), JSON.stringify(m.items));
+    await type('/');
+    await new Promise((r) => setTimeout(r, 200));
+    await key('ArrowDown');
+    m = await menu();
+    check('стрелка вниз двигает выбор', m.active.startsWith('/clear'), m.active);
+    await type('/rev');
+    await new Promise((r) => setTimeout(r, 200));
+    await key('Tab');
+    await new Promise((r) => setTimeout(r, 100));
+    check('Tab подставляет команду с пробелом для аргумента', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === '/review ');
+    await type('/review src/app.js');
+    await key('Enter');
+    await new Promise((r) => setTimeout(r, 400));
+    check('своя команда разворачивается через commands:expand', expandCalls.some((c) => c.name === 'review' && c.args === 'src/app.js'), JSON.stringify(expandCalls));
+
+    await type('/help');
+    await key('Enter'); // выбрать из меню
+    await new Promise((r) => setTimeout(r, 200));
+    if (!(await win.webContents.executeJavaScript(`Boolean(document.querySelector('.help-table'))`))) {
+      await key('Enter');
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    const help = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.help-row code')].map((c) => c.textContent)`);
+    check('/help показывает команды', help.includes('/review <путь>') && help.includes('/init'), JSON.stringify(help));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    await type('посмотри @sr');
+    await new Promise((r) => setTimeout(r, 450));
+    m = await menu();
+    check('@ ищет файлы проекта', m.open && m.items.includes('src/app.js'), JSON.stringify(m));
+    await key('ArrowDown');
+    await key('Enter');
+    await new Promise((r) => setTimeout(r, 150));
+    check('Enter подставляет путь, а не отправляет', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === 'посмотри @src/app.js ');
+    await type('');
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

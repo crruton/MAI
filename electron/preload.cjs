@@ -40,6 +40,14 @@ contextBridge.exposeInMainWorld('mai', {
     status: (payload) => invoke('ocr:status', payload),
     recognize: (payload) => invoke('ocr:recognize', payload),
   },
+  // Слэш-команды и @файл (CC7.7–CC7.9).
+  commands: {
+    list: (projectDir) => invoke('commands:list', projectDir),
+    expand: (projectDir, name, args) => invoke('commands:expand', { projectDir, name, args }),
+  },
+  files: {
+    search: (projectDir, query) => invoke('files:search', { projectDir, query }),
+  },
   // Доверие к папке проекта (ADR 0028).
   trust: {
     get: (projectDir) => invoke('trust:get', projectDir),

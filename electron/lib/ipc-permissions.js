@@ -54,6 +54,11 @@ export const IPC_PERMISSIONS = {
   'runtimes:runMany': ADMIN,
   'runtimes:stop': ANY,
 
+  // слэш-команды и упоминания файлов: только чтение
+  'commands:list': ANY,
+  'commands:expand': ANY,
+  'files:search': ANY,
+
   // проект, доверие, разрешения
   'project:pick': ADMIN,
   'trust:get': ANY,

@@ -27,6 +27,8 @@ const state = {
   trust: null,
   // Открытый вопрос ask_user или карточка плана exit_plan (CC1.7, CC1.8).
   question: null,
+  // Слэш-команды: null — ещё не загружены (CC7.7).
+  commands: null,
   // Запрос разрешения — карточкой в ленте (CC7.1).
   approval: null,
   // Живой вывод команд по id вызова (CC7.4).
@@ -391,6 +393,8 @@ async function setPermissionMode(mode) {
 /* ---------- доверие к папке (ADR 0028) ---------- */
 
 async function refreshTrust() {
+  // Свои команды проекта зависят от папки и доверия к ней.
+  state.commands = null;
   if (!api.trust || !state.projectDir) {
     state.trust = null;
     updateChrome();
@@ -605,7 +609,31 @@ function renderAll() {
 
 /* ---------- вопросы агента и карточка плана (CC1.7, CC1.8) ---------- */
 
+/**
+ * Системное уведомление, когда окно не в фокусе (CC7.14): агент ждёт ответа
+ * или закончил. Клик возвращает окно.
+ */
+function notify(title, body) {
+  try {
+    if (document.hasFocus() || typeof Notification === 'undefined') return;
+    if (Notification.permission === 'denied') return;
+    const show = () => {
+      const n = new Notification(title, { body: String(body || '').slice(0, 180), silent: false });
+      n.onclick = () => {
+        window.focus();
+        api.focusMain?.();
+        n.close();
+      };
+    };
+    if (Notification.permission === 'granted') show();
+    else Notification.requestPermission().then((p) => p === 'granted' && show());
+  } catch {
+    /* уведомления недоступны — не мешаем работе */
+  }
+}
+
 function openQuestion(event) {
+  notify(event.kind === 'plan' ? 'План готов' : 'Агент спрашивает', event.kind === 'plan' ? 'Выберите, как выполнить план' : event.questions?.[0]?.question);
   const questions = event.questions || [];
   state.question = {
     ...event,
@@ -1215,16 +1243,26 @@ async function loadModels(force = false) {
 
 /* ---------- отправка ---------- */
 
-async function send() {
+/**
+ * Отправка. `override` — запрос из слэш-команды: агенту уходит развёрнутый
+ * шаблон, в чате видна сама команда (CC7.7, CC7.8).
+ */
+async function send(override = null) {
+  closeSuggest();
   if (state.running) {
     await queueMessage();
     return;
   }
   const input = $('#input');
-  const text = input.value.trim();
+  const typed = input.value.trim();
+  if (!override && typed.startsWith('/') && !typed.startsWith('//')) {
+    await runSlash(typed);
+    return;
+  }
+  const text = override ? override.text : typed;
   const hasFiles = state.attachments.length > 0;
   if (!text && !hasFiles) return;
-  const display = text || 'Прикреплённые файлы';
+  const display = override?.display || text || 'Прикреплённые файлы';
   const prompt = text + attachmentBlock();
   // Картинки уходят модели как изображения, если она их принимает (F1).
   const images = state.attachments.filter((item) => item.kind === 'image').map((item) => item.path);
@@ -1258,7 +1296,7 @@ async function send() {
     return;
   }
 
-  state.messages.push({ role: 'user', content: display });
+  state.messages.push({ role: 'user', content: display, display });
   state.live = { content: '', reasoning: '', tools: [] };
   state.running = true;
   setRunning(true);
@@ -1370,6 +1408,241 @@ function setRunning(running) {
       ? 'Рантайм работает…'
       : 'Агент работает · Enter — в очередь · Esc — остановить'
     : '';
+}
+
+/* ---------- слэш-команды и @файл (CC7.7–CC7.9) ---------- */
+
+const INIT_PROMPT = [
+  'Изучи этот проект: структура, стек, команды сборки и тестов, соглашения в коде.',
+  'Напиши или обнови AGENTS.md в корне проекта: короткие обязательные правила для агентов —',
+  'как собирать и тестировать, где что лежит, чего не делать. Без воды, только проверенное.',
+  'Если AGENTS.md уже есть — сохрани действующие правила и дополни.',
+].join(' ');
+
+async function loadCommands() {
+  try {
+    state.commands = await api.commands.list(state.projectDir);
+  } catch {
+    state.commands = [];
+  }
+  return state.commands;
+}
+
+function commandHelp() {
+  const rows = (state.commands || []).map((c) =>
+    el('div', { class: 'help-row' }, [
+      el('code', { text: `/${c.name}${c.argumentHint ? ` ${c.argumentHint}` : ''}` }),
+      el('span', { text: c.description || '' }),
+      el('span', { class: 'hint-text', text: { builtin: '', project: 'проект', global: 'глобальная', skill: 'навык' }[c.source] || '' }),
+    ]),
+  );
+  openModal({
+    title: 'Команды и клавиши',
+    body: [
+      el('div', { class: 'help-table' }, rows),
+      el('div', { class: 'docs-group-title', text: 'Клавиши' }),
+      el('div', { class: 'hint-text', text: 'Enter — отправить (во время работы — в очередь) · Shift+Enter — новая строка · Esc — остановить · Shift+Tab — режим · ↑ — последнее сообщение · @ — файл проекта · / — команда' }),
+      el('div', { class: 'hint-text', text: 'Свои команды: .mai-code/commands/<имя>.md (проект) и папка commands в данных приложения. В тексте — $ARGUMENTS и $1…$9.' }),
+    ],
+  });
+}
+
+/** Выполняет `/команда аргументы`. */
+async function runSlash(text) {
+  const input = $('#input');
+  const match = /^\/(\S+)\s*([\s\S]*)$/.exec(text);
+  if (!match) return;
+  const name = match[1].toLowerCase();
+  const args = match[2].trim();
+  const clear = () => {
+    input.value = '';
+    autosize();
+  };
+  switch (name) {
+    case 'help':
+      clear();
+      await loadCommands();
+      commandHelp();
+      return;
+    case 'clear':
+      clear();
+      newChat();
+      return;
+    case 'model': {
+      const q = args.toLowerCase();
+      const found = state.models.find((m) => m.key.toLowerCase() === q) || state.models.find((m) => `${m.key} ${m.name || ''}`.toLowerCase().includes(q));
+      if (!q || !found) {
+        toast(q ? `Модель «${args}» не найдена` : 'Укажите часть названия модели: /model opus', 'err');
+        return;
+      }
+      clear();
+      state.model = found.key;
+      $('#model-select').value = found.key;
+      state.settings = await api.settings.save({ activeModel: found.key });
+      updateChrome();
+      toast(`Модель: ${modelLabel(found.key)}`, 'ok');
+      return;
+    }
+    case 'mode': {
+      const modes = state.permissionModes.length ? state.permissionModes : MODE_FALLBACK;
+      const found = modes.find((m) => m.id.toLowerCase() === args.toLowerCase() || m.label.toLowerCase() === args.toLowerCase());
+      if (!found) {
+        toast(`Режимы: ${modes.map((m) => m.id).join(', ')}`, 'err');
+        return;
+      }
+      clear();
+      await setPermissionMode(found.id);
+      return;
+    }
+    case 'init':
+      clear();
+      await send({ text: INIT_PROMPT, display: '/init' });
+      return;
+    case 'memory':
+      clear();
+      openMemory();
+      return;
+    case 'export':
+      clear();
+      $('#export-chat')?.click();
+      return;
+    default: {
+      const result = await api.commands.expand(state.projectDir, name, args);
+      if (!result?.ok) {
+        toast(result?.error || `Команда /${name} не найдена. /help — список`, 'err');
+        return;
+      }
+      clear();
+      await send({ text: result.prompt, display: text });
+    }
+  }
+}
+
+/* ---------- всплывающие подсказки ---------- */
+
+const suggest = { kind: '', items: [], index: 0, token: null, timer: null };
+
+function closeSuggest() {
+  suggest.kind = '';
+  suggest.items = [];
+  const box = $('#suggest');
+  if (box) box.hidden = true;
+}
+
+function renderSuggest() {
+  const box = $('#suggest');
+  if (!box) return;
+  if (!suggest.items.length) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  box.replaceChildren(
+    ...suggest.items.map((item, i) =>
+      el(
+        'button',
+        {
+          class: `suggest-item${i === suggest.index ? ' active' : ''}`,
+          type: 'button',
+          onmousedown: (e) => {
+            e.preventDefault();
+            suggest.index = i;
+            acceptSuggest(false);
+          },
+        },
+        suggest.kind === 'slash'
+          ? [
+              el('code', { text: `/${item.name}` }),
+              item.argumentHint ? el('span', { class: 'hint-text', text: item.argumentHint }) : null,
+              el('span', { class: 'suggest-desc', text: item.description || '' }),
+              item.source !== 'builtin' ? el('span', { class: 'suggest-source', text: { project: 'проект', global: 'глобальная', skill: 'навык' }[item.source] || '' }) : null,
+            ]
+          : [el('span', { class: 'suggest-path', text: item })],
+      ),
+    ),
+  );
+}
+
+/** Что подсказывать по тексту до курсора: команду в начале строки или файл после @. */
+async function updateSuggest() {
+  const input = $('#input');
+  const before = input.value.slice(0, input.selectionStart ?? input.value.length);
+  const slash = /^\/(\S*)$/.exec(before);
+  if (slash && !input.value.includes('\n')) {
+    if (!state.commands) await loadCommands();
+    const q = slash[1].toLowerCase();
+    const list = (state.commands || []).filter((c) => c.name.toLowerCase().startsWith(q));
+    const more = (state.commands || []).filter((c) => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q));
+    suggest.kind = 'slash';
+    suggest.items = [...list, ...more].slice(0, 12);
+    suggest.index = 0;
+    suggest.token = { start: 0, end: before.length };
+    renderSuggest();
+    return;
+  }
+  const mention = /(^|\s)@([^\s@]*)$/.exec(before);
+  if (mention && state.projectDir) {
+    const query = mention[2];
+    const start = before.length - query.length - 1;
+    clearTimeout(suggest.timer);
+    suggest.timer = setTimeout(async () => {
+      const items = await api.files.search(state.projectDir, query).catch(() => []);
+      // Курсор мог уйти, пока шёл поиск.
+      const now = input.value.slice(0, input.selectionStart ?? input.value.length);
+      if (!/(^|\s)@([^\s@]*)$/.test(now)) return;
+      suggest.kind = 'mention';
+      suggest.items = items;
+      suggest.index = 0;
+      suggest.token = { start, end: now.length };
+      renderSuggest();
+    }, 120);
+    return;
+  }
+  closeSuggest();
+}
+
+/** Подставляет выбранное. Команда без аргументов по Enter выполняется сразу. */
+function acceptSuggest(run) {
+  const input = $('#input');
+  const item = suggest.items[suggest.index];
+  if (!item || !suggest.token) return;
+  const { start, end } = suggest.token;
+  if (suggest.kind === 'slash') {
+    input.value = `/${item.name}${item.argumentHint ? ' ' : ''}${input.value.slice(end)}`;
+    closeSuggest();
+    autosize();
+    input.focus();
+    if (run && !item.argumentHint) send();
+    return;
+  }
+  const insert = `@${item}${item.endsWith('/') ? '' : ' '}`;
+  input.value = `${input.value.slice(0, start)}${insert}${input.value.slice(end)}`;
+  const caret = start + insert.length;
+  input.setSelectionRange(caret, caret);
+  closeSuggest();
+  autosize();
+  input.focus();
+  // Папка: сразу показать её содержимое.
+  if (item.endsWith('/')) updateSuggest();
+}
+
+function onSuggestKey(event) {
+  if (!suggest.items.length) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    suggest.index = (suggest.index + step + suggest.items.length) % suggest.items.length;
+    renderSuggest();
+  } else if (event.key === 'Tab' && !event.shiftKey) {
+    acceptSuggest(false);
+  } else if (event.key === 'Enter' && !event.shiftKey) {
+    acceptSuggest(true);
+  } else if (event.key === 'Escape') {
+    closeSuggest();
+  } else {
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
 }
 
 /* ---------- очередь сообщений, задачи, клавиши (CC7.5, CC1.5, CC7.6) ---------- */
@@ -1624,6 +1897,7 @@ function handleEvent(event) {
       );
       break;
     case 'done':
+      notify('Агент закончил', [...(event.messages || [])].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '');
       state.messages = event.messages || state.messages;
       state.live = null;
       state.running = false;
@@ -1722,6 +1996,7 @@ function diffView(diff, { limit = 400 } = {}) {
  * 3 — нет, с пояснением для агента. Рекомендованный ответ подсвечен и в фокусе.
  */
 function askApproval(event) {
+  notify('Нужно разрешение', event.summary || event.tool || '');
   // Второй запрос не должен перекрывать первый: первый остался бы без ответа.
   if (state.approval) {
     api.chat.approve(event.id, false, { feedback: 'Предыдущий запрос ещё открыт.' });
@@ -3697,6 +3972,10 @@ $('#export-chat').addEventListener('click', async (event) => {
 
   const input = $('#input');
   input.addEventListener('input', autosize);
+  // Подсказки раньше Enter → отправить: стрелки, Tab и Enter выбирают из списка.
+  input.addEventListener('keydown', onSuggestKey);
+  input.addEventListener('input', updateSuggest);
+  input.addEventListener('blur', () => setTimeout(closeSuggest, 150));
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();

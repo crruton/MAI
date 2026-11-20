@@ -62,6 +62,7 @@ import { trustState, setTrust, removeTrust, listTrust, inspectProject } from './
 import { guardIpc } from './lib/ipc-permissions.js';
 import { isImageFile } from './lib/vision.js';
 import { acquireProject } from './lib/project-lock.js';
+import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions } from './lib/commands.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
@@ -720,6 +721,49 @@ ipcMain.handle('project:pick', async () => {
   return result.filePaths[0];
 });
 
+// ---------- слэш-команды и упоминания файлов (CC7.7–CC7.9) ----------
+
+ipcMain.handle('commands:list', (_e, projectDir) => {
+  const dir = projectDir || loadSettings().projectDir;
+  const trusted = isTrusted(dir);
+  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted }).map(({ name, description, argumentHint, source }) => ({
+    name,
+    description,
+    argumentHint,
+    source,
+  }));
+  const taken = new Set([...BUILTIN_COMMANDS.map((c) => c.name), ...custom.map((c) => c.name.toLowerCase())]);
+  const skills = listSkills(dir, { includeProject: trusted })
+    .filter((skill) => /^[a-z0-9][a-z0-9_-]*$/i.test(skill.name) && !taken.has(skill.name.toLowerCase()))
+    .map((skill) => ({ name: skill.name, description: skill.description || 'навык', argumentHint: '<задача>', source: 'skill' }));
+  return [...BUILTIN_COMMANDS.map((c) => ({ ...c, source: 'builtin' })), ...custom, ...skills];
+});
+
+/** Своя команда или навык → текст запроса агенту. */
+ipcMain.handle('commands:expand', (_e, payload = {}) => {
+  const dir = payload.projectDir || loadSettings().projectDir;
+  const name = String(payload.name || '').toLowerCase();
+  const trusted = isTrusted(dir);
+  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted }).find((c) => c.name.toLowerCase() === name);
+  if (custom) return { ok: true, prompt: expandTemplate(custom.body, payload.args), source: custom.source };
+  const skill = listSkills(dir, { includeProject: trusted }).find((s) => s.name.toLowerCase() === name);
+  if (skill) {
+    const task = String(payload.args || '').trim();
+    return {
+      ok: true,
+      source: 'skill',
+      prompt: `Используй навык «${skill.name}»: загрузи его инструментом load_skill и действуй по нему.${task ? `\n\nЗадача: ${task}` : ''}`,
+    };
+  }
+  return { ok: false, error: `Команда /${payload.name} не найдена` };
+});
+
+ipcMain.handle('files:search', (_e, payload = {}) => {
+  const dir = payload.projectDir || loadSettings().projectDir;
+  if (!dir) return [];
+  return searchFiles(dir, payload.query, { limit: 20 });
+});
+
 // ---------- доверие к папке (ADR 0028) ----------
 
 ipcMain.handle('trust:get', (_e, projectDir) => {
@@ -975,6 +1019,11 @@ ipcMain.handle('chat:start', async (event, payload) => {
   const adopted = adoptDraftUploads(projectDir, session.id);
   if (adopted && payload.text) {
     payload.text = String(payload.text).split(adopted.from).join(adopted.to);
+  }
+  // Упоминания @файл — ссылкой, не копией (CC7.9): агент прочитает сам.
+  const mentions = payload.text ? resolveMentions(projectDir, payload.text) : [];
+  if (mentions.length) {
+    payload.text = `${payload.text}\n\n[Упомянуты: ${mentions.map((m) => `${m.path}${m.dir ? ' (папка)' : ''}`).join(', ')}. Прочитай их через read_file или list_files.]`;
   }
   // Пути изображений из вложений: в сессии храним путь, base64 собирается на запрос (F1).
   const images = (Array.isArray(payload.images) ? payload.images : [])
