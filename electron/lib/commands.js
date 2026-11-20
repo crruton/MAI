@@ -26,6 +26,7 @@ export const BUILTIN_COMMANDS = [
   { name: 'cost', description: 'Токены и стоимость чата' },
   { name: 'hooks', description: 'Хуки на события агента' },
   { name: 'agents', description: 'Типы субагентов' },
+  { name: 'packages', description: 'Пакеты плагинов: список, установка, включение' },
 ];
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -42,9 +43,11 @@ function parseFrontmatter(raw) {
   return { meta, body: text.slice(match[0].length) };
 }
 
-export function commandDirs(projectDir, dataDir, { includeProject = true } = {}) {
+/** Порядок: проект → пакеты (ADR 0037) → глобальные; первая команда с именем побеждает. */
+export function commandDirs(projectDir, dataDir, { includeProject = true, extraDirs = [] } = {}) {
   const dirs = [];
   if (includeProject && projectDir) dirs.push({ source: 'project', dir: path.join(projectDir, '.mai-code', 'commands') });
+  dirs.push(...extraDirs);
   if (dataDir) dirs.push({ source: 'global', dir: path.join(dataDir, 'commands') });
   return dirs;
 }

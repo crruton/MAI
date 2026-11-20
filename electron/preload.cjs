@@ -95,6 +95,11 @@ contextBridge.exposeInMainWorld('mai', {
     hooks: (projectDir) => invoke('hooks:list', projectDir),
     // Типы субагентов (ADR 0036).
     agents: (projectDir) => invoke('agents:defs', projectDir),
+    // Пакеты плагинов (ADR 0037).
+    packages: (projectDir) => invoke('packages:list', projectDir),
+    installPackage: (from, replace = false) => invoke('packages:install', { from, replace }),
+    uninstallPackage: (name) => invoke('packages:uninstall', name),
+    togglePackage: (name, enabled) => invoke('packages:toggle', { name, enabled }),
     context: (payload) => invoke('context:stats', payload),
     // Чекпоинты и откат (CC6.1).
     checkpoints: (sessionId) => invoke('checkpoints:turns', sessionId),

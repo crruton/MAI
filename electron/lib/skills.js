@@ -14,18 +14,20 @@ function parseFrontmatter(raw) {
   return { meta, body: text.slice(match[0].length) };
 }
 
-export function skillDirs(projectDir) {
+export function skillDirs(projectDir, extraDirs = []) {
   return [
     { scope: 'project', dir: path.join(projectDir || '', '.mai-code', 'skills') },
     { scope: 'project', dir: path.join(projectDir || '', '.opencode', 'skills') },
+    // Навыки пакетов (ADR 0037): scope — «package:<имя>».
+    ...extraDirs.map((d) => ({ scope: d.source, dir: d.dir })),
     { scope: 'global', dir: path.join(dataDir(), 'skills') },
   ];
 }
 
 /** Навыки. Без доверия к папке навыки проекта не попадают к агенту (ADR 0028). */
-export function listSkills(projectDir, { includeProject = true } = {}) {
+export function listSkills(projectDir, { includeProject = true, extraDirs = [] } = {}) {
   const skills = [];
-  for (const { scope, dir } of skillDirs(projectDir)) {
+  for (const { scope, dir } of skillDirs(projectDir, extraDirs)) {
     if (!includeProject && scope === 'project') continue;
     if (!dir || !fs.existsSync(dir)) continue;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

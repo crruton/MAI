@@ -15,6 +15,7 @@ import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
 import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
 import { listAgentDefs } from './lib/agent-defs.js';
+import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -138,11 +139,19 @@ function needTrust(projectDir) {
   return { ok: false, needTrust: true, projectDir, found: inspectProject(projectDir), error: 'Папка проекта не доверена' };
 }
 
+/** Включённые пакеты (ADR 0037): глобальные и, для доверенной папки, проектные. */
+function packagesFor(projectDir) {
+  const settings = loadSettings();
+  const dir = projectDir || settings.projectDir;
+  return listPackages(dir, dataDir(), { includeProject: isTrusted(dir), settings: settings.packages || {} }).filter((p) => p.enabled);
+}
+
 function mcpConfigs(projectDir) {
   const settings = loadSettings();
   const dir = projectDir || settings.projectDir;
   // MCP проекта запускает процессы из чужого репозитория — только после доверия.
-  return { ...(settings.mcpServers || {}), ...(isTrusted(dir) ? projectMcpConfig(dir) : {}) };
+  // Порядок: глобальные → пакеты → проект (последний сильнее).
+  return { ...(settings.mcpServers || {}), ...packageMcpServers(packagesFor(dir)), ...(isTrusted(dir) ? projectMcpConfig(dir) : {}) };
 }
 
 /** Режим разрешений для внешнего рантайма: тот же, что у встроенного агента в этом чате. */
@@ -156,7 +165,7 @@ function runtimeMode(sessionId, projectDir) {
 
 /** loadPlugins с учётом доверия: плагины проекта исполняются в main-процессе. */
 function loadPluginsFor(projectDir) {
-  return loadPlugins(projectDir, { includeProject: isTrusted(projectDir) });
+  return loadPlugins(projectDir, { includeProject: isTrusted(projectDir), extraDirs: packageDirs(packagesFor(projectDir), 'plugins') });
 }
 
 function send(window, event) {
@@ -732,14 +741,14 @@ ipcMain.handle('project:pick', async () => {
 ipcMain.handle('commands:list', (_e, projectDir) => {
   const dir = projectDir || loadSettings().projectDir;
   const trusted = isTrusted(dir);
-  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted }).map(({ name, description, argumentHint, source }) => ({
+  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(dir), 'commands') }).map(({ name, description, argumentHint, source }) => ({
     name,
     description,
     argumentHint,
     source,
   }));
   const taken = new Set([...BUILTIN_COMMANDS.map((c) => c.name), ...custom.map((c) => c.name.toLowerCase())]);
-  const skills = listSkills(dir, { includeProject: trusted })
+  const skills = listSkills(dir, { includeProject: trusted, extraDirs: packageDirs(packagesFor(dir), 'skills') })
     .filter((skill) => /^[a-z0-9][a-z0-9_-]*$/i.test(skill.name) && !taken.has(skill.name.toLowerCase()))
     .map((skill) => ({ name: skill.name, description: skill.description || 'навык', argumentHint: '<задача>', source: 'skill' }));
   return [...BUILTIN_COMMANDS.map((c) => ({ ...c, source: 'builtin' })), ...custom, ...skills];
@@ -750,9 +759,9 @@ ipcMain.handle('commands:expand', (_e, payload = {}) => {
   const dir = payload.projectDir || loadSettings().projectDir;
   const name = String(payload.name || '').toLowerCase();
   const trusted = isTrusted(dir);
-  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted }).find((c) => c.name.toLowerCase() === name);
+  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(dir), 'commands') }).find((c) => c.name.toLowerCase() === name);
   if (custom) return { ok: true, prompt: expandTemplate(custom.body, payload.args), source: custom.source };
-  const skill = listSkills(dir, { includeProject: trusted }).find((s) => s.name.toLowerCase() === name);
+  const skill = listSkills(dir, { includeProject: trusted, extraDirs: packageDirs(packagesFor(dir), 'skills') }).find((s) => s.name.toLowerCase() === name);
   if (skill) {
     const task = String(payload.args || '').trim();
     return {
@@ -1098,7 +1107,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
         checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
         hooks,
         // Типы субагентов: встроенные и свои (проекта — только доверенная папка, ADR 0036).
-        agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: trusted }),
+        agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(projectDir), 'agents') }),
+        skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -1178,7 +1188,7 @@ function policyFor(sessionId, projectDir = '') {
 function hookRunnerFor(window, { projectDir, sessionId, trusted }) {
   const settings = loadSettings();
   return createHookRunner({
-    hooks: collectHooks({ settingsHooks: settings.hooks, projectDir, trusted }),
+    hooks: collectHooks({ settingsHooks: settings.hooks, projectDir, trusted, packageHooks: packageHooks(packagesFor(projectDir)) }),
     projectDir,
     sessionId,
     onRun: (record) => {
@@ -1327,17 +1337,63 @@ ipcMain.handle('checkpoints:rewind', (event, payload = {}) => {
   }
 });
 
+// ---------- пакеты плагинов (ADR 0037) ----------
+
+ipcMain.handle('packages:list', (_e, projectDir) => {
+  const settings = loadSettings();
+  const dir = projectDir || settings.projectDir;
+  return {
+    packages: listPackages(dir, dataDir(), { includeProject: isTrusted(dir), settings: settings.packages || {} }),
+    trusted: isTrusted(dir),
+    globalDir: path.join(dataDir(), 'packages'),
+  };
+});
+
+/** Установка из папки или git-URL в глобальные пакеты. Код пакета исполняется — только admin. */
+ipcMain.handle('packages:install', async (_e, payload = {}) => {
+  try {
+    const pkg = installPackage({ from: payload.from, dataDir: dataDir(), replace: payload.replace === true });
+    retirePluginHosts();
+    await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
+    audit({ at: new Date().toISOString(), tool: 'package:install', source: 'user', cls: 'external', subject: `${pkg.name} ← ${String(payload.from).slice(0, 300)}`, decision: 'allow' });
+    return { ok: true, package: pkg };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('packages:uninstall', async (_e, name) => {
+  try {
+    uninstallPackage({ name, dataDir: dataDir() });
+    retirePluginHosts();
+    await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('packages:toggle', async (_e, payload = {}) => {
+  const settings = loadSettings();
+  const packages = { ...(settings.packages || {}) };
+  packages[String(payload.name)] = { ...(packages[payload.name] || {}), enabled: payload.enabled === true };
+  saveSettings({ packages });
+  retirePluginHosts();
+  await mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
+  return { ok: true };
+});
+
 /** Типы субагентов для `/agents` (CC8.2). */
 ipcMain.handle('agents:defs', (_e, projectDir) => {
   const dir = projectDir || loadSettings().projectDir;
-  return listAgentDefs(dir, dataDir(), { includeProject: isTrusted(dir) }).map(({ name, description, tools, source }) => ({ name, description, tools, source }));
+  return listAgentDefs(dir, dataDir(), { includeProject: isTrusted(dir), extraDirs: packageDirs(packagesFor(dir), 'agents') }).map(({ name, description, tools, source }) => ({ name, description, tools, source }));
 });
 
 /** Хуки для `/hooks`: события, matcher, команда, источник (CC3.3). */
 ipcMain.handle('hooks:list', (_e, projectDir) => {
   const dir = projectDir || loadSettings().projectDir;
   const trusted = isTrusted(dir);
-  const config = collectHooks({ settingsHooks: loadSettings().hooks, projectDir: dir, trusted });
+  const config = collectHooks({ settingsHooks: loadSettings().hooks, projectDir: dir, trusted, packageHooks: packageHooks(packagesFor(dir)) });
   const rows = [];
   for (const event of HOOK_EVENTS) {
     for (const group of config[event] || []) {
@@ -1397,6 +1453,7 @@ ipcMain.handle('context:stats', (_e, payload = {}) => {
     mcp,
     history: session?.messages || [],
     window,
+    skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
   });
 });
 

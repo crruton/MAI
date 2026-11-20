@@ -204,8 +204,8 @@ export async function compactSession({ provider, model, messages, instructions =
 }
 
 /** Разбор контекста для /context: системный промпт и инструменты как у агента. */
-export function describeContext({ settings, projectDir, mode, trusted = true, mcp, history = [], window = DEFAULT_CONTEXT }) {
-  const skills = listSkills(projectDir, { includeProject: trusted });
+export function describeContext({ settings, projectDir, mode, trusted = true, mcp, history = [], window = DEFAULT_CONTEXT, skillDirs = [] }) {
+  const skills = listSkills(projectDir, { includeProject: trusted, extraDirs: skillDirs });
   const system = systemPrompt({ projectDir, skills, mcpStatus: mcp?.status?.() || [], mode, trusted });
   const tools = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...interactiveTools, ...todoTools]
     .map((t) => t.schema)
@@ -244,6 +244,7 @@ export async function runAgent({
   checkpoint = null,
   hooks = null,
   agentDefs = null,
+  skillDirs = [],
   subagent = null,
   onHistory = null,
   clientFactory = null,
@@ -270,7 +271,8 @@ export async function runAgent({
   // Шлюз, который этот параметр не знает, отвечает 400 — тогда выключаем.
   let streamUsage = true;
   let runUsage = null;
-  const skills = listSkills(projectDir, { includeProject: trusted });
+  // Навыки пакетов (ADR 0037) — вместе с проектными и глобальными.
+  const skills = listSkills(projectDir, { includeProject: trusted, extraDirs: skillDirs });
   const repoTools = settings.repowise?.enabled ? repowiseTools : [];
 
   // Режим и правила читаются на каждый вызов: переключение в интерфейсе
@@ -337,6 +339,7 @@ export async function runAgent({
       hooks,
       clientFactory,
       contextWindow,
+      skillDirs,
       subagent: { def },
     });
     const final = [...subHistory].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '(субагент не вернул текст)';
@@ -640,6 +643,7 @@ export async function runAgent({
       repowise: settings.repowise,
       trusted,
       ask,
+      skillDirs,
     };
     const execCall = async (call) => {
       const args = parseArgs(call.function.arguments);

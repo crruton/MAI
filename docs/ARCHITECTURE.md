@@ -266,6 +266,16 @@ ADR 0036. `runAgent({ agentDefs })` добавляет инструмент `age
 вывод как UTF-8, а невалидные куски перекодирует из cp866 или cp1251. CI
 гоняет всё на `windows-latest` (`scripts/test-windows.mjs` и электронные наборы).
 
+### Пакеты плагинов
+
+ADR 0037. `packagesFor(projectDir)` в main — включённые пакеты (глобальные и,
+для доверенной папки, проектные). Загрузчики принимают `extraDirs` из
+`packageDirs(packages, kind)`: `listCustomCommands`, `listAgentDefs`,
+`listSkills` (и `runAgent({ skillDirs })`), `loadPlugins`; `collectHooks`
+получает `packageHooks`, `mcpConfigs` — `packageMcpServers`. IPC:
+`packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
+`packages:toggle({ name, enabled })`.
+
 ## Доверие к папке и матрица прав IPC
 
 Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или

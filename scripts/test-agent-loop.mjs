@@ -749,6 +749,25 @@ console.log('\n[17] Субагенты: свой контекст, итог ро
   check('в «Плане» у субагента нет записи', generalInPlan && !generalInPlan.tools.includes('edit_file') && !generalInPlan.tools.includes('run_shell'));
 }
 
+console.log('\n[18] Навыки пакета в промпте и в load_skill (ADR 0037)');
+{
+  const pkgSkills = path.join(project, 'pkg-skills');
+  fs.mkdirSync(path.join(pkgSkills, 'pkg-review'), { recursive: true });
+  fs.writeFileSync(path.join(pkgSkills, 'pkg-review', 'SKILL.md'), '---\nname: pkg-review\ndescription: ревью из пакета\n---\nТЕЛО-НАВЫКА-ПАКЕТА', 'utf8');
+  const bodies = [];
+  const history = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'x' }],
+      mcp: fakeMcp(),
+      skillDirs: [{ source: 'package:kit', dir: pkgSkills }],
+      clientFactory: fakeClient([{ calls: [{ name: 'load_skill', args: { name: 'pkg-review' } }] }, { text: 'ок' }], bodies),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  check('навык пакета в системном промпте', bodies[0].messages[0].content.includes('pkg-review: ревью из пакета'));
+  check('load_skill находит навык пакета', /ТЕЛО-НАВЫКА-ПАКЕТА/.test(history.find((m) => m.role === 'tool')?.content || ''));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

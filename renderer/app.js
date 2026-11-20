@@ -1618,6 +1618,10 @@ async function runSlash(text) {
       clear();
       await openSubagents();
       return;
+    case 'packages':
+      clear();
+      await openPackages();
+      return;
     default: {
       const result = await api.commands.expand(state.projectDir, name, args);
       if (!result?.ok) {
@@ -1682,6 +1686,95 @@ async function openSubagents() {
       }),
     ],
   });
+}
+
+/* ---------- пакеты плагинов (ADR 0037) ---------- */
+
+function packageParts(parts = {}) {
+  const items = [];
+  if (parts.commands) items.push(`команд: ${parts.commands}`);
+  if (parts.agents) items.push(`агентов: ${parts.agents}`);
+  if (parts.skills) items.push(`навыков: ${parts.skills}`);
+  if (parts.plugins) items.push(`плагинов: ${parts.plugins}`);
+  if (parts.hooks) items.push('хуки');
+  if (parts.mcp) items.push(`MCP: ${parts.mcp}`);
+  return items.join(' · ') || 'пусто';
+}
+
+async function openPackages() {
+  const box = el('div', { class: 'packages-list' });
+  const source = el('input', { class: 'sessions-search', placeholder: 'Папка с mai-package.json или git-URL (https://…)' });
+  const render = async () => {
+    const info = await api.chat.packages(state.projectDir);
+    box.replaceChildren(
+      ...(info.packages.length
+        ? info.packages.map((p) =>
+            el('div', { class: `package-row${p.enabled ? '' : ' disabled'}` }, [
+              el('label', { class: 'package-toggle', title: p.enabled ? 'Выключить' : 'Включить' }, [
+                el('input', {
+                  type: 'checkbox',
+                  checked: p.enabled ? 'checked' : null,
+                  onchange: async (e) => {
+                    const r = await api.chat.togglePackage(p.name, e.target.checked);
+                    if (r?.ok === false) toast(r.error || 'Не удалось', 'err');
+                    state.commands = null;
+                    render();
+                  },
+                }),
+              ]),
+              el('div', { class: 'package-info' }, [
+                el('b', { text: `${p.name}${p.version ? ` ${p.version}` : ''}` }),
+                el('span', { class: 'hint-text', text: ` · ${p.source === 'project' ? 'проект' : 'глобальный'}${p.executable ? ' · исполняемый код' : ''}` }),
+                p.description ? el('div', { class: 'hint-text', text: p.description }) : null,
+                el('div', { class: 'package-parts', text: packageParts(p.parts) }),
+              ]),
+              p.source === 'global'
+                ? el('button', {
+                    class: 'btn ghost small',
+                    type: 'button',
+                    text: 'Удалить',
+                    onclick: async () => {
+                      if (!window.confirm(`Удалить пакет «${p.name}»?`)) return;
+                      const r = await api.chat.uninstallPackage(p.name);
+                      if (r?.ok === false) toast(r.error || 'Не удалось', 'err');
+                      state.commands = null;
+                      render();
+                    },
+                  })
+                : null,
+            ]),
+          )
+        : [el('div', { class: 'sessions-empty', text: 'Пакетов нет.' })]),
+      info.trusted ? null : el('p', { class: 'hint-text', text: 'Папка не доверена: пакеты проекта не загружены.' }),
+    );
+  };
+  const install = async (replace = false) => {
+    const from = source.value.trim();
+    if (!from) return;
+    const r = await api.chat.installPackage(from, replace);
+    if (r?.ok === false && /уже установлен/.test(r.error || '') && window.confirm(`${r.error}. Заменить?`)) return install(true);
+    if (r?.ok === false) {
+      toast(r.error || 'Пакет не установлен', 'err');
+      return;
+    }
+    toast(`Установлен ${r.package.name}: ${packageParts(r.package.parts)}`, 'ok');
+    source.value = '';
+    state.commands = null;
+    render();
+  };
+  openModal({
+    title: 'Пакеты плагинов',
+    body: [
+      box,
+      el('div', { class: 'docs-group-title', text: 'Установить' }),
+      el('div', { class: 'row' }, [source, el('button', { class: 'btn primary small', type: 'button', text: 'Установить', onclick: () => install(false) })]),
+      el('p', {
+        class: 'hint-text',
+        text: 'Пакет — папка с mai-package.json и папками commands/, agents/, skills/, plugins/, файлами hooks.json и mcp.json. Плагины, хуки и MCP пакета — исполняемый код: ставьте только проверенные пакеты. Установка, удаление и включение — роль admin.',
+      }),
+    ],
+  });
+  await render();
 }
 
 /* ---------- быстрая запись в память (CC4.3) ---------- */

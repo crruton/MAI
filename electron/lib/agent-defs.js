@@ -60,10 +60,11 @@ function parseFrontmatter(raw) {
 }
 
 /** Встроенные и свои типы. Свой тип проекта сильнее глобального; встроенные имена не переопределяются. */
-export function listAgentDefs(projectDir, dataDir, { includeProject = true } = {}) {
+export function listAgentDefs(projectDir, dataDir, { includeProject = true, extraDirs = [] } = {}) {
   const defs = new Map(BUILTIN_AGENTS.map((d) => [d.name, d]));
   const dirs = [];
   if (includeProject && projectDir) dirs.push({ source: 'project', dir: path.join(projectDir, '.mai-code', 'agents') });
+  dirs.push(...extraDirs); // пакеты (ADR 0037)
   if (dataDir) dirs.push({ source: 'global', dir: path.join(dataDir, 'agents') });
   for (const { source, dir } of dirs) {
     let entries = [];

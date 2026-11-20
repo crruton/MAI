@@ -96,6 +96,11 @@ export const IPC_PERMISSIONS = {
   'chat:compact': ANY,
   'hooks:list': ANY,
   'agents:defs': ANY,
+  // Пакет — исполняемый код: установка, удаление и включение — только admin.
+  'packages:list': ANY,
+  'packages:install': ADMIN,
+  'packages:uninstall': ADMIN,
+  'packages:toggle': ADMIN,
   'context:stats': ANY,
   // Откат возвращает только файлы, которые правил агент в этом чате.
   'checkpoints:turns': ANY,

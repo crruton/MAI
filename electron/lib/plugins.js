@@ -45,7 +45,7 @@ function pluginCtx(ctx = {}) {
  * Плагины проекта — код из чужого репозитория, поэтому без доверия к папке
  * они пропускаются (ADR 0028). Глобальные плагины пользователь положил сам.
  */
-export async function loadPlugins(projectDir, { includeProject = true, timeouts } = {}) {
+export async function loadPlugins(projectDir, { includeProject = true, timeouts, extraDirs = [] } = {}) {
   const loaded = [];
   const tools = [];
   const transforms = [];
@@ -53,10 +53,15 @@ export async function loadPlugins(projectDir, { includeProject = true, timeouts 
   if (!includeProject && pluginFiles(projectDirPlugins).length) {
     loaded.push({ name: 'плагины проекта', file: projectDirPlugins, tools: 0, skipped: true, error: 'папка проекта не доверена' });
   }
-  const files = [...(includeProject ? pluginFiles(projectDirPlugins) : []), ...pluginFiles(globalDir)];
+  // Плагины пакетов (ADR 0037) — между проектом и глобальными.
+  const files = [
+    ...(includeProject ? pluginFiles(projectDirPlugins) : []),
+    ...extraDirs.flatMap((d) => pluginFiles(d.dir)),
+    ...pluginFiles(globalDir),
+  ];
   if (!files.length) return { loaded, tools, transforms };
 
-  const key = `${path.resolve(projectDir || '.')}|${includeProject ? 'project' : 'global'}`;
+  const key = `${path.resolve(projectDir || '.')}|${includeProject ? 'project' : 'global'}|${extraDirs.map((d) => d.dir).join(',')}`;
   let host;
   try {
     host = await hostFor(key, files, signatureOf(files), { cwd: projectDir || undefined, timeouts });

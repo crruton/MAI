@@ -16,7 +16,7 @@ export const skillTools = [
       },
     },
     async run(ctx, args) {
-      const skills = listSkills(ctx.projectDir, { includeProject: ctx.trusted !== false });
+      const skills = listSkills(ctx.projectDir, { includeProject: ctx.trusted !== false, extraDirs: ctx.skillDirs || [] });
       const found =
         skills.find((s) => s.name.toLowerCase() === String(args.name).toLowerCase()) ||
         skills.find((s) => s.name.toLowerCase().includes(String(args.name).toLowerCase()));

@@ -122,6 +122,21 @@ ipcMain.handle('agents:defs', () => [
   { name: 'explore', description: 'Исследователь', tools: ['read_file'], source: 'builtin' },
   { name: 'reviewer', description: 'Ревьюер', tools: null, source: 'project' },
 ]);
+// Пакеты (раздел [25]).
+const packageCalls = [];
+ipcMain.handle('packages:list', () => ({
+  packages: [{ name: 'review-kit', version: '1.2.0', description: 'Ревью кода', source: 'global', enabled: true, executable: true, parts: { commands: 2, agents: 1, skills: 0, plugins: 1, hooks: true, mcp: 0 } }],
+  trusted: true,
+  globalDir: '/data/packages',
+}));
+ipcMain.handle('packages:install', (_e, payload) => {
+  packageCalls.push({ type: 'install', ...payload });
+  return { ok: true, package: { name: 'git-kit', parts: { commands: 1 } } };
+});
+ipcMain.handle('packages:toggle', (_e, payload) => {
+  packageCalls.push({ type: 'toggle', ...payload });
+  return { ok: true };
+});
 const answers = [];
 ipcMain.handle('chat:answer', (_e, payload) => {
   answers.push(payload);
@@ -1157,6 +1172,19 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 300));
     const agentTitle = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.tool-head')].map((h) => h.querySelector('.tool-name').textContent + ' ' + h.querySelector('.tool-args').textContent)`);
     check('карточка вызова: «Agent explore найти конфиг»', agentTitle.includes('Agent explore найти конфиг'), JSON.stringify(agentTitle));
+
+    console.log('\n[25] Пакеты: /packages, включение, установка (ADR 0037)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/packages'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const pkgRow = await win.webContents.executeJavaScript(`document.querySelector('.package-row')?.textContent || ''`);
+    check('пакет с версией, источником и содержимым', /review-kit 1\.2\.0/.test(pkgRow) && /глобальный/.test(pkgRow) && /исполняемый код/.test(pkgRow) && /команд: 2/.test(pkgRow), pkgRow);
+    await win.webContents.executeJavaScript(`document.querySelector('.package-row input[type=checkbox]').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('флажок выключает пакет', packageCalls.some((c) => c.type === 'toggle' && c.name === 'review-kit' && c.enabled === false), JSON.stringify(packageCalls));
+    await win.webContents.executeJavaScript(`(() => { const m = document.querySelector('.modal'); const i = m.querySelector('input.sessions-search'); i.value = 'https://example.com/git-kit.git'; [...m.querySelectorAll('button')].find((b) => b.textContent === 'Установить').click(); })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('установка из git-URL уходит в main', packageCalls.some((c) => c.type === 'install' && c.from === 'https://example.com/git-kit.git'), JSON.stringify(packageCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);
