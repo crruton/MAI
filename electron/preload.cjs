@@ -93,6 +93,8 @@ contextBridge.exposeInMainWorld('mai', {
     compact: (sessionId, instructions) => invoke('chat:compact', { sessionId, instructions }),
     // Хуки (ADR 0035).
     hooks: (projectDir) => invoke('hooks:list', projectDir),
+    // Типы субагентов (ADR 0036).
+    agents: (projectDir) => invoke('agents:defs', projectDir),
     context: (payload) => invoke('context:stats', payload),
     // Чекпоинты и откат (CC6.1).
     checkpoints: (sessionId) => invoke('checkpoints:turns', sessionId),

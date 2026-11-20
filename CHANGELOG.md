@@ -88,6 +88,11 @@
 
 ### Added
 
+- Субагенты (ADR 0036): инструмент `agent` с типами `explore`, `plan`,
+  `general` и своими из `.mai-code/agents/*.md`; свой контекст, родителю —
+  только итог; только-чтение — параллельно; разрешения и чекпоинты — как у
+  родителя. `/agents` — список типов.
+
 - Хуки (ADR 0035): `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`,
   `PreCompact`, `SessionStart` — команды из `settings.hooks` и
   `.mai-code/hooks.json` (доверенная папка); код 2 блокирует, JSON на stdout —

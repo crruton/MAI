@@ -1076,6 +1076,8 @@ function toolTitle(name, argsText, result) {
       return { verb: 'Plan', detail: 'план на согласование' };
     case 'load_skill':
       return { verb: 'Skill', detail: args.name || '' };
+    case 'agent':
+      return { verb: `Agent ${args.type || ''}`.trim(), detail: args.description || String(args.prompt || '').slice(0, 120) };
     default:
       return { verb: name.startsWith('mcp__') ? `MCP ${name.split('__')[1]}` : name, detail: String(argsText || '').slice(0, 160) };
   }
@@ -1612,6 +1614,10 @@ async function runSlash(text) {
       clear();
       await openHooks();
       return;
+    case 'agents':
+      clear();
+      await openSubagents();
+      return;
     default: {
       const result = await api.commands.expand(state.projectDir, name, args);
       if (!result?.ok) {
@@ -1649,6 +1655,30 @@ async function openHooks() {
       el('p', {
         class: 'hint-text',
         text: `Хуки проекта — ${info.projectFile}; глобальные — поле hooks в settings.json. Команда получает JSON на stdin; код 2 блокирует действие (причина — stderr), JSON { "decision", "reason", "additionalContext" } на stdout — решение и контекст.`,
+      }),
+    ],
+  });
+}
+
+async function openSubagents() {
+  const defs = await api.chat.agents(state.projectDir);
+  openModal({
+    title: 'Субагенты',
+    body: [
+      el(
+        'div',
+        { class: 'help-table' },
+        defs.map((d) =>
+          el('div', { class: 'help-row' }, [
+            el('code', { text: d.name }),
+            el('span', { text: d.description }),
+            el('span', { class: 'hint-text', text: `${{ builtin: 'встроенный', project: 'проект', global: 'глобальный' }[d.source] || d.source} · ${d.tools ? d.tools.join(', ') : 'все инструменты'}` }),
+          ]),
+        ),
+      ),
+      el('p', {
+        class: 'hint-text',
+        text: 'Агент сам поручает подзадачу инструментом agent и получает только итог. Свои типы — .mai-code/agents/<имя>.md: frontmatter description и tools (через запятую), тело — промпт. Разрешения субагента — те же, что у чата.',
       }),
     ],
   });

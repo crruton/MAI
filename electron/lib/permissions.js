@@ -72,6 +72,7 @@ const READ_TOOLS = new Set([
   'ask_user',
   'exit_plan',
   'todo_write',
+  'agent',
 ]);
 
 export function normalizeMode(value) {

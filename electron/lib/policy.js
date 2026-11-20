@@ -31,6 +31,8 @@ const BUILTIN = {
   ask_user: 'read',
   exit_plan: 'read',
   todo_write: 'read',
+  // Передача подзадачи; каждое действие субагента проверяется отдельно (ADR 0036).
+  agent: 'read',
 };
 
 export function isBuiltinTool(name) {

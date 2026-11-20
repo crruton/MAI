@@ -14,6 +14,7 @@ import { runAgent, compactSession, describeContext } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
 import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
+import { listAgentDefs } from './lib/agent-defs.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -1094,6 +1095,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
         // Чекпоинты правок для отката (CC6.1).
         checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
         hooks,
+        // Типы субагентов: встроенные и свои (проекта — только доверенная папка, ADR 0036).
+        agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: trusted }),
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -1320,6 +1323,12 @@ ipcMain.handle('checkpoints:rewind', (event, payload = {}) => {
   } finally {
     lock.release();
   }
+});
+
+/** Типы субагентов для `/agents` (CC8.2). */
+ipcMain.handle('agents:defs', (_e, projectDir) => {
+  const dir = projectDir || loadSettings().projectDir;
+  return listAgentDefs(dir, dataDir(), { includeProject: isTrusted(dir) }).map(({ name, description, tools, source }) => ({ name, description, tools, source }));
 });
 
 /** Хуки для `/hooks`: события, matcher, команда, источник (CC3.3). */

@@ -241,6 +241,14 @@ ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый про�
 автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
 сообщения. IPC `hooks:list(projectDir)`.
 
+### Субагенты
+
+ADR 0036. `runAgent({ agentDefs })` добавляет инструмент `agent`; его `run`
+вызывает `runAgent({ subagent: { def } })` с теми же `policy`, `approve`,
+`hooks`, `trusted` и обёрткой `checkpoint`, привязанной к ходу родителя.
+`subagent` сужает инструменты (`def.tools`, без `NEVER_FOR_SUBAGENT`) и
+отключает ревизор и `Stop`. IPC `agents:defs(projectDir)`.
+
 ## Доверие к папке и матрица прав IPC
 
 Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или

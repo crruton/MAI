@@ -118,6 +118,10 @@ ipcMain.handle('hooks:list', () => ({
   trusted: true,
   projectFile: '/p/.mai-code/hooks.json',
 }));
+ipcMain.handle('agents:defs', () => [
+  { name: 'explore', description: 'Исследователь', tools: ['read_file'], source: 'builtin' },
+  { name: 'reviewer', description: 'Ревьюер', tools: null, source: 'project' },
+]);
 const answers = [];
 ipcMain.handle('chat:answer', (_e, payload) => {
   answers.push(payload);
@@ -1135,6 +1139,24 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 300));
     const hookCard = await win.webContents.executeJavaScript(`document.querySelector('.hook-card')?.textContent || ''`);
     check('замечание хука — отдельной карточкой, не репликой пользователя', /Хук Stop/.test(hookCard) && /тесты не запускались/.test(hookCard), hookCard);
+
+    console.log('\n[24] Субагенты: /agents и карточка вызова (ADR 0036)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/agents'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const agentRows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.help-row')].map((r) => r.textContent)`);
+    check('/agents показывает типы, источник и инструменты', agentRows.some((t) => t.includes('explore') && t.includes('read_file')) && agentRows.some((t) => t.includes('reviewer') && t.includes('проект') && t.includes('все инструменты')), JSON.stringify(agentRows));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+    win.webContents.send('chat:event', { type: 'tool_result', id: 'ag-1', name: 'agent', ok: true, content: '[Субагент explore «найти конфиг»: шагов 2]\n\nнашёл' });
+    win.webContents.send('chat:event', {
+      type: 'done',
+      messages: [
+        { role: 'user', content: 'разберись' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'ag-1', type: 'function', function: { name: 'agent', arguments: JSON.stringify({ type: 'explore', description: 'найти конфиг', prompt: 'найди' }) } }] },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const agentTitle = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.tool-head')].map((h) => h.querySelector('.tool-name').textContent + ' ' + h.querySelector('.tool-args').textContent)`);
+    check('карточка вызова: «Agent explore найти конфиг»', agentTitle.includes('Agent explore найти конфиг'), JSON.stringify(agentTitle));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

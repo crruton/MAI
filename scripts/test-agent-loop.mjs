@@ -12,6 +12,7 @@ import { runAgent, trimMessages, toApiMessage, compactSession } from '../electro
 import { loadPlugins } from '../electron/lib/plugins.js';
 import { createRecorder, rewindFiles, rewindPlan } from '../electron/lib/checkpoints.js';
 import { createHookRunner, normalizeHooks } from '../electron/lib/hooks.js';
+import { BUILTIN_AGENTS } from '../electron/lib/agent-defs.js';
 import { disposePluginHosts } from '../electron/lib/plugin-host.js';
 
 let pass = 0;
@@ -649,6 +650,103 @@ console.log('\n[16] Хук Stop не даёт закончить, пока ус�
   check('Stop заблокировал первый финал', /тесты не запускались/.test(hookMsg?.content || ''), JSON.stringify(hookMsg));
   check('агент продолжил и закончил со второго раза', bodies.length === 2 && history.at(-1).content === 'запустил тесты, всё зелёное');
   check('замечание хука ушло модели как сообщение пользователя', bodies[1].messages.some((m) => m.role === 'user' && /тесты не запускались/.test(m.content)));
+}
+
+console.log('\n[17] Субагенты: свой контекст, итог родителю, параллельность, разрешения (ADR 0036)');
+{
+  fs.writeFileSync(path.join(project, 'sub.txt'), 'исходный', 'utf8');
+  // Один фейковый провайдер: субагента узнаём по системному промпту.
+  const routed = (mainScript, subScript, log) => {
+    let mi = 0;
+    const si = {};
+    return () => ({
+      chat: {
+        completions: {
+          create: async (body) => {
+            const system = body.messages[0].content;
+            const sub = /Ты — субагент «(\w+)»/.exec(system)?.[1];
+            const task = body.messages[1]?.content || '';
+            log.push({ sub: sub || null, tools: body.tools.map((t) => t.function.name), at: Date.now(), messages: body.messages });
+            if (!sub) return stream(mainScript[Math.min(mi++, mainScript.length - 1)]);
+            const key = `${sub}:${task}`;
+            si[key] = (si[key] || 0) + 1;
+            await new Promise((r) => setTimeout(r, 150)); // чтобы параллельность была видна по времени
+            return stream(subScript(sub, task, si[key]));
+          },
+        },
+      },
+    });
+  };
+  const log = [];
+  const history = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'разберись' }],
+      mcp: fakeMcp(),
+      agentDefs: BUILTIN_AGENTS,
+      clientFactory: routed(
+        [
+          {
+            calls: [
+              { name: 'agent', args: { type: 'explore', description: 'найти конфиг', prompt: 'найди А' } },
+              { name: 'agent', args: { type: 'explore', description: 'найти тесты', prompt: 'найди Б' } },
+            ],
+          },
+          { text: 'итог родителя' },
+        ],
+        (sub, task, n) => (n === 1 ? { calls: [{ name: 'read_file', args: { path: 'sub.txt' } }] } : { text: `нашёл для «${task}»` }),
+        log,
+      ),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const mainTools = log.find((l) => !l.sub).tools;
+  const subCalls = log.filter((l) => l.sub === 'explore');
+  check('основной агент видит инструмент agent', mainTools.includes('agent'));
+  check('субагент explore — только чтение, без agent и ask_user', subCalls[0].tools.includes('read_file') && !subCalls[0].tools.includes('write_file') && !subCalls[0].tools.includes('agent') && !subCalls[0].tools.includes('ask_user'));
+  check('субагент не видит диалог родителя', subCalls.every((c) => !c.messages.some((m) => m.content === 'разберись')));
+  const results = history.filter((m) => m.role === 'tool' && m.name === 'agent').map((m) => m.content);
+  check('родитель получил оба итога', results.length === 2 && /нашёл для «найди А»/.test(results[0]) && /нашёл для «найди Б»/.test(results[1]), JSON.stringify(results));
+  check('в итоге — тип, название и число шагов', /\[Субагент explore «найти конфиг»: шагов 1/.test(results[0]), results[0]);
+  check('шаги субагента не попали в историю родителя', !history.some((m) => m.role === 'tool' && m.name === 'read_file'));
+  const firstTwo = subCalls.slice(0, 2);
+  check('два explore работают параллельно', firstTwo.length === 2 && Math.abs(firstTwo[0].at - firstTwo[1].at) < 120, JSON.stringify(firstTwo.map((c) => c.at)));
+
+  // general в «Вручную»: правка субагента спрашивает через то же подтверждение и идёт в чекпоинт хода родителя.
+  const asked = [];
+  const recorded = [];
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'старое' }, { role: 'assistant', content: 'ок' }, { role: 'user', content: 'поправь через субагента' }],
+      mcp: fakeMcp(),
+      agentDefs: BUILTIN_AGENTS,
+      approve: async (r) => (asked.push(r.tool), true),
+      checkpoint: { record: (file, turn) => recorded.push({ file, turn }) },
+      clientFactory: routed(
+        [{ calls: [{ name: 'agent', args: { type: 'general', prompt: 'поправь sub.txt' } }] }, { text: 'готово' }],
+        (sub, task, n) => (n === 1 ? { calls: [{ name: 'edit_file', args: { path: 'sub.txt', old_string: 'исходный', new_string: 'субагент' } }] } : { text: 'поправил' }),
+        [],
+      ),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  check('правка субагента спросила разрешение как у родителя', asked.includes('edit_file'), JSON.stringify(asked));
+  check('файл изменён после согласия', fs.readFileSync(path.join(project, 'sub.txt'), 'utf8') === 'субагент');
+  check('чекпоинт — к сообщению родителя', recorded.some((r) => r.turn === 2 && r.file.endsWith('sub.txt')), JSON.stringify(recorded));
+
+  // «План»: general не может писать — режим тот же.
+  fs.writeFileSync(path.join(project, 'sub.txt'), 'исходный', 'utf8');
+  const planLog = [];
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'план' }],
+      mcp: fakeMcp(),
+      agentDefs: BUILTIN_AGENTS,
+      clientFactory: routed([{ calls: [{ name: 'agent', args: { type: 'general', prompt: 'поправь' } }] }, { text: 'ок' }], () => ({ text: 'не могу писать' }), planLog),
+      policy: { getMode: () => 'plan', getRules: () => ({}) },
+    }),
+  );
+  const generalInPlan = planLog.find((l) => l.sub === 'general');
+  check('в «Плане» у субагента нет записи', generalInPlan && !generalInPlan.tools.includes('edit_file') && !generalInPlan.tools.includes('run_shell'));
 }
 
 fs.rmSync(project, { recursive: true, force: true });

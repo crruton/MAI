@@ -17,6 +17,7 @@ import { repowiseTools } from './tools/repowise.js';
 import { interactiveTools } from './tools/interactive.js';
 import { todoTools } from './tools/todo.js';
 import { nestedInstructions, projectInstructions } from './instructions.js';
+import { agentToolSchema, isReadOnlyDef, NEVER_FOR_SUBAGENT } from './agent-defs.js';
 import { listSkills, readAgents, readMemory } from './skills.js';
 import { reviewAnswer } from './reviewer.js';
 import { modePrompt } from './permissions.js';
@@ -242,6 +243,8 @@ export async function runAgent({
   pullQueued = null,
   checkpoint = null,
   hooks = null,
+  agentDefs = null,
+  subagent = null,
   onHistory = null,
   clientFactory = null,
   contextWindow = DEFAULT_CONTEXT,
@@ -288,6 +291,65 @@ export async function runAgent({
     // Плагин не может подменить встроенный инструмент: иначе он унаследует его класс.
     .filter((t) => !builtinNames.has(t.schema?.function?.name))
     .map((t) => toolEntry(t.schema, { source: 'plugin', kind: t.kind, run: t.run, precheck: t.precheck }));
+  // Инструмент agent (CC8.1): подзадача — субагенту со своим контекстом.
+  const defOf = (args) => (agentDefs || []).find((d) => d.name === args?.type);
+  const runSubagent = async (ctx, args) => {
+    const def = defOf(args);
+    if (!def) return `Ошибка: нет субагента «${args?.type}». Доступны: ${(agentDefs || []).map((d) => d.name).join(', ')}`;
+    if (!String(args?.prompt || '').trim()) return 'Ошибка: пустая задача субагента';
+    let parentTurn = -1;
+    for (let k = history.length - 1; k >= 0; k -= 1) {
+      if (history[k].role === 'user') {
+        parentTurn = k;
+        break;
+      }
+    }
+    let steps = 0;
+    const subEmit = (event) => {
+      // В карточку родителя — только ход работы субагента; уведомления — как есть.
+      if (event.type === 'tool_call') {
+        steps += 1;
+        const brief = JSON.stringify(event.args || {}).slice(0, 140);
+        ctx.progress?.(`▸ ${event.name} ${brief}\n`);
+      } else if (event.type === 'notice') {
+        emit(event);
+      }
+    };
+    const subHistory = await runAgent({
+      settings: { ...settings, maxIterations: settings.subagentMaxIterations || 20, autoCompact: settings.autoCompact },
+      provider,
+      projectDir,
+      model,
+      messages: [{ role: 'user', content: String(args.prompt) }],
+      emit: subEmit,
+      approve,
+      signal,
+      mcp,
+      pluginTools: def.tools ? [] : pluginTools,
+      transforms: [],
+      reviewer: null,
+      permissionMode,
+      policy,
+      audit,
+      trusted,
+      // Правки субагента — в чекпоинт хода родителя: откат вернёт и их (CC6.1).
+      checkpoint: checkpoint ? { record: (file) => checkpoint.record(file, parentTurn) } : null,
+      hooks,
+      clientFactory,
+      contextWindow,
+      subagent: { def },
+    });
+    const final = [...subHistory].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '(субагент не вернул текст)';
+    const usage = subHistory.filter((m) => m.role === 'assistant' && m.usage).reduce((sum, m) => addUsage(sum, m.usage), null);
+    if (usage) runUsage = addUsage(runUsage, usage);
+    const title = args.description ? ` «${String(args.description).slice(0, 80)}»` : '';
+    return `[Субагент ${def.name}${title}: шагов ${steps}${usage ? `, токенов ↑${usage.input} ↓${usage.output}` : ''}]\n\n${String(final).slice(0, 20000)}`;
+  };
+  const agentEntry =
+    !subagent && agentDefs?.length
+      ? toolEntry(agentToolSchema(agentDefs), { source: 'builtin', run: runSubagent })
+      : null;
+
   const buildTools = (mode) => {
     const fromMcp = mcp.toolSchemas().map((schema) =>
       toolEntry(schema, {
@@ -296,7 +358,12 @@ export async function runAgent({
         run: (_ctx, args) => mcp.call(schema.function.name, args),
       }),
     );
-    const all = [...builtin, ...fromPlugins, ...fromMcp].filter((t) => {
+    // Субагент (CC8): только инструменты своего типа, без диалога и вложенных субагентов.
+    const allowedForSub = (t) =>
+      !NEVER_FOR_SUBAGENT.has(t.name) && (!subagent?.def?.tools || subagent.def.tools.includes(t.name) || (t.source === 'mcp' && subagent.def.tools.includes('mcp')));
+    const extra = !subagent && agentEntry ? [agentEntry] : [];
+    const all = [...builtin, ...fromPlugins, ...fromMcp, ...extra].filter((t) => {
+      if (subagent && !allowedForSub(t)) return false;
       // exit_plan нужен только в «Плане»; спросить пользователя в «Только разрешённое» некого.
       if (t.name === 'exit_plan') return mode === 'plan';
       if (t.name === 'ask_user') return mode !== 'dontAsk' && typeof ask === 'function';
@@ -347,7 +414,12 @@ export async function runAgent({
     if (iteration > 0) takeQueued();
     const mode = currentMode();
     const tools = buildTools(mode);
-    const system = systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted });
+    const system =
+      systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted }) +
+      (subagent
+        ? `\n\n# Ты — субагент «${subagent.def.name}»\n${subagent.def.prompt || ''}\nПользователь этот диалог не видит: родительский агент получит только твой последний ответ. ` +
+          'Заверши работу одним итоговым сообщением: что найдено или сделано, пути файлов, что не удалось.'
+        : '');
     // Автокомпакция (CC5.3): у порога контекста старая часть → сводка, а не молчаливая обрезка.
     if (settings.autoCompact !== false && needsCompaction(history, { window: contextWindow, system, tools: tools.map((t) => t.schema) })) {
       emit({ type: 'compact:start', auto: true });
@@ -510,7 +582,7 @@ export async function runAgent({
       // Пользователь дописал что-то, пока агент отвечал: продолжаем с новым сообщением.
       if (takeQueued()) continue;
       // Хук Stop (ADR 0035): может не дать закончить, пока условие не выполнено. Не больше 3 раз.
-      if (hooks?.has('Stop') && stopRounds < 3) {
+      if (!subagent && hooks?.has('Stop') && stopRounds < 3) {
         const stop = await hooks.run('Stop', { last_assistant_message: String(content || '').slice(0, 20000), stop_hook_round: stopRounds + 1 });
         if (stop.decision === 'block') {
           stopRounds += 1;
@@ -525,7 +597,7 @@ export async function runAgent({
       }
       // Ревизор проверяет финальный ответ. При revise причина добавляется
       // в историю как сообщение пользователя, и цикл продолжается.
-      if (reviewerClient && reviewRound < maxReviewRounds) {
+      if (!subagent && reviewerClient && reviewRound < maxReviewRounds) {
         const task = String(userTask || '');
         reviewRound += 1;
         emit({ type: 'review:start', round: reviewRound, model: reviewer.model || model });
@@ -569,7 +641,7 @@ export async function runAgent({
       trusted,
       ask,
     };
-    for (const call of assistantMessage.tool_calls) {
+    const execCall = async (call) => {
       const args = parseArgs(call.function.arguments);
       let outcome;
       if (signal.aborted) {
@@ -606,6 +678,15 @@ export async function runAgent({
           outcome = await runToolCall({ entry, args, ctx: callCtx, policy: policyCtx, approve, audit, hooks });
         }
       }
+      return { call, args, outcome };
+    };
+    // Несколько субагентов только для чтения в одном шаге — параллельно (CC8.4).
+    // Остальное — по очереди: подтверждения и правки не должны пересекаться.
+    const calls = assistantMessage.tool_calls;
+    const parallel = calls.length > 1 && calls.every((c) => c.function.name === 'agent' && isReadOnlyDef(defOf(parseArgs(c.function.arguments))));
+    const post = (item) => {
+      const { call, args } = item;
+      let { outcome } = item;
       // Вложенный AGENTS.md папки, которую агент тронул впервые (CC4.1) — к результату.
       if (trusted && outcome.ok && typeof args?.path === 'string') {
         try {
@@ -630,6 +711,12 @@ export async function runAgent({
         ...(outcome.diff ? { diff: outcome.diff } : {}),
       });
       snapshot();
+    };
+    if (parallel) {
+      for (const item of await Promise.all(calls.map(execCall))) post(item);
+    } else {
+      // По очереди и с сохранением после каждого вызова (A3.2).
+      for (const call of calls) post(await execCall(call));
     }
   }
 
