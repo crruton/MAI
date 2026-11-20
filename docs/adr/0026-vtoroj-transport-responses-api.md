@@ -1,6 +1,6 @@
 # 0026. Второй транспорт к шлюзу: OpenAI Responses API
 
-- **Статус:** accepted
+- **Статус:** accepted; изображения — `input_image`, учёт токенов из `response.completed` (CHANGELOG 0.2.0)
 - **Дата:** 2026-11-16
 - **Контекст:** модели AgentRouter (`gpt-5.6-sol`, `gpt-6.1-sol`) недоступны агенту
 

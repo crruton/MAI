@@ -20,27 +20,28 @@ ADR фиксируют решения, которые дорого менять:
 | [0002](0002-gitbook-vnutri-prilozheniya.md) | GitBook-документация внутри приложения | accepted | 2026-11-04 |
 | [0003](0003-openspec-i-multica.md) | OpenSpec как вход, Multica как доска | accepted | 2026-11-04 |
 | [0004](0004-docker-pesochnicy.md) | Docker-песочницы с публикацией портов | accepted | 2026-11-04 |
-| [0005](0005-keycloak-postgres.md) | Keycloak на Postgres | accepted | 2026-11-04 |
-| [0006](0006-revizor-vtoraya-model.md) | Ревизор: вторая модель проверяет ответ | accepted | 2026-11-04 |
+| [0005](0005-keycloak-postgres.md) | Keycloak на Postgres | accepted, дополнено 0028 | 2026-11-04 |
+| [0006](0006-revizor-vtoraya-model.md) | Ревизор: вторая модель проверяет ответ | accepted, дополнено 0027, 0036 | 2026-11-04 |
 | [0007](0007-offline-distributiv.md) | Офлайн-дистрибутив с node_modules | accepted | 2026-11-04 |
 | [0008](0008-kubernetes-i-dns.md) | Kubernetes и DNS как отдельный слой | accepted | 2026-11-04 |
 | [0009](0009-openscion-ne-zamena-git.md) | OpenScion не заменяет локальный git | accepted | 2026-11-04 |
-| [0010](0010-pesochy-kak-papka.md) | Песочница-папка остаётся режимом по умолчанию | accepted | 2026-11-04 |
-| [0011](0011-guardrails.md) | Guardrails встроенного агента | accepted | 2026-11-06 |
+| [0010](0010-pesochy-kak-papka.md) | Песочница-папка остаётся режимом по умолчанию | accepted, дополнено 0028 | 2026-11-04 |
+| [0011](0011-guardrails.md) | Guardrails встроенного агента | accepted, дополнено 0027, 0035 | 2026-11-06 |
 | [0012](0012-observability-otel.md) | Observability на OpenTelemetry | accepted | 2026-11-06 |
-| [0013](0013-vneshnie-rantajmy-v-kontejnerah.md) | Внешние рантаймы в отдельных контейнерах | accepted | 2026-11-06 |
+| [0013](0013-vneshnie-rantajmy-v-kontejnerah.md) | Внешние рантаймы в отдельных контейнерах | accepted, дополнено 0029 | 2026-11-06 |
 | [0014](0014-harbor-registry.md) | Harbor как registry, а не среда запуска | accepted | 2026-11-06 |
 | [0015](0015-oblegchenie-sborki-electron.md) | Облегчение сборки Electron | accepted | 2026-11-07 |
-| [0016](0016-vlozheniya-cherez-fajly-proekta.md) | Вложения через файлы проекта, а не через текст промпта | accepted | 2026-11-05 |
-| [0017](0017-rezhimy-razreshenij.md) | Режимы разрешений: авто, вручную, принимать правки, план | accepted | 2026-11-05 |
-| [0018](0018-tajmauty-podtverzhdenij-i-instrumentov.md) | Таймауты подтверждений и инструментов | accepted | 2026-11-08 |
+| [0016](0016-vlozheniya-cherez-fajly-proekta.md) | Вложения через файлы проекта, а не через текст промпта | accepted, дополнено 0.2.0 | 2026-11-05 |
+| [0017](0017-rezhimy-razreshenij.md) | Режимы разрешений: авто, вручную, принимать правки, план | superseded частично 0027 | 2026-11-05 |
+| [0018](0018-tajmauty-podtverzhdenij-i-instrumentov.md) | Таймауты подтверждений и инструментов | accepted, дополнено 0031 | 2026-11-08 |
 | [0019](0019-limity-pamyati-docker.md) | Лимиты памяти для локальных Docker-стеков | accepted | 2026-11-08 |
 | [0020](0020-mav-servis-ozvuchki.md) | Сервис озвучки MAV и подбор голоса | accepted | 2026-11-08 |
 | [0021](0021-golosovoj-vvod-cherez-mas.md) | Голосовой ввод через локальный MAS | accepted | 2026-11-12 |
 | [0022](0022-temnaya-polosa-zagolovka.md) | Тёмная полоса заголовка вместо системной | accepted | 2026-11-13 |
 | [0023](0023-ocr-cherez-adaptery-dvizhkov.md) | OCR через адаптеры движков | accepted | 2026-11-14 |
 | [0024](0024-versii-pamyati.md) | Версии памяти в хранилище артефактов | accepted | 2026-11-15 |
-| [0026](0026-vtoroj-transport-responses-api.md) | Второй транспорт к шлюзу: OpenAI Responses API | accepted | 2026-11-16 |
+| [0025](0025-eksport-otveta-v-dokumenty.md) | Экспорт ответа в MD, TXT, DOCX, XLSX | accepted | 2026-11-16 |
+| [0026](0026-vtoroj-transport-responses-api.md) | Второй транспорт к шлюзу: OpenAI Responses API | accepted, дополнено 0.2.0 | 2026-11-16 |
 | [0027](0027-policy-engine.md) | PolicyEngine: одна точка решения о вызове инструмента | accepted | 2026-11-18 |
 | [0028](0028-doverie-k-papke-i-matrica-ipc.md) | Доверие к папке проекта и матрица прав IPC | accepted | 2026-11-19 |
 | [0029](0029-rezhim-razreshenij-dlya-cli.md) | Режим разрешений и передача запроса для внешних CLI | accepted | 2026-11-19 |
