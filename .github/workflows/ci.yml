@@ -86,5 +86,5 @@ jobs:
           foreach ($t in 'test-agent-loop', 'test-memory-tools', 'test-plugin-host', 'test-secrets-electron', 'test-ui', 'smoke-electron') {
             Write-Host "== $t"
             npx electron "scripts/$t.mjs"
-            if ($LASTEXITCODE -ne 0) { throw "$t: код $LASTEXITCODE" }
+            if ($LASTEXITCODE -ne 0) { throw "${t}: код $LASTEXITCODE" }
           }
