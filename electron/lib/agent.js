@@ -22,6 +22,7 @@ import { effectiveMode, mergeRules } from './policy.js';
 import { runToolCall, toolEntry } from './tool-runner.js';
 import { attachImages, isImageRejected, supportsVision } from './vision.js';
 import { addUsage, isStreamOptionsRejected, normalizeUsage } from './usage.js';
+import { activeHistory, compactionCut, compactionPrompt, contextBreakdown, DEFAULT_CONTEXT, needsCompaction } from './context.js';
 
 const BASE_PROMPT = `Ты — MAI Code, агент для программирования на рабочей машине пользователя.
 
@@ -133,6 +134,77 @@ export function trimMessages(messages, limit = 320_000) {
   return copy;
 }
 
+/** Клиент провайдера с нужным User-Agent: общий для агента, ревизора и компакции. */
+function clientOptions(prov) {
+  const ua = providerUserAgent('', prov);
+  return { apiKey: prov.apiKey, baseURL: prov.baseURL, maxRetries: 1, ...(ua ? { defaultHeaders: { 'User-Agent': ua } } : {}) };
+}
+
+/** Один ответ модели без потока: chat.completions, при отказе — Responses API. */
+async function completeOnce(client, model, prompt, signal) {
+  try {
+    const res = await client.chat.completions.create(
+      { model, messages: [{ role: 'user', content: prompt }], ...(supportsTemperature(model) ? { temperature: 0 } : {}) },
+      { signal },
+    );
+    return String(res?.choices?.[0]?.message?.content || '').trim();
+  } catch (err) {
+    if (!isResponsesRequired(err)) throw err;
+    const res = await client.responses.create({ model, input: prompt }, { signal });
+    return String(res?.output_text || '').trim();
+  }
+}
+
+/**
+ * Компакция (CC5.3): старая часть истории → сводка моделью. В history
+ * вставляется маркер `compaction` перед оставленными ходами; ранние сообщения
+ * остаются в сессии, но модели больше не уходят (activeHistory).
+ * Возвращает маркер или null, если сжимать нечего.
+ */
+export async function compactHistory({ client, model, history, instructions = '', signal, keepTokens = 20_000, auto = false }) {
+  const cut = compactionCut(history, { keepTokens });
+  if (cut < 0) return null;
+  let from = 0;
+  for (let i = cut - 1; i >= 0; i -= 1) {
+    if (history[i]?.role === 'compaction') {
+      from = i;
+      break;
+    }
+  }
+  const part = history.slice(from, cut);
+  const summary = await completeOnce(client, model, compactionPrompt(part, instructions), signal);
+  if (!summary) throw new Error('модель вернула пустую сводку');
+  const marker = {
+    role: 'compaction',
+    content: summary,
+    at: new Date().toISOString(),
+    messages: part.filter((m) => m.role !== 'compaction').length,
+    auto,
+    ...(instructions ? { instructions } : {}),
+  };
+  history.splice(cut, 0, marker);
+  return marker;
+}
+
+/** Ручная компакция сессии из окна (`/compact`): тот же код, свой клиент. */
+export async function compactSession({ provider, model, messages, instructions = '', signal, clientFactory = null }) {
+  const client = (clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider));
+  const history = [...messages];
+  const marker = await compactHistory({ client, model, history, instructions, signal });
+  return { marker, history };
+}
+
+/** Разбор контекста для /context: системный промпт и инструменты как у агента. */
+export function describeContext({ settings, projectDir, mode, trusted = true, mcp, history = [], window = DEFAULT_CONTEXT }) {
+  const skills = listSkills(projectDir, { includeProject: trusted });
+  const system = systemPrompt({ projectDir, skills, mcpStatus: mcp?.status?.() || [], mode, trusted });
+  const tools = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...interactiveTools, ...todoTools]
+    .map((t) => t.schema)
+    .concat((mcp?.toolSchemas?.() || []).map((t) => ({ type: 'function', function: t.function })));
+  void settings;
+  return contextBreakdown({ system, tools, history, window });
+}
+
 function parseArgs(raw) {
   try {
     return JSON.parse(raw || '{}');
@@ -162,21 +234,13 @@ export async function runAgent({
   pullQueued = null,
   onHistory = null,
   clientFactory = null,
+  contextWindow = DEFAULT_CONTEXT,
 }) {
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
   if (!provider.apiKey) throw new Error(`Не задан API-ключ провайдера «${provider.name || 'unknown'}»`);
 
   // defaultHeaders собираем отдельно для каждого провайдера: User-Agent
   // основного не должен перетекать в клиент ревизора.
-  const clientOptions = (prov) => ({
-    apiKey: prov.apiKey,
-    baseURL: prov.baseURL,
-    maxRetries: 1,
-    ...(() => {
-      const ua = providerUserAgent('', prov);
-      return ua ? { defaultHeaders: { 'User-Agent': ua } } : {};
-    })(),
-  });
   const makeClient = clientFactory || ((options) => new OpenAI(options));
   const client = makeClient(clientOptions(provider));
   const reviewerClient = reviewer?.provider?.baseURL && reviewer?.provider?.apiKey
@@ -271,6 +335,22 @@ export async function runAgent({
     const mode = currentMode();
     const tools = buildTools(mode);
     const system = systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted });
+    // Автокомпакция (CC5.3): у порога контекста старая часть → сводка, а не молчаливая обрезка.
+    if (settings.autoCompact !== false && needsCompaction(history, { window: contextWindow, system, tools: tools.map((t) => t.schema) })) {
+      emit({ type: 'compact:start', auto: true });
+      try {
+        const marker = await compactHistory({ client, model, history, signal, keepTokens: Math.round(contextWindow * 0.25), auto: true });
+        if (marker) {
+          emit({ type: 'compaction', marker });
+          snapshot();
+        }
+      } catch (err) {
+        if (signal.aborted) break;
+        emit({ type: 'notice', text: `Автокомпакция не удалась: ${err?.message || String(err)}. Старые сообщения будут обрезаны.` });
+      }
+    }
+    const view = contextBreakdown({ system, tools: tools.map((t) => t.schema), history, window: contextWindow });
+    emit({ type: 'context', used: view.used, window: contextWindow, exact: view.exact });
     for (const transform of transforms) {
       try {
         // Плагины живут в отдельном процессе (ADR 0030): хук асинхронный.
@@ -284,7 +364,8 @@ export async function runAgent({
     // Картинки прикрепляются к той же обрезанной копии, из которой собран запрос:
     // индексы сообщений должны совпадать (бэклог F1).
     const buildRequest = (withImages) => {
-      const trimmed = trimMessages(history);
+      // Модель видит сводку и сообщения после последней компакции; обрезка — страховка.
+      const trimmed = trimMessages(activeHistory(history));
       let api = trimmed.map(toApiMessage);
       if (withImages) {
         const attached = attachImages(api, trimmed, projectDir);

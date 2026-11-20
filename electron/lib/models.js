@@ -127,3 +127,14 @@ export function resolveModel(settings, key) {
   if (!provider) throw new Error(`Провайдер «${providerId}» не найден`);
   return { providerId, modelId, provider };
 }
+
+/**
+ * Размер контекста модели (CC5.1): из ответа /models (кэш) или статического
+ * списка провайдера. null — неизвестно, тогда вызывающий берёт значение по умолчанию.
+ */
+export function modelContext(providerId, modelId, provider = null) {
+  const cached = cache.get(providerId)?.data || [];
+  const hit = cached.find((m) => m.id === modelId) || (provider?.models || []).find((m) => m.id === modelId);
+  const value = Number(hit?.context);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}

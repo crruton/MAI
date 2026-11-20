@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { runAgent, trimMessages, toApiMessage } from '../electron/lib/agent.js';
+import { runAgent, trimMessages, toApiMessage, compactSession } from '../electron/lib/agent.js';
 import { loadPlugins } from '../electron/lib/plugins.js';
 import { disposePluginHosts } from '../electron/lib/plugin-host.js';
 
@@ -495,6 +495,65 @@ console.log('\n[12] Очередь сообщений, живой вывод и 
     }),
   );
   check('сообщение перед концом ответа продлевает прогон', lateBodies.length === 2, String(lateBodies.length));
+}
+
+console.log('\n[13] Автокомпакция у порога контекста и /compact (CC5.1–CC5.3)');
+{
+  const pad = 'x'.repeat(9000);
+  const messages = [];
+  for (let i = 0; i < 4; i += 1) {
+    messages.push({ role: 'user', content: `ранняя задача ${i} ${pad}` });
+    messages.push({ role: 'assistant', content: `ответ ${i}` });
+  }
+  messages.push({ role: 'user', content: 'текущая задача' });
+  const bodies = [];
+  const summaries = [];
+  const events = [];
+  const client = () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          if (!body.stream) {
+            summaries.push(body.messages[0].content);
+            return { choices: [{ message: { content: 'СВОДКА: делали задачи 0–3' } }] };
+          }
+          bodies.push(JSON.parse(JSON.stringify(body)));
+          return stream({ text: 'готово' });
+        },
+      },
+    },
+  });
+  const history = await runAgent(
+    base({
+      messages,
+      mcp: fakeMcp(),
+      contextWindow: 16_000,
+      emit: (e) => events.push(e),
+      clientFactory: client,
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const marker = history.find((m) => m.role === 'compaction');
+  check('маркер компакции в истории', marker?.auto === true && /СВОДКА/.test(marker.content));
+  check('суммаризатор получил ранние задачи', /ранняя задача 0/.test(summaries[0] || ''));
+  const sent = bodies[0].messages.map((m) => String(m.content || '')).join('\n');
+  check('модель видит сводку', /СВОДКА/.test(sent));
+  check('ранние сообщения модели не ушли', !/ранняя задача 0/.test(sent));
+  check('текущая задача на месте', /текущая задача/.test(sent));
+  check('ранние сообщения остались в сессии', history.some((m) => /ранняя задача 0/.test(String(m.content))));
+  check('окно получило события context и compaction', events.some((e) => e.type === 'compaction') && events.some((e) => e.type === 'context' && e.window === 16_000));
+
+  const manual = await compactSession({
+    provider: { baseURL: 'http://fake', apiKey: 'k' },
+    model: 'm',
+    messages,
+    instructions: 'сохрани решения',
+    clientFactory: client,
+  });
+  check('/compact: маркер с пожеланием', manual.marker?.instructions === 'сохрани решения' && manual.marker.auto === false);
+  check('/compact: пожелание дошло до суммаризатора', /сохрани решения/.test(summaries.at(-1)));
+  const none = await compactSession({ provider: { baseURL: 'x', apiKey: 'k' }, model: 'm', messages: [{ role: 'user', content: 'один ход' }], clientFactory: client });
+  check('/compact на одном ходе — нечего сжимать', none.marker === null);
 }
 
 fs.rmSync(project, { recursive: true, force: true });

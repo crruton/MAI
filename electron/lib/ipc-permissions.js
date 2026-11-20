@@ -93,6 +93,8 @@ export const IPC_PERMISSIONS = {
   'chat:answer': ANY,
   'chat:queue': ANY,
   'chat:unqueue': ANY,
+  'chat:compact': ANY,
+  'context:stats': ANY,
 
   // инструкции, память, навыки
   'agents:read': ANY,

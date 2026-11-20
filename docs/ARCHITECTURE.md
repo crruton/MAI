@@ -208,6 +208,15 @@ unified diff (`electron/lib/diff.js`: LCS по строкам, общие нач
 файлов). `chat:start` находит в тексте `@путь`, проверяет, что путь внутри
 проекта, и дописывает ссылку «прочитай через read_file».
 
+### Контекст и компакция
+
+ADR 0032. `runAgent({ contextWindow })` перед каждым шагом считает занятость
+(`contextBreakdown`: usage провайдера + оценка) и шлёт событие `context`. С 80%
+окна вызывает `compactHistory` — сводка моделью, маркер `role: 'compaction'` в
+истории. Запрос строится из `activeHistory(history)`: сводка и сообщения после
+последнего маркера. IPC: `chat:compact({ sessionId, instructions })`,
+`context:stats({ sessionId, projectDir, model })`.
+
 ## Доверие к папке и матрица прав IPC
 
 Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или

@@ -77,6 +77,21 @@ ipcMain.handle('commands:expand', (_e, payload) => {
   return { ok: true, prompt: `Ревью ${payload.args}` };
 });
 ipcMain.handle('files:search', (_e, payload) => (String(payload.query).startsWith('sr') ? ['src/', 'src/app.js', 'scripts/sr.mjs'] : []));
+// Контекст и компакция (раздел [20]).
+const compactCalls = [];
+ipcMain.handle('context:stats', () => ({
+  window: 128000,
+  used: 96000,
+  exact: true,
+  parts: [
+    { key: 'system', label: 'Системный промпт, AGENTS.md, память', tokens: 8000 },
+    { key: 'tool', label: 'Результаты инструментов', tokens: 70000 },
+  ],
+}));
+ipcMain.handle('chat:compact', (_e, payload) => {
+  compactCalls.push(payload);
+  return { ok: true, marker: { role: 'compaction', content: 'сводка', messages: 12 }, messages: [{ role: 'compaction', content: '**сводка** работы', messages: 12 }] };
+});
 const answers = [];
 ipcMain.handle('chat:answer', (_e, payload) => {
   answers.push(payload);
@@ -981,6 +996,41 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 150));
     check('Enter подставляет путь, а не отправляет', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === 'посмотри @src/app.js ');
     await type('');
+
+    console.log('\n[20] Контекст, компакция, стоимость (CC5.1–CC5.5)');
+    win.webContents.send('chat:event', { type: 'context', used: 112000, window: 128000, exact: true });
+    await new Promise((r) => setTimeout(r, 200));
+    const meterInfo = await win.webContents.executeJavaScript(`(() => { const m = document.querySelector('#context-meter'); return { hidden: m.hidden, text: m.textContent, cls: m.className, title: m.title }; })()`);
+    check('индикатор контекста виден', !meterInfo.hidden && meterInfo.text === 'контекст 88%', JSON.stringify(meterInfo));
+    check('у порога — красный', /ctx-high/.test(meterInfo.cls));
+    check('в подсказке токены из окна', /112K из 128K/.test(meterInfo.title), meterInfo.title);
+    win.webContents.send('chat:event', {
+      type: 'done',
+      messages: [
+        { role: 'compaction', content: '**Сделано:** база', messages: 8, auto: true },
+        { role: 'user', content: 'дальше' },
+        { role: 'assistant', content: 'ок', model: 'test-model', usage: { input: 1200, output: 300, cached: 800, total: 1500 } },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const compactCard = await win.webContents.executeJavaScript(`document.querySelector('.compaction-card summary')?.textContent || ''`);
+    check('карточка компакции в ленте', /автоматически сжат: 8 сообщений/.test(compactCard), compactCard);
+    const usage = await win.webContents.executeJavaScript(`document.querySelector('.msg-usage')?.textContent || ''`);
+    check('токены шага в шапке ответа', /↑1K ↓300/.test(usage), usage);
+    const typeCmd = async (text) => {
+      await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); })()`);
+      await win.webContents.executeJavaScript(`document.querySelector('#input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`);
+      await new Promise((r) => setTimeout(r, 400));
+    };
+    await typeCmd('/context');
+    const ctx = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.context-row')].map((r) => r.textContent)`);
+    check('/context показывает части', ctx.some((t) => t.includes('Результаты инструментов')), JSON.stringify(ctx));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await typeCmd('/cost');
+    const cost = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.context-row')].map((r) => r.textContent).join(' | ')`);
+    check('/cost показывает токены и кэш', /1 шагов · ↑1K \(кэш 800\) ↓300/.test(cost), cost);
+    check('без цены — честно «цена не задана»', /цена не задана/.test(cost), cost);
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

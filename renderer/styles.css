@@ -588,6 +588,22 @@ button { cursor: pointer; }
 .help-row { display: grid; grid-template-columns: 220px 1fr auto; gap: 10px; font-size: 13px; }
 .help-row code { color: var(--accent-2); }
 
+/* ---------- контекст и компакция (CC5.1–CC5.3) ---------- */
+.context-meter {
+  background: none; border: 1px solid var(--border); color: var(--text-dim); border-radius: 999px;
+  font-size: 11px; padding: 2px 8px; cursor: pointer; font-family: var(--mono);
+}
+.context-meter.ctx-mid { color: var(--amber); border-color: rgba(251, 191, 36, 0.5); }
+.context-meter.ctx-high { color: var(--red); border-color: rgba(248, 113, 113, 0.6); }
+.context-parts { display: grid; gap: 6px; margin: 8px 0; }
+.context-row { display: grid; grid-template-columns: minmax(180px, 1fr) 2fr auto; gap: 10px; align-items: center; font-size: 13px; }
+.context-bar { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+.context-bar i { display: block; height: 100%; background: var(--accent); }
+.context-num { font-family: var(--mono); font-size: 12px; color: var(--text-dim); text-align: right; }
+.msg-compaction { display: flex; justify-content: center; }
+.compaction-card { max-width: 760px; width: 100%; border: 1px dashed var(--border); border-radius: var(--radius); padding: 8px 14px; color: var(--text-dim); }
+.compaction-card summary { cursor: pointer; font-size: 12px; }
+
 /* ---------- ревизор ---------- */
 .msg-review { display: flex; justify-content: center; }
 .review-card {

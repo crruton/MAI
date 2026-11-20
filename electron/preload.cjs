@@ -89,6 +89,9 @@ contextBridge.exposeInMainWorld('mai', {
     // Очередь сообщений во время работы агента (CC7.5).
     queue: (text, displayText) => invoke('chat:queue', { text, displayText }),
     unqueue: (id) => invoke('chat:unqueue', { id }),
+    // Контекст и компакция (CC5.2, CC5.3).
+    compact: (sessionId, instructions) => invoke('chat:compact', { sessionId, instructions }),
+    context: (payload) => invoke('context:stats', payload),
     onEvent: (handler) => {
       const listener = (_event, data) => handler(data);
       ipcRenderer.on('chat:event', listener);

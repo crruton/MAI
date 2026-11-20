@@ -29,6 +29,8 @@ const state = {
   question: null,
   // Слэш-команды: null — ещё не загружены (CC7.7).
   commands: null,
+  // Заполнение контекста модели (CC5.1): { used, window, exact }.
+  context: null,
   // Запрос разрешения — карточкой в ленте (CC7.1).
   approval: null,
   // Живой вывод команд по id вызова (CC7.4).
@@ -911,6 +913,16 @@ function messageNode(message) {
   if (message.role === 'runtime') {
     return runtimeNode(message.name || 'Рантайм', message.content || '', message.code, false);
   }
+  if (message.role === 'compaction') {
+    return el('div', { class: 'msg msg-compaction' }, [
+      el('details', { class: 'compaction-card' }, [
+        el('summary', {
+          text: `Контекст ${message.auto ? 'автоматически ' : ''}сжат: ${message.messages || 0} сообщений → сводка${message.instructions ? ` (учтено: ${message.instructions})` : ''}`,
+        }),
+        el('div', { class: 'md', html: renderMarkdown(message.content || '') }),
+      ]),
+    ]);
+  }
   if (message.role === 'review') {
     // Замечание ревизора — не реплика пользователя (ADR 0027, A3.4).
     return el('div', { class: 'msg msg-review' }, [
@@ -1191,6 +1203,7 @@ async function loadSession(id) {
   state.liveOutput = {};
   state.todos = todosFromHistory(state.messages);
   renderTodos();
+  refreshContext();
   state.live = null;
   state.liveRuntimes = [];
   clearAttachments();
@@ -1217,6 +1230,8 @@ function newChat() {
   state.liveOutput = {};
   state.todos = [];
   renderTodos();
+  state.context = null;
+  renderContextMeter();
   state.live = null;
   state.liveRuntimes = [];
   clearAttachments();
@@ -1506,6 +1521,18 @@ async function runSlash(text) {
       clear();
       $('#export-chat')?.click();
       return;
+    case 'context':
+      clear();
+      await openContext();
+      return;
+    case 'compact':
+      clear();
+      await compactNow(args);
+      return;
+    case 'cost':
+      clear();
+      openCost();
+      return;
     default: {
       const result = await api.commands.expand(state.projectDir, name, args);
       if (!result?.ok) {
@@ -1516,6 +1543,136 @@ async function runSlash(text) {
       await send({ text: result.prompt, display: text });
     }
   }
+}
+
+/* ---------- контекст, компакция, стоимость (CC5.1–CC5.5) ---------- */
+
+function renderContextMeter() {
+  const meter = $('#context-meter');
+  if (!meter) return;
+  const c = state.context;
+  if (!c?.window || !c.used) {
+    meter.hidden = true;
+    return;
+  }
+  const pct = Math.min(100, Math.round((c.used / c.window) * 100));
+  meter.hidden = false;
+  meter.textContent = `контекст ${pct}%`;
+  meter.className = `context-meter${pct >= 85 ? ' ctx-high' : pct >= 70 ? ' ctx-mid' : ''}`;
+  meter.title = `${c.exact ? '' : '≈ '}${contextLabel(c.used)} из ${contextLabel(c.window)} токенов. С 80% ранняя часть диалога сжимается в сводку. /context — подробно`;
+}
+
+async function refreshContext() {
+  if (!state.sessionId) {
+    state.context = null;
+    renderContextMeter();
+    return;
+  }
+  try {
+    const stats = await api.chat.context({ sessionId: state.sessionId, model: state.model });
+    state.context = { used: stats.used, window: stats.window, exact: stats.exact };
+  } catch {
+    state.context = null;
+  }
+  renderContextMeter();
+}
+
+async function openContext() {
+  const stats = await api.chat.context({ sessionId: state.sessionId, projectDir: state.projectDir, model: state.model });
+  const max = Math.max(1, ...stats.parts.map((p) => p.tokens));
+  const pct = Math.round((stats.used / stats.window) * 100);
+  openModal({
+    title: 'Контекст модели',
+    body: [
+      el('p', {
+        text: `${stats.exact ? '' : '≈ '}${contextLabel(stats.used)} из ${contextLabel(stats.window)} токенов (${pct}%). ${stats.exact ? 'По данным провайдера за последний запрос и оценке новых сообщений.' : 'Оценка по размеру текста: провайдер ещё не прислал usage.'}`,
+      }),
+      el(
+        'div',
+        { class: 'context-parts' },
+        stats.parts
+          .filter((p) => p.tokens > 0)
+          .map((p) =>
+            el('div', { class: 'context-row' }, [
+              el('span', { text: p.label }),
+              el('span', { class: 'context-bar' }, [el('i', { style: `width:${Math.max(2, Math.round((p.tokens / max) * 100))}%` })]),
+              el('span', { class: 'context-num', text: `≈ ${contextLabel(p.tokens)}` }),
+            ]),
+          ),
+      ),
+      el('p', { class: 'hint-text', text: 'С 80% ранняя часть диалога автоматически сжимается в сводку. Вручную — /compact [что сохранить].' }),
+    ],
+  });
+}
+
+async function compactNow(instructions = '') {
+  if (state.running) {
+    toast('Агент работает — сожмите контекст после ответа', 'err');
+    return;
+  }
+  if (!state.sessionId) {
+    toast('Нет чата для компакции', 'err');
+    return;
+  }
+  setHint('Сжимаю контекст…');
+  const result = await api.chat.compact(state.sessionId, instructions);
+  setHint('');
+  if (!result?.ok) {
+    toast(result?.error || 'Компакция не удалась', 'err');
+    return;
+  }
+  state.messages = result.messages;
+  renderAll();
+  await refreshContext();
+  toast(`Контекст сжат: ${result.marker.messages} сообщений → сводка`, 'ok');
+}
+
+function setHint(text) {
+  const hint = $('#composer-hint');
+  if (hint) hint.textContent = text;
+}
+
+/** Цена модели за 1 млн токенов из настроек провайдера, если задана. */
+function priceOf(modelKey) {
+  const [providerId, ...rest] = String(modelKey || '').split('/');
+  const id = rest.join('/');
+  const provider = state.settings?.providers?.[providerId];
+  return (provider?.models || []).find((m) => m.id === id)?.price || null;
+}
+
+function openCost() {
+  const byModel = new Map();
+  for (const m of state.messages) {
+    if (m.role !== 'assistant' || !m.usage) continue;
+    const key = m.model ? (m.model.includes('/') ? m.model : `${String(state.model).split('/')[0]}/${m.model}`) : state.model;
+    const row = byModel.get(key) || { input: 0, output: 0, cached: 0, steps: 0 };
+    row.input += m.usage.input || 0;
+    row.output += m.usage.output || 0;
+    row.cached += m.usage.cached || 0;
+    row.steps += 1;
+    byModel.set(key, row);
+  }
+  let total = 0;
+  let priced = true;
+  const rows = [...byModel.entries()].map(([key, row]) => {
+    const price = priceOf(key);
+    const cost = price ? (row.input * price.input + row.output * (price.output || 0)) / 1e6 : null;
+    if (cost == null) priced = false;
+    else total += cost;
+    return el('div', { class: 'context-row' }, [
+      el('span', { text: modelLabel(key) }),
+      el('span', { class: 'context-num', text: `${row.steps} шагов · ↑${contextLabel(row.input)}${row.cached ? ` (кэш ${contextLabel(row.cached)})` : ''} ↓${contextLabel(row.output)}` }),
+      el('span', { class: 'context-num', text: cost == null ? 'цена не задана' : `$${cost.toFixed(4)}` }),
+    ]);
+  });
+  openModal({
+    title: 'Токены и стоимость чата',
+    body: [
+      rows.length ? el('div', { class: 'context-parts' }, rows) : el('p', { text: 'Провайдер ещё не прислал данных о токенах для этого чата.' }),
+      rows.length && total ? el('p', { text: `Итого: $${total.toFixed(4)}${priced ? '' : ' (без моделей без цены)'}` }) : null,
+      el('p', { class: 'hint-text', text: 'Цена задаётся у модели провайдера: "price": { "input": 3, "output": 15 } — долларов за 1 млн токенов.' }),
+    ],
+  });
 }
 
 /* ---------- всплывающие подсказки ---------- */
@@ -1834,6 +1991,19 @@ function handleEvent(event) {
       break;
     case 'question':
       openQuestion(event);
+      break;
+    case 'context':
+      state.context = { used: event.used, window: event.window, exact: event.exact };
+      renderContextMeter();
+      break;
+    case 'compact:start':
+      setHint('Сжимаю контекст…');
+      break;
+    case 'compaction':
+      state.messages.push(event.marker);
+      setHint(state.running ? 'Агент работает · Enter — в очередь · Esc — остановить' : '');
+      toast(`Контекст ${event.marker.auto ? 'автоматически ' : ''}сжат: ${event.marker.messages} сообщений → сводка`, 'ok');
+      scheduleRender();
       break;
     case 'tool_progress': {
       const previous = state.liveOutput[event.id] || '';

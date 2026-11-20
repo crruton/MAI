@@ -20,6 +20,9 @@ export const BUILTIN_COMMANDS = [
   { name: 'init', description: 'Изучить проект и написать AGENTS.md' },
   { name: 'memory', description: 'Открыть память проекта' },
   { name: 'export', description: 'Скачать чат', argumentHint: 'md | txt | docx | xlsx' },
+  { name: 'context', description: 'Из чего состоит контекст модели' },
+  { name: 'compact', description: 'Сжать раннюю часть диалога в сводку', argumentHint: '[что сохранить]' },
+  { name: 'cost', description: 'Токены и стоимость чата' },
 ];
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;

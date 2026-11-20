@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets } from './lib/config.js';
 import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
-import { listModels, resolveModel } from './lib/models.js';
+import { listModels, resolveModel, modelContext } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
 import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, addSessionRules, removeSessionRules } from './lib/sessions.js';
-import { runAgent } from './lib/agent.js';
+import { runAgent, compactSession, describeContext } from './lib/agent.js';
+import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -1070,6 +1071,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
         policy: policyFor(session.id, projectDir),
         audit,
         trusted,
+        // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
+        contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -1231,6 +1234,59 @@ ipcMain.handle('chat:stop', (event) => {
   denyApprovals(state);
   state.controller?.abort();
   return true;
+});
+
+/** Ручная компакция (`/compact [что учесть]`, CC5.3). Только когда агент не работает. */
+ipcMain.handle('chat:compact', async (event, payload = {}) => {
+  const state = runState(BrowserWindow.fromWebContents(event.sender));
+  if (state.controller) return { ok: false, error: 'Агент работает — сожмите контекст после ответа' };
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  if (!session) return { ok: false, error: 'Нет чата для компакции' };
+  const settings = loadSettings();
+  let resolved;
+  try {
+    resolved = resolveModel(settings, session.model || settings.activeModel);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  if (!resolved.provider.apiKey) return { ok: false, error: `Не задан API-ключ провайдера «${resolved.provider.name}»` };
+  try {
+    const { marker, history } = await compactSession({
+      provider: resolved.provider,
+      model: resolved.modelId,
+      messages: session.messages || [],
+      instructions: String(payload.instructions || '').slice(0, 2000),
+    });
+    if (!marker) return { ok: false, error: 'Сжимать нечего: в чате меньше двух запросов' };
+    session.messages = history;
+    saveSession(session);
+    return { ok: true, marker, messages: history };
+  } catch (err) {
+    return { ok: false, error: `Компакция не удалась: ${err?.message || String(err)}` };
+  }
+});
+
+/** Разбор контекста для `/context` (CC5.2). */
+ipcMain.handle('context:stats', (_e, payload = {}) => {
+  const settings = loadSettings();
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  const projectDir = session?.projectDir || payload.projectDir || settings.projectDir;
+  let window = DEFAULT_CONTEXT;
+  try {
+    const resolved = resolveModel(settings, payload.model || session?.model || settings.activeModel);
+    window = modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT;
+  } catch {
+    /* модель не разрешилась — окно по умолчанию */
+  }
+  return describeContext({
+    settings,
+    projectDir,
+    mode: runtimeMode(session?.id, projectDir),
+    trusted: isTrusted(projectDir),
+    mcp,
+    history: session?.messages || [],
+    window,
+  });
 });
 
 /** Сообщение во время работы агента: встанет в историю перед следующим шагом. */
@@ -1770,6 +1826,8 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         policy: policyFor(session.id, projectDir),
         audit,
         trusted,
+        // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
+        contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {

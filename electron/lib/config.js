@@ -148,6 +148,8 @@ function cleanProvider(id, provider) {
           context: m.context || null,
           // Явный флаг поддержки изображений (бэклог F1); без него — эвристика по имени.
           ...(typeof m.vision === 'boolean' ? { vision: m.vision } : {}),
+          // Цена за 1 млн токенов для /cost (CC5.5); без неё показываются только токены.
+          ...(m.price && Number.isFinite(Number(m.price.input)) ? { price: { input: Number(m.price.input), output: Number(m.price.output) || 0 } } : {}),
         }))
     : [];
   return {
