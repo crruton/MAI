@@ -79,12 +79,25 @@ jobs:
           npm run test:responses
           npm run test:export
 
+      # Каждый набор — отдельным процессом с ограничением 5 минут: зависание
+      # одного набора видно по имени, а не по таймауту всей задачи.
       - name: Electron (агентный цикл, память, плагины, ключи, интерфейс, smoke)
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
+          $electron = Join-Path $PWD 'node_modules\electron\dist\electron.exe'
+          $failed = @()
           foreach ($t in 'test-agent-loop', 'test-memory-tools', 'test-plugin-host', 'test-secrets-electron', 'test-ui', 'smoke-electron') {
             Write-Host "== $t"
-            npx electron "scripts/$t.mjs"
-            if ($LASTEXITCODE -ne 0) { throw "${t}: код $LASTEXITCODE" }
+            $p = Start-Process -FilePath $electron -ArgumentList "scripts/$t.mjs" -NoNewWindow -PassThru -RedirectStandardOutput "$t.out.txt" -RedirectStandardError "$t.err.txt"
+            $null = $p.Handle  # без этого ExitCode после WaitForExit бывает пустым
+            if (-not $p.WaitForExit(300000)) {
+              Stop-Process -Id $p.Id -Force
+              Get-Content "$t.out.txt" -ErrorAction SilentlyContinue | Select-Object -Last 40
+              Write-Host "${t}: ЗАВИС (5 минут)"
+              $failed += $t
+              continue
+            }
+            Get-Content "$t.out.txt" -ErrorAction SilentlyContinue | Select-String -Pattern 'FAIL|Итог|исключение'
+            if ($p.ExitCode -ne 0) { $failed += $t; Get-Content "$t.err.txt" -ErrorAction SilentlyContinue | Select-Object -Last 20 }
           }
+          if ($failed.Count) { throw "Не прошли: $($failed -join ', ')" }
