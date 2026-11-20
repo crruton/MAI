@@ -29,6 +29,11 @@ const state = {
   question: null,
   // Слэш-команды: null — ещё не загружены (CC7.7).
   commands: null,
+  // Список чатов: все проекты или текущий, строка поиска (CC6.6, CC6.7).
+  sessionsAll: false,
+  sessionsQuery: '',
+  // Редактируемое сообщение пользователя (CC6.3): индекс в истории или null.
+  editingTurn: null,
   // Заполнение контекста модели (CC5.1): { used, window, exact }.
   context: null,
   // Индексы сообщений пользователя, после которых есть чекпоинт правок (CC6.1).
@@ -909,7 +914,16 @@ function pickExportFormat(anchor) {
 function messageNode(message, index = -1) {
   if (message.role === 'user') {
     const edited = state.checkpointTurns?.has(index);
-    return el('div', { class: 'msg msg-user' }, [
+    return el('div', { class: `msg msg-user${state.editingTurn === index ? ' editing' : ''}` }, [
+      state.sessionId && index >= 0 && !state.running
+        ? el('button', {
+            class: 'edit-btn',
+            type: 'button',
+            title: 'Изменить и отправить заново: сообщение и всё после него заменятся',
+            text: '✎',
+            onclick: () => startEdit(index),
+          })
+        : null,
       state.sessionId && index >= 0 && !state.running
         ? el('button', {
             class: `rewind-btn${edited ? ' edited' : ''}`,
@@ -1091,6 +1105,19 @@ function toolCard(id, name, argsText) {
 function renderSessions() {
   const box = $('#sessions');
   box.replaceChildren();
+  const scope = $('#sessions-scope');
+  if (scope) {
+    scope.textContent = state.sessionsAll ? 'все проекты' : 'этот проект';
+    scope.title = state.sessionsAll ? 'Показать только чаты текущей папки' : 'Показать чаты всех проектов';
+  }
+  if (!state.sessions.length) {
+    box.append(
+      el('div', {
+        class: 'sessions-empty',
+        text: state.sessionsQuery ? 'Ничего не найдено' : state.sessionsAll ? 'Чатов пока нет' : 'В этой папке чатов нет — «все проекты» покажет остальные',
+      }),
+    );
+  }
   for (const session of state.sessions) {
     const node = el('button', {
       class: `session${session.id === state.sessionId ? ' active' : ''}`,
@@ -1098,7 +1125,11 @@ function renderSessions() {
       onclick: () => loadSession(session.id),
     }, [
       el('span', { class: 'session-title', text: session.title || 'Без названия' }),
-      el('span', { class: 'session-meta', text: `${modelLabel(session.model)} · ${fmtDate(session.updatedAt)}` }),
+      el('span', {
+        class: 'session-meta',
+        text: `${modelLabel(session.model)} · ${fmtDate(session.updatedAt)}${state.sessionsAll && session.projectDir ? ` · ${shortPath(session.projectDir)}` : ''}`,
+      }),
+      session.match ? el('span', { class: 'session-match', text: `…${session.match}…` }) : null,
     ]);
     const del = el('span', {
       class: 'del',
@@ -1198,8 +1229,12 @@ function updateChrome() {
 
 /* ---------- данные ---------- */
 
+/** Список чатов: текущего проекта или всех (CC6.6), с поиском по тексту (CC6.7). */
 async function refreshSessions() {
-  state.sessions = await api.sessions.list();
+  state.sessions = await api.sessions.list({
+    projectDir: state.sessionsAll ? '' : state.projectDir,
+    query: state.sessionsQuery || '',
+  });
   renderSessions();
 }
 
@@ -1237,6 +1272,8 @@ async function loadSession(id) {
 }
 
 function newChat() {
+  state.editingTurn = null;
+  if ($('#edit-banner')) $('#edit-banner').hidden = true;
   state.sessionId = null;
   state.messages = [];
   state.toolResults = {};
@@ -1287,6 +1324,11 @@ async function send(override = null) {
     await runSlash(typed);
     return;
   }
+  // `# правило` — в память, а не агенту (CC4.3). `##` и многострочный текст — обычное сообщение.
+  if (!override && /^#\s+\S/.test(typed) && !typed.includes('\n')) {
+    rememberLine(typed.replace(/^#\s+/, ''));
+    return;
+  }
   const text = override ? override.text : typed;
   const hasFiles = state.attachments.length > 0;
   if (!text && !hasFiles) return;
@@ -1310,6 +1352,9 @@ async function send(override = null) {
     await pickProject();
     return;
   }
+
+  // Редактирование: диалог откатывается к сообщению только когда всё готово к отправке.
+  if (state.editingTurn !== null && !(await applyEdit())) return;
 
   input.value = '';
   autosize();
@@ -1496,6 +1541,10 @@ async function runSlash(text) {
       clear();
       newChat();
       return;
+    case 'resume':
+      clear();
+      await openResume(args);
+      return;
     case 'model': {
       const q = args.toLowerCase();
       const found = state.models.find((m) => m.key.toLowerCase() === q) || state.models.find((m) => `${m.key} ${m.name || ''}`.toLowerCase().includes(q));
@@ -1556,6 +1605,114 @@ async function runSlash(text) {
       await send({ text: result.prompt, display: text });
     }
   }
+}
+
+/* ---------- быстрая запись в память (CC4.3) ---------- */
+
+function rememberLine(text) {
+  const save = async (scope) => {
+    modal.close();
+    const result = await api.memory.append({ projectDir: state.projectDir, scope, text });
+    if (result?.ok === false) {
+      toast(result.error || 'Не удалось записать в память', 'err');
+      return;
+    }
+    const input = $('#input');
+    input.value = '';
+    autosize();
+    toast(result.changed === false ? 'Это уже есть в памяти' : `Записано в ${scope === 'global' ? 'глобальную память' : 'память проекта'}`, 'ok');
+  };
+  const option = (key, label, scope, hint, recommended) =>
+    el('button', { class: `btn approve-option${recommended ? ' primary recommended' : ''}`, type: 'button', 'data-scope': scope, onclick: () => save(scope) }, [
+      el('span', { class: 'approve-key', text: key }),
+      el('span', { class: 'trust-option-text' }, [el('b', { text: label }), el('small', { text: hint })]),
+      recommended ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+    ]);
+  const modal = openModal({
+    title: 'Запомнить?',
+    small: true,
+    body: [el('div', { class: 'approve-args', text: text }), el('p', { class: 'hint-text', text: 'Память подмешивается в системный промпт агента. Версии и откат — в панели «Память».' })],
+    footer: [
+      option('1', 'В память проекта', 'project', '.mai-code/memory.md — только этот проект', true),
+      option('2', 'В глобальную память', 'global', 'для всех проектов', false),
+    ],
+  });
+  modal.modal.classList.add('approve-modal', 'remember-modal');
+  modal.footEl.querySelector('.recommended')?.focus();
+}
+
+/* ---------- редактирование сообщения и /resume (CC6.3, CC6.4) ---------- */
+
+function startEdit(index) {
+  const message = state.messages[index];
+  if (!message || message.role !== 'user') return;
+  state.editingTurn = index;
+  const input = $('#input');
+  input.value = message.display || message.content || '';
+  autosize();
+  input.focus();
+  $('#edit-banner').hidden = false;
+  renderAll();
+}
+
+function cancelEdit() {
+  if (state.editingTurn === null) return;
+  state.editingTurn = null;
+  $('#edit-banner').hidden = true;
+  $('#input').value = '';
+  autosize();
+  renderAll();
+}
+
+/** Перед отправкой отредактированного сообщения диалог откатывается к нему (файлы не трогаем). */
+async function applyEdit() {
+  const turn = state.editingTurn;
+  if (turn === null) return true;
+  const result = await api.chat.rewind(state.sessionId, turn, 'conversation');
+  if (!result?.ok) {
+    toast(result?.error || 'Не удалось заменить сообщение', 'err');
+    return false;
+  }
+  state.messages = result.messages || [];
+  state.editingTurn = null;
+  $('#edit-banner').hidden = true;
+  return true;
+}
+
+async function openResume(query = '') {
+  const search = el('input', { class: 'sessions-search', type: 'search', placeholder: 'Поиск по заголовку и тексту…', value: query });
+  const list = el('div', { class: 'resume-list' });
+  const render = async () => {
+    const items = await api.sessions.list({ query: search.value });
+    list.replaceChildren(
+      ...(items.length
+        ? items.slice(0, 30).map((item) =>
+            el('button', {
+              class: `session${item.id === state.sessionId ? ' active' : ''}`,
+              type: 'button',
+              onclick: async () => {
+                modal.close();
+                await loadSession(item.id);
+                refreshSessions();
+              },
+            }, [
+              el('span', { class: 'session-title', text: item.title || 'Без названия' }),
+              el('span', { class: 'session-meta', text: `${fmtDate(item.updatedAt)} · ${shortPath(item.projectDir)} · запросов: ${item.count}` }),
+              item.match ? el('span', { class: 'session-match', text: `…${item.match}…` }) : null,
+            ]),
+          )
+        : [el('div', { class: 'sessions-empty', text: 'Ничего не найдено' })]),
+    );
+  };
+  let timer = null;
+  search.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(render, 200);
+  });
+  const modal = openModal({ title: 'Продолжить чат', body: [search, list] });
+  modal.modal.classList.add('resume-modal');
+  await render();
+  search.focus();
 }
 
 /* ---------- чекпоинты и откат (CC6.1) ---------- */
@@ -2054,6 +2211,11 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && state.running) {
     event.preventDefault();
     stopRun();
+    return;
+  }
+  if (event.key === 'Escape' && state.editingTurn !== null) {
+    event.preventDefault();
+    cancelEdit();
     return;
   }
   if (event.key === 'Tab' && event.shiftKey && (event.target === input || event.target === document.body)) {
@@ -3957,6 +4119,7 @@ async function pickProject() {
   if (!dir) return;
   state.projectDir = dir;
   updateChrome();
+  refreshSessions();
   // Решение о доверии — сразу при выборе папки, как в Claude Code (ADR 0028).
   const trust = await refreshTrust();
   if (trust?.state === 'unknown') await decideTrust(trust);
@@ -4200,6 +4363,18 @@ async function init() {
   api.chat.onEvent(handleEvent);
 
   $('#new-chat').addEventListener('click', newChat);
+  $('#sessions-scope')?.addEventListener('click', () => {
+    state.sessionsAll = !state.sessionsAll;
+    refreshSessions();
+  });
+  let searchTimer = null;
+  $('#sessions-search')?.addEventListener('input', (event) => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      state.sessionsQuery = event.target.value;
+      refreshSessions();
+    }, 200);
+  });
 
 // Экспорт всего диалога: меню форматов открывается по клику.
 $('#export-chat').addEventListener('click', async (event) => {

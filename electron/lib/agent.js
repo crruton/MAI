@@ -1,3 +1,4 @@
+import path from 'node:path';
 import OpenAI from 'openai';
 import { providerUserAgent } from './config.js';
 import {
@@ -15,6 +16,7 @@ import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
 import { interactiveTools } from './tools/interactive.js';
 import { todoTools } from './tools/todo.js';
+import { nestedInstructions, projectInstructions } from './instructions.js';
 import { listSkills, readAgents, readMemory } from './skills.js';
 import { reviewAnswer } from './reviewer.js';
 import { modePrompt } from './permissions.js';
@@ -50,7 +52,13 @@ export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = tr
     );
   }
   if (agents.global.trim()) parts.push(`\n# Глобальные инструкции (AGENTS.md)\n${agents.global.trim()}`);
-  if (trusted && agents.project.trim()) parts.push(`\n# Инструкции проекта (AGENTS.md)\n${agents.project.trim()}`);
+  if (trusted) {
+    // AGENTS.md и AGENTS.local.md проекта с подстановкой @импортов (CC4.1, CC4.2).
+    for (const item of projectInstructions(projectDir)) {
+      parts.push(`\n# Инструкции проекта (${item.name})\n${item.text.trim()}`);
+    }
+    parts.push('\nВ подпапках бывают свои AGENTS.md: их правила приходят вместе с результатом инструмента и действуют для файлов этой папки.');
+  }
   if (memory.global.trim()) {
     parts.push(`\n# Глобальная память (memory.md)\n${memory.global.trim().slice(0, 6000)}`);
   }
@@ -303,6 +311,8 @@ export async function runAgent({
   const maxIterations = settings.maxIterations || 30;
   const maxReviewRounds = Number(reviewer?.maxRounds ?? 2);
   let reviewRound = 0;
+  // Вложенные AGENTS.md, уже показанные агенту в этом прогоне (CC4.1).
+  const loadedInstructions = new Set();
   const snapshot = () => {
     try {
       onHistory?.([...history]);
@@ -576,6 +586,21 @@ export async function runAgent({
             },
           };
           outcome = await runToolCall({ entry, args, ctx: callCtx, policy: policyCtx, approve, audit });
+        }
+      }
+      // Вложенный AGENTS.md папки, которую агент тронул впервые (CC4.1) — к результату.
+      if (trusted && outcome.ok && typeof args?.path === 'string') {
+        try {
+          const nested = nestedInstructions(projectDir, path.resolve(projectDir, args.path), loadedInstructions);
+          if (nested.length) {
+            outcome = {
+              ...outcome,
+              content: `${outcome.content}\n\n${nested.map((n) => `[Правила из ${n.rel} — действуют для файлов этой папки]\n${n.text}`).join('\n\n')}`,
+            };
+            emit({ type: 'notice', text: `Загружены правила: ${nested.map((n) => n.rel).join(', ')}` });
+          }
+        } catch {
+          /* инструкции не должны ломать шаг */
         }
       }
       emit({ type: 'tool_result', id: call.id, name: call.function.name, content: outcome.content, ok: outcome.ok, diff: outcome.diff || null });

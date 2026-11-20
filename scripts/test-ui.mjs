@@ -108,6 +108,11 @@ ipcMain.handle('checkpoints:rewind', (_e, payload) => {
   rewindCalls.push(payload);
   return { ok: true, mode: payload.mode, text: 'Покажи отчёт', messages: [], restored: ['a', 'b'], failed: [] };
 });
+const memoryAppends = [];
+ipcMain.handle('memory:append', (_e, payload) => {
+  memoryAppends.push(payload);
+  return { ok: true, changed: true, scope: payload.scope };
+});
 const answers = [];
 ipcMain.handle('chat:answer', (_e, payload) => {
   answers.push(payload);
@@ -122,7 +127,8 @@ ipcMain.handle('settings:get', () => ({
   projectDir: root,
   activeModel: 'test-model',
   permissionMode: 'manual',
-  providers: [],
+  // Провайдер «с ключом»: send() доходит до chat:start (мок ниже отвечает отказом).
+  providers: { 'test-model': { name: 'Test', apiKeySet: true, models: [] } },
   models: [],
 }));
 ipcMain.handle('runtimes:list', () => ({}));
@@ -138,7 +144,17 @@ const TEST_SESSION = {
     { role: 'assistant', content: '# Отчёт\n\nТекст ответа с **разметкой**.' },
   ],
 };
-ipcMain.handle('sessions:list', () => [TEST_SESSION]);
+const sessionListCalls = [];
+ipcMain.handle('sessions:list', (_e, options) => {
+  sessionListCalls.push(options || {});
+  return [{ ...TEST_SESSION, projectDir: root, updatedAt: '2026-11-20T10:00:00Z', count: 1, ...(options?.query ? { match: 'фрагмент с отчётом' } : {}) }];
+});
+// chat:start записывает запрос и отвечает отказом: прогон не начинается.
+const chatStarts = [];
+ipcMain.handle('chat:start', (_e, payload) => {
+  chatStarts.push(payload);
+  return { ok: false, error: 'тест: без прогона' };
+});
 ipcMain.handle('sessions:get', (_e, id) => (id === TEST_SESSION.id ? TEST_SESSION : null));
 
 // Экспорт: записываем вызовы, файл не пишем.
@@ -1072,6 +1088,37 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 400));
     check('откат вызван с режимом both и номером сообщения', rewindCalls.some((c) => c.mode === 'both' && c.turn === 0 && c.sessionId === 'test-session'), JSON.stringify(rewindCalls));
     check('текст сообщения вернулся в поле ввода', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === 'Покажи отчёт');
+
+    console.log('\n[22] Чаты по проекту, поиск, /resume, редактирование, # в память (CC6.3–CC6.7, CC4.3)');
+    const lastList = () => sessionListCalls.at(-1) || {};
+    check('список чатов — по текущему проекту', lastList().projectDir === root, JSON.stringify(lastList()));
+    await win.webContents.executeJavaScript(`document.querySelector('#sessions-scope').click()`);
+    await new Promise((r) => setTimeout(r, 200));
+    check('«все проекты» снимает фильтр', lastList().projectDir === '', JSON.stringify(lastList()));
+    await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('#sessions-search'); s.value = 'отчёт'; s.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await new Promise((r) => setTimeout(r, 450));
+    check('поиск уходит в main', lastList().query === 'отчёт', JSON.stringify(lastList()));
+    check('фрагмент совпадения в списке', (await win.webContents.executeJavaScript(`document.querySelector('.session-match')?.textContent || ''`)).includes('фрагмент'));
+
+    await win.webContents.executeJavaScript(`document.querySelector('.session').click()`);
+    await new Promise((r) => setTimeout(r, 600));
+    await win.webContents.executeJavaScript(`document.querySelector('.msg-user .edit-btn').click()`);
+    await new Promise((r) => setTimeout(r, 200));
+    const editing = await win.webContents.executeJavaScript(`({ value: document.querySelector('#input').value, banner: !document.querySelector('#edit-banner').hidden, marked: Boolean(document.querySelector('.msg-user.editing')) })`);
+    check('✎ кладёт текст в поле и показывает плашку', editing.value === 'Покажи отчёт' && editing.banner && editing.marked, JSON.stringify(editing));
+    const rewindsBefore = rewindCalls.length;
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = 'Покажи отчёт за неделю'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    check('отправка правки сначала откатывает диалог', rewindCalls.slice(rewindsBefore).some((c) => c.mode === 'conversation' && c.turn === 0), JSON.stringify(rewindCalls.slice(rewindsBefore)));
+    check('затем уходит новый текст', chatStarts.some((c) => c.displayText === 'Покажи отчёт за неделю'), JSON.stringify(chatStarts.map((c) => c.displayText)));
+
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '# тесты запускать через npm.cmd'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    const rec = await win.webContents.executeJavaScript(`document.querySelector('.remember-modal .recommended')?.dataset.scope || ''`);
+    check('# открывает «Запомнить?», рекомендована память проекта', rec === 'project', rec);
+    await win.webContents.executeJavaScript(`document.querySelector('.remember-modal .recommended').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('строка ушла в память, а не агенту', memoryAppends.some((m) => m.text === 'тесты запускать через npm.cmd' && m.scope === 'project') && !chatStarts.some((c) => /npm\.cmd/.test(c.text)), JSON.stringify(memoryAppends));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

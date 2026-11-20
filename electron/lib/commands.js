@@ -15,6 +15,7 @@ import path from 'node:path';
 export const BUILTIN_COMMANDS = [
   { name: 'help', description: 'Список команд и клавиш' },
   { name: 'clear', description: 'Новый чат' },
+  { name: 'resume', description: 'Найти и продолжить чат', argumentHint: '[поиск]' },
   { name: 'model', description: 'Сменить модель', argumentHint: '<часть названия>' },
   { name: 'mode', description: 'Режим разрешений', argumentHint: 'manual | acceptEdits | plan | dontAsk | bypass' },
   { name: 'init', description: 'Изучить проект и написать AGENTS.md' },

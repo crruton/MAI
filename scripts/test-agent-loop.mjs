@@ -589,6 +589,41 @@ console.log('\n[14] Чекпоинты настоящих правок и отк
   fs.rmSync(data, { recursive: true, force: true });
 }
 
+console.log('\n[15] AGENTS.local.md, импорты и вложенные AGENTS.md (CC4.1, CC4.2)');
+{
+  fs.writeFileSync(path.join(project, 'AGENTS.md'), '# Корень\n@docs/rules.md', 'utf8');
+  fs.mkdirSync(path.join(project, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'docs', 'rules.md'), 'ИМПОРТ-ПРАВИЛО', 'utf8');
+  fs.writeFileSync(path.join(project, 'AGENTS.local.md'), 'ЛИЧНОЕ-ПРАВИЛО', 'utf8');
+  fs.mkdirSync(path.join(project, 'svc'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'svc', 'AGENTS.md'), 'ПРАВИЛО-SVC', 'utf8');
+  fs.writeFileSync(path.join(project, 'svc', 'a.txt'), 'a', 'utf8');
+  const run = async (trusted) => {
+    const bodies = [];
+    const history = await runAgent(
+      base({
+        messages: [{ role: 'user', content: 'прочитай' }],
+        mcp: fakeMcp(),
+        trusted,
+        clientFactory: fakeClient(
+          [{ calls: [{ name: 'read_file', args: { path: 'svc/a.txt' } }, { name: 'read_file', args: { path: 'svc/a.txt' } }] }, { text: 'ок' }],
+          bodies,
+        ),
+        policy: { getMode: () => 'manual', getRules: () => ({}) },
+      }),
+    );
+    return { system: bodies[0].messages[0].content, tools: history.filter((m) => m.role === 'tool').map((m) => m.content) };
+  };
+  const trusted = await run(true);
+  check('импорт из AGENTS.md в системном промпте', trusted.system.includes('ИМПОРТ-ПРАВИЛО'));
+  check('AGENTS.local.md в системном промпте', trusted.system.includes('ЛИЧНОЕ-ПРАВИЛО'));
+  check('вложенный AGENTS.md не в системном промпте', !trusted.system.includes('ПРАВИЛО-SVC'));
+  check('вложенный AGENTS.md пришёл с первым чтением папки', /ПРАВИЛО-SVC/.test(trusted.tools[0]));
+  check('второй раз не повторяется', !/ПРАВИЛО-SVC/.test(trusted.tools[1]));
+  const untrusted = await run(false);
+  check('без доверия — ни импортов, ни вложенных правил', !untrusted.system.includes('ИМПОРТ-ПРАВИЛО') && !untrusted.tools.some((t) => /ПРАВИЛО-SVC/.test(t)));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

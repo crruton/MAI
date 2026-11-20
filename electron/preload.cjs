@@ -74,7 +74,7 @@ contextBridge.exposeInMainWorld('mai', {
     setRole: (role) => invoke('auth:setRole', role),
   },
   sessions: {
-    list: () => invoke('sessions:list'),
+    list: (options) => invoke('sessions:list', options),
     get: (id) => invoke('sessions:get', id),
     create: (data) => invoke('sessions:create', data),
     remove: (id) => invoke('sessions:delete', id),
@@ -110,6 +110,8 @@ contextBridge.exposeInMainWorld('mai', {
     read: (projectDir) => invoke('memory:read', projectDir),
     write: (file, content, projectDir) => invoke('memory:write', { file, content, projectDir }),
     save: (payload) => invoke('memory:save', payload),
+    // `# текст` в поле ввода → строка в память (CC4.3).
+    append: (payload) => invoke('memory:append', payload),
     version: (payload) => invoke('memory:version', payload),
     restore: (payload) => invoke('memory:restore', payload),
   },

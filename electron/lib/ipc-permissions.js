@@ -106,6 +106,7 @@ export const IPC_PERMISSIONS = {
   'memory:read': ANY,
   'memory:write': ADMIN,
   'memory:save': ADMIN,
+  'memory:append': ADMIN,
   'memory:version': ANY,
   'memory:restore': ADMIN,
   'skills:list': ANY,

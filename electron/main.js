@@ -949,7 +949,8 @@ ipcMain.handle('workspace:create', async (_e, payload) => {
 
 // ---------- сессии ----------
 
-ipcMain.handle('sessions:list', () => listSessions());
+// Фильтр по проекту и поиск по тексту (CC6.6, CC6.7).
+ipcMain.handle('sessions:list', (_e, options) => listSessions(options && typeof options === 'object' ? { projectDir: String(options.projectDir || ''), query: String(options.query || '').slice(0, 200) } : {}));
 ipcMain.handle('sessions:get', (_e, id) => getSession(id));
 ipcMain.handle('sessions:create', (_e, data) => createSession(data || {}));
 ipcMain.handle('sessions:delete', (_e, id) => {
@@ -1417,6 +1418,21 @@ ipcMain.handle('memory:read', (_e, projectDir) => readMemoryState(projectDir));
 ipcMain.handle('memory:write', (_e, { file, content, projectDir }) => {
   requireAdmin();
   return saveMemoryFile(projectOf({ projectDir }), file, content);
+});
+
+/** Быстрая запись `# текст` из поля ввода (CC4.3): строка в конец памяти, без дублей. */
+ipcMain.handle('memory:append', (_e, payload = {}) => {
+  const projectDir = projectOf(payload);
+  const scope = payload.scope === 'global' ? 'global' : 'project';
+  const text = String(payload.text || '').trim().slice(0, 4000);
+  if (!text) return { ok: false, error: 'Пустая запись' };
+  const state = readMemoryState(projectDir);
+  const current = String(state[scope] || '');
+  const line = text.startsWith('- ') ? text : `- ${text}`;
+  if (current.includes(text)) return { ok: true, changed: false, scope };
+  const separator = current.trim() ? (current.endsWith('\n') ? '' : '\n') : '';
+  const result = saveMemory(projectDir, { scope, content: `${current}${separator}${line}\n`, note: 'запись из поля ввода (#)' });
+  return { ok: true, changed: true, scope, version: result.version };
 });
 
 ipcMain.handle('memory:save', (_e, payload) => {

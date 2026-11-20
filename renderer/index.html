@@ -25,7 +25,12 @@
         <button class="btn primary new-chat" id="new-chat">＋ Новый чат</button>
         <button class="btn export-chat" id="export-chat" title="Скачать весь диалог">⤓ Скачать чат</button>
 
-        <div class="sidebar-section">Чаты</div>
+        <div class="sidebar-section sessions-head">
+          <span>Чаты</span>
+          <!-- Чаты текущей папки или все (CC6.6). -->
+          <button class="sessions-scope" id="sessions-scope" type="button" title="Показать чаты всех проектов">этот проект</button>
+        </div>
+        <input class="sessions-search" id="sessions-search" type="search" placeholder="Поиск по чатам…" />
         <div class="sessions" id="sessions"></div>
 
         <div class="sidebar-footer">
@@ -90,6 +95,7 @@
           <!-- Список задач агента (CC1.5) и очередь сообщений (CC7.5). -->
           <div class="todos" id="todos" hidden></div>
           <div class="composer" id="composer">
+            <div class="edit-banner" id="edit-banner" hidden>Редактирование сообщения: после отправки оно и всё, что после него, заменятся · Esc — отменить</div>
             <div class="queue" id="queue" hidden></div>
             <div class="suggest" id="suggest" role="listbox" hidden></div>
             <div class="attachments" id="attachments" hidden></div>

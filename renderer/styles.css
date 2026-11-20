@@ -615,6 +615,24 @@ button { cursor: pointer; }
 .rewind-files { margin: 8px 0; display: grid; gap: 3px; }
 .rewind-file { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
 
+/* ---------- чаты по проектам, поиск, редактирование (CC6.3–CC6.7) ---------- */
+.sessions-head { display: flex; justify-content: space-between; align-items: center; }
+.sessions-scope { background: none; border: 1px solid var(--border); color: var(--text-dim); border-radius: 999px; font-size: 10px; padding: 1px 8px; cursor: pointer; }
+.sessions-search {
+  width: calc(100% - 16px); margin: 4px 8px 6px; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px;
+}
+.sessions-empty { font-size: 12px; color: var(--text-faint); padding: 8px 12px; }
+.session-match { display: block; font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resume-list { display: grid; gap: 4px; max-height: 420px; overflow: auto; margin-top: 8px; }
+.edit-btn {
+  align-self: center; background: none; border: 1px solid transparent; color: var(--text-faint);
+  border-radius: 6px; cursor: pointer; opacity: 0; transition: opacity 0.15s; font-size: 13px;
+}
+.msg-user:hover .edit-btn, .edit-btn:focus { opacity: 1; border-color: var(--border); }
+.msg-user.editing .bubble { outline: 2px dashed var(--accent); outline-offset: 2px; }
+.edit-banner { font-size: 12px; color: var(--accent-2); padding: 4px 8px; margin-bottom: 6px; border: 1px dashed var(--accent); border-radius: 8px; }
+
 /* ---------- ревизор ---------- */
 .msg-review { display: flex; justify-content: center; }
 .review-card {

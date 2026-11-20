@@ -30,7 +30,7 @@
 | `electron/preload.cjs` | мост `window.mai`, список каналов |
 | `electron/lib/config.js` | настройки, ключ, каталог данных |
 | `electron/lib/models.js` | `GET /v1/models`, фильтр чат-моделей, кэш 5 мин |
-| `electron/lib/sessions.js` | `sessions.json` |
+| `electron/lib/sessions.js`, `session-store.js` | `sessions/<id>.json`, `sessions/index.json` (ADR 0034) |
 | `electron/lib/agent.js` | цикл агента, стриминг, вызов инструментов |
 | `electron/lib/skills.js` | навыки, `AGENTS.md` |
 | `electron/lib/mcp.js` | MCP-менеджер (stdio + streamable HTTP) |
@@ -223,6 +223,15 @@ ADR 0033. `runAgent({ checkpoint })` получает регистратор `cr
 `write_file`/`edit_file` зовут `ctx.beforeWrite(file)` до записи. IPC:
 `checkpoints:turns(sessionId)`, `checkpoints:plan({ sessionId, turn })`,
 `checkpoints:rewind({ sessionId, turn, mode: 'both' | 'code' | 'conversation' })`.
+
+### Чаты и инструкции проекта
+
+ADR 0034: `session-store.js` — `sessions/<id>.json` и `sessions/index.json`,
+`sessions:list({ projectDir, query })`. `instructions.js`: `projectInstructions`
+(AGENTS.md + AGENTS.local.md с `@`-импортами, глубина 3, только внутри проекта)
+и `nestedInstructions` — вложенные AGENTS.md дописываются к результату
+инструмента с полем `path` один раз за прогон. `memory:append({ scope, text })`
+— быстрая запись из поля ввода.
 
 ## Доверие к папке и матрица прав IPC
 
