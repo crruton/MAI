@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import { runAgent, trimMessages, toApiMessage, compactSession } from '../electron/lib/agent.js';
 import { loadPlugins } from '../electron/lib/plugins.js';
+import { createRecorder, rewindFiles, rewindPlan } from '../electron/lib/checkpoints.js';
 import { disposePluginHosts } from '../electron/lib/plugin-host.js';
 
 let pass = 0;
@@ -554,6 +555,38 @@ console.log('\n[13] Автокомпакция у порога контекст�
   check('/compact: пожелание дошло до суммаризатора', /сохрани решения/.test(summaries.at(-1)));
   const none = await compactSession({ provider: { baseURL: 'x', apiKey: 'k' }, model: 'm', messages: [{ role: 'user', content: 'один ход' }], clientFactory: client });
   check('/compact на одном ходе — нечего сжимать', none.marker === null);
+}
+
+console.log('\n[14] Чекпоинты настоящих правок и откат (CC6.1)');
+{
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-loop-cp-'));
+  const file = path.join(project, 'cp.txt');
+  fs.writeFileSync(file, 'исходный', 'utf8');
+  const checkpoint = createRecorder({ dataDir: data, sessionId: 'loop', projectDir: project });
+  const history = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'старый ход' }, { role: 'assistant', content: 'ок' }, { role: 'user', content: 'поправь файл' }],
+      mcp: fakeMcp(),
+      checkpoint,
+      clientFactory: fakeClient(
+        [
+          { calls: [{ name: 'edit_file', args: { path: 'cp.txt', old_string: 'исходный', new_string: 'правка 1' } }] },
+          { calls: [{ name: 'write_file', args: { path: 'cp-new.txt', content: 'создан' } }] },
+          { text: 'готово' },
+        ],
+        [],
+      ),
+      policy: { getMode: () => 'bypass', getRules: () => ({}) },
+    }),
+  );
+  check('правки выполнены', fs.readFileSync(file, 'utf8') === 'правка 1' && fs.existsSync(path.join(project, 'cp-new.txt')));
+  const plan = rewindPlan(data, 'loop', 2);
+  check('чекпоинт привязан к сообщению «поправь файл» (индекс 2)', plan.length === 2, JSON.stringify(plan));
+  rewindFiles(data, 'loop', 2);
+  check('откат вернул исходный текст', fs.readFileSync(file, 'utf8') === 'исходный');
+  check('откат удалил созданный файл', !fs.existsSync(path.join(project, 'cp-new.txt')));
+  check('история прогона не тронута откатом кода', history.length > 3);
+  fs.rmSync(data, { recursive: true, force: true });
 }
 
 fs.rmSync(project, { recursive: true, force: true });

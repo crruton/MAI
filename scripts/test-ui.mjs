@@ -92,6 +92,22 @@ ipcMain.handle('chat:compact', (_e, payload) => {
   compactCalls.push(payload);
   return { ok: true, marker: { role: 'compaction', content: 'сводка', messages: 12 }, messages: [{ role: 'compaction', content: '**сводка** работы', messages: 12 }] };
 });
+// Чекпоинты и откат (раздел [21]).
+const rewindCalls = [];
+ipcMain.handle('checkpoints:turns', () => [{ turn: 0, files: 2 }]);
+ipcMain.handle('checkpoints:plan', () => ({
+  ok: true,
+  text: 'Покажи отчёт',
+  later: 2,
+  files: [
+    { file: 'src/a.js', action: 'restore', changed: true },
+    { file: 'src/new.js', action: 'delete', changed: true },
+  ],
+}));
+ipcMain.handle('checkpoints:rewind', (_e, payload) => {
+  rewindCalls.push(payload);
+  return { ok: true, mode: payload.mode, text: 'Покажи отчёт', messages: [], restored: ['a', 'b'], failed: [] };
+});
 const answers = [];
 ipcMain.handle('chat:answer', (_e, payload) => {
   answers.push(payload);
@@ -1031,6 +1047,31 @@ app.whenReady().then(async () => {
     check('/cost показывает токены и кэш', /1 шагов · ↑1K \(кэш 800\) ↓300/.test(cost), cost);
     check('без цены — честно «цена не задана»', /цена не задана/.test(cost), cost);
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[21] Откат к сообщению (CC6.1)');
+    await win.webContents.executeJavaScript(`document.querySelector('.session')?.click()`);
+    await new Promise((r) => setTimeout(r, 600));
+    const btn = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector('.msg-user .rewind-btn'); return { found: Boolean(b), edited: b?.classList.contains('edited') }; })()`);
+    check('у своего сообщения есть кнопка отката', btn.found, JSON.stringify(btn));
+    check('сообщение с правками отмечено', btn.edited === true);
+    await win.webContents.executeJavaScript(`document.querySelector('.msg-user .rewind-btn').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const rw = await win.webContents.executeJavaScript(`(() => {
+      const m = document.querySelector('.rewind-modal');
+      return {
+        found: Boolean(m),
+        files: [...(m?.querySelectorAll('.rewind-file') || [])].map((f) => f.textContent),
+        recommended: m?.querySelector('.recommended')?.dataset.mode || '',
+        note: m?.textContent.includes('run_shell') || false,
+      };
+    })()`);
+    check('окно отката с файлами', rw.found && rw.files.length === 2 && rw.files.some((t) => t.includes('удалить')), JSON.stringify(rw));
+    check('рекомендовано «Код и диалог»', rw.recommended === 'both', rw.recommended);
+    check('честно про run_shell', rw.note === true);
+    await win.webContents.executeJavaScript(`document.querySelector('.rewind-modal .recommended').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('откат вызван с режимом both и номером сообщения', rewindCalls.some((c) => c.mode === 'both' && c.turn === 0 && c.sessionId === 'test-session'), JSON.stringify(rewindCalls));
+    check('текст сообщения вернулся в поле ввода', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === 'Покажи отчёт');
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

@@ -12,6 +12,7 @@ import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './l
 import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, addSessionRules, removeSessionRules } from './lib/sessions.js';
 import { runAgent, compactSession, describeContext } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
+import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -954,6 +955,7 @@ ipcMain.handle('sessions:create', (_e, data) => createSession(data || {}));
 ipcMain.handle('sessions:delete', (_e, id) => {
   const session = getSession(id);
   if (session?.projectDir) removeSessionUploads(session.projectDir, id);
+  removeCheckpoints(dataDir(), id);
   return deleteSession(id);
 });
 
@@ -1073,6 +1075,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
         trusted,
         // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Чекпоинты правок для отката (CC6.1).
+        checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -1234,6 +1238,54 @@ ipcMain.handle('chat:stop', (event) => {
   denyApprovals(state);
   state.controller?.abort();
   return true;
+});
+
+// ---------- чекпоинты и откат (CC6.1) ----------
+
+ipcMain.handle('checkpoints:turns', (_e, sessionId) => (sessionId ? checkpointTurns(dataDir(), sessionId) : []));
+
+/** Что вернёт откат к сообщению: файлы и меняются ли они с тех пор. */
+ipcMain.handle('checkpoints:plan', (_e, payload = {}) => {
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  if (!session) return { ok: false, error: 'Чат не найден' };
+  const turn = Number(payload.turn);
+  const message = session.messages?.[turn];
+  if (message?.role !== 'user') return { ok: false, error: 'Откат возможен только к сообщению пользователя' };
+  return {
+    ok: true,
+    text: message.display || message.content || '',
+    later: session.messages.length - turn,
+    files: rewindPlan(dataDir(), session.id, turn).map((f) => ({ ...f, file: path.relative(session.projectDir || '', f.file) || f.file })),
+  };
+});
+
+/**
+ * Откат к сообщению пользователя: `code` — файлы, `conversation` — история
+ * (сообщение и всё после него удаляются, текст возвращается в поле ввода), `both`.
+ */
+ipcMain.handle('checkpoints:rewind', (event, payload = {}) => {
+  const state = runState(BrowserWindow.fromWebContents(event.sender));
+  if (state.controller) return { ok: false, error: 'Агент работает — остановите его перед откатом' };
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  if (!session) return { ok: false, error: 'Чат не найден' };
+  const turn = Number(payload.turn);
+  const message = session.messages?.[turn];
+  if (message?.role !== 'user') return { ok: false, error: 'Откат возможен только к сообщению пользователя' };
+  const mode = ['code', 'conversation', 'both'].includes(payload.mode) ? payload.mode : 'both';
+  const lock = acquireProject(session.projectDir, { label: 'откат' });
+  if (!lock.ok) return { ok: false, busy: true, error: lock.error };
+  try {
+    let files = { restored: [], failed: [] };
+    if (mode !== 'conversation') files = rewindFiles(dataDir(), session.id, turn);
+    if (mode !== 'code') {
+      session.messages = session.messages.slice(0, turn);
+      saveSession(session);
+    }
+    audit({ at: new Date().toISOString(), tool: 'rewind', source: 'user', cls: 'write', subject: `ход ${turn}`, mode, decision: 'allow', restored: files.restored.length });
+    return { ok: true, mode, text: message.display || message.content || '', messages: session.messages, ...files };
+  } finally {
+    lock.release();
+  }
 });
 
 /** Ручная компакция (`/compact [что учесть]`, CC5.3). Только когда агент не работает. */
@@ -1828,6 +1880,8 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         trusted,
         // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Чекпоинты правок для отката (CC6.1).
+        checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {

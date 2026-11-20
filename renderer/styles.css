@@ -604,6 +604,17 @@ button { cursor: pointer; }
 .compaction-card { max-width: 760px; width: 100%; border: 1px dashed var(--border); border-radius: var(--radius); padding: 8px 14px; color: var(--text-dim); }
 .compaction-card summary { cursor: pointer; font-size: 12px; }
 
+/* ---------- откат к сообщению (CC6.1) ---------- */
+.msg-user { position: relative; }
+.rewind-btn {
+  align-self: center; margin-right: 6px; background: none; border: 1px solid transparent; color: var(--text-faint);
+  border-radius: 6px; cursor: pointer; opacity: 0; transition: opacity 0.15s; font-size: 14px;
+}
+.msg-user:hover .rewind-btn, .rewind-btn:focus { opacity: 1; border-color: var(--border); }
+.rewind-btn.edited { color: var(--amber); opacity: 0.6; }
+.rewind-files { margin: 8px 0; display: grid; gap: 3px; }
+.rewind-file { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+
 /* ---------- ревизор ---------- */
 .msg-review { display: flex; justify-content: center; }
 .review-card {

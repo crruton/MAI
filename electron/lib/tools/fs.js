@@ -214,6 +214,8 @@ export const fsTools = [
     async run(ctx, args) {
       const file = resolveInside(ctx, args.path);
       assertNotSecret(ctx, file, 'запись');
+      // Чекпоинт до записи: откат вернёт исходное содержимое (CC6.1).
+      ctx.beforeWrite?.(file);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, args.content ?? '', 'utf8');
       return `Записано: ${file} (${(args.content || '').length} символов)`;
@@ -265,6 +267,7 @@ export const fsTools = [
       const count = text.split(args.old_string).length - 1;
       if (count === 0) return `Фрагмент не найден в ${file}`;
       if (count > 1) return `Фрагмент встречается ${count} раз — уточните old_string`;
+      ctx.beforeWrite?.(file);
       fs.writeFileSync(file, text.replace(args.old_string, () => args.new_string), 'utf8');
       return `Изменено: ${file}`;
     },

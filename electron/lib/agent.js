@@ -232,6 +232,7 @@ export async function runAgent({
   trusted = true,
   ask = null,
   pullQueued = null,
+  checkpoint = null,
   onHistory = null,
   clientFactory = null,
   contextWindow = DEFAULT_CONTEXT,
@@ -558,6 +559,21 @@ export async function runAgent({
             signal,
             progress: (text) => emit({ type: 'tool_progress', id: call.id, text: String(text).slice(0, 8000) }),
             todos: (todos) => emit({ type: 'todos', todos }),
+            // Чекпоинт правки — к последнему сообщению пользователя (CC6.1).
+            beforeWrite: (file) => {
+              try {
+                let turn = -1;
+                for (let k = history.length - 1; k >= 0; k -= 1) {
+                  if (history[k].role === 'user') {
+                    turn = k;
+                    break;
+                  }
+                }
+                checkpoint?.record(file, turn);
+              } catch {
+                /* чекпоинт не должен ломать правку */
+              }
+            },
           };
           outcome = await runToolCall({ entry, args, ctx: callCtx, policy: policyCtx, approve, audit });
         }

@@ -217,6 +217,13 @@ ADR 0032. `runAgent({ contextWindow })` перед каждым шагом сч�
 последнего маркера. IPC: `chat:compact({ sessionId, instructions })`,
 `context:stats({ sessionId, projectDir, model })`.
 
+### Чекпоинты и откат
+
+ADR 0033. `runAgent({ checkpoint })` получает регистратор `createRecorder`;
+`write_file`/`edit_file` зовут `ctx.beforeWrite(file)` до записи. IPC:
+`checkpoints:turns(sessionId)`, `checkpoints:plan({ sessionId, turn })`,
+`checkpoints:rewind({ sessionId, turn, mode: 'both' | 'code' | 'conversation' })`.
+
 ## Доверие к папке и матрица прав IPC
 
 Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или

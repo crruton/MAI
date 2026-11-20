@@ -47,3 +47,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0030](0030-plaginy-v-otdelnom-processe.md) | Плагины в отдельном процессе, песочница окон и CSP | accepted | 2026-11-19 |
 | [0031](0031-shifrovanie-klyuchej-i-dialogovye-instrumenty.md) | Шифрование ключей и диалоговые инструменты ask_user, exit_plan | accepted | 2026-11-19 |
 | [0032](0032-kontekst-i-kompakciya.md) | Учёт контекста и компакция истории | accepted | 2026-11-20 |
+| [0033](0033-chekpointy-i-otkat.md) | Чекпоинты правок и откат к сообщению | accepted | 2026-11-20 |

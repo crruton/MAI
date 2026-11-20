@@ -31,6 +31,8 @@ const state = {
   commands: null,
   // Заполнение контекста модели (CC5.1): { used, window, exact }.
   context: null,
+  // Индексы сообщений пользователя, после которых есть чекпоинт правок (CC6.1).
+  checkpointTurns: new Set(),
   // Запрос разрешения — карточкой в ленте (CC7.1).
   approval: null,
   // Живой вывод команд по id вызова (CC7.4).
@@ -596,10 +598,10 @@ function renderAll() {
     return;
   }
 
-  for (const message of state.messages) {
-    const node = messageNode(message);
+  state.messages.forEach((message, index) => {
+    const node = messageNode(message, index);
     if (node) box.append(node);
-  }
+  });
   if (state.live) box.append(liveNode());
   for (const live of state.liveRuntimes) {
     box.append(runtimeNode(live.name, live.output, null, true));
@@ -904,9 +906,19 @@ function pickExportFormat(anchor) {
   });
 }
 
-function messageNode(message) {
+function messageNode(message, index = -1) {
   if (message.role === 'user') {
+    const edited = state.checkpointTurns?.has(index);
     return el('div', { class: 'msg msg-user' }, [
+      state.sessionId && index >= 0 && !state.running
+        ? el('button', {
+            class: `rewind-btn${edited ? ' edited' : ''}`,
+            type: 'button',
+            title: edited ? 'Вернуться сюда: откатить правки файлов и диалог' : 'Вернуться сюда: откатить диалог',
+            text: '↺',
+            onclick: () => openRewind(index),
+          })
+        : null,
       el('div', { class: 'bubble', text: message.display || message.content || '' }),
     ]);
   }
@@ -1204,6 +1216,7 @@ async function loadSession(id) {
   state.todos = todosFromHistory(state.messages);
   renderTodos();
   refreshContext();
+  await refreshCheckpoints();
   state.live = null;
   state.liveRuntimes = [];
   clearAttachments();
@@ -1543,6 +1556,106 @@ async function runSlash(text) {
       await send({ text: result.prompt, display: text });
     }
   }
+}
+
+/* ---------- чекпоинты и откат (CC6.1) ---------- */
+
+async function refreshCheckpoints() {
+  if (!state.sessionId) {
+    state.checkpointTurns = new Set();
+    return;
+  }
+  try {
+    const turns = await api.chat.checkpoints(state.sessionId);
+    state.checkpointTurns = new Set(turns.map((t) => t.turn));
+  } catch {
+    state.checkpointTurns = new Set();
+  }
+}
+
+async function openRewind(turn) {
+  const plan = await api.chat.rewindPlan(state.sessionId, turn);
+  if (!plan?.ok) {
+    toast(plan?.error || 'Откат недоступен', 'err');
+    return;
+  }
+  const files = plan.files || [];
+  const actionText = { restore: 'вернуть', delete: 'удалить (файла не было)', skip: 'пропустить' };
+  const recommended = files.length ? 'both' : 'conversation';
+  const run = async (mode) => {
+    modal.close();
+    const result = await api.chat.rewind(state.sessionId, turn, mode);
+    if (!result?.ok) {
+      toast(result?.error || 'Откат не выполнен', 'err');
+      return;
+    }
+    if (mode !== 'code') {
+      state.messages = result.messages || [];
+      state.toolResults = {};
+      for (const m of state.messages) {
+        if (m.role === 'tool' && m.tool_call_id) state.toolResults[m.tool_call_id] = { ok: !String(m.content || '').startsWith('Ошибка'), content: m.content, diff: m.diff || null };
+      }
+      state.todos = todosFromHistory(state.messages);
+      renderTodos();
+      const input = $('#input');
+      input.value = result.text || '';
+      autosize();
+      input.focus();
+    }
+    await refreshCheckpoints();
+    renderAll();
+    refreshContext();
+    const parts = [];
+    if (mode !== 'conversation') parts.push(`файлов возвращено: ${result.restored?.length || 0}`);
+    if (mode !== 'code') parts.push('диалог возвращён к сообщению');
+    if (result.failed?.length) parts.push(`не удалось: ${result.failed.map((f) => f.file).join(', ')}`);
+    toast(`Откат: ${parts.join(' · ')}`, result.failed?.length ? 'err' : 'ok');
+  };
+  const option = (key, label, mode, hint, disabled = false) =>
+    el(
+      'button',
+      {
+        class: `btn approve-option${mode === recommended ? ' primary recommended' : ''}`,
+        type: 'button',
+        'data-mode': mode,
+        disabled: disabled ? 'disabled' : null,
+        onclick: () => run(mode),
+      },
+      [
+        el('span', { class: 'approve-key', text: key }),
+        el('span', { class: 'trust-option-text' }, [el('b', { text: label }), el('small', { text: hint })]),
+        mode === recommended ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+      ],
+    );
+  const modal = openModal({
+    title: 'Вернуться к сообщению?',
+    small: true,
+    body: [
+      el('div', { class: 'approve-args', text: plan.text }),
+      files.length
+        ? el('div', { class: 'rewind-files' }, [
+            el('div', { class: 'docs-group-title', text: `Файлы (${files.length})` }),
+            ...files.map((f) =>
+              el('div', { class: 'rewind-file' }, [
+                el('span', { class: 'suggest-path', text: f.file }),
+                el('span', { class: 'hint-text', text: `${actionText[f.action] || f.action}${f.changed ? '' : ' · уже как было'}${f.reason ? ` · ${f.reason}` : ''}` }),
+              ]),
+            ),
+          ])
+        : el('p', { class: 'hint-text', text: 'После этого сообщения агент не правил файлы через write_file и edit_file.' }),
+      el('p', {
+        class: 'hint-text',
+        text: `Диалог: сообщение и ${Math.max(0, plan.later - 1)} следующих уйдут из чата, текст вернётся в поле ввода. Изменения, сделанные командами run_shell, откат не возвращает.`,
+      }),
+    ],
+    footer: [
+      option('1', 'Код и диалог', 'both', 'файлы и чат — как до этого сообщения', !files.length),
+      option('2', 'Только диалог', 'conversation', 'файлы остаются как есть'),
+      option('3', 'Только код', 'code', 'чат остаётся, файлы — как до сообщения', !files.length),
+    ],
+  });
+  modal.modal.classList.add('approve-modal', 'rewind-modal');
+  modal.footEl.querySelector('.recommended')?.focus();
 }
 
 /* ---------- контекст, компакция, стоимость (CC5.1–CC5.5) ---------- */
@@ -2067,6 +2180,7 @@ function handleEvent(event) {
       );
       break;
     case 'done':
+      refreshCheckpoints().then(() => renderAll());
       notify('Агент закончил', [...(event.messages || [])].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '');
       state.messages = event.messages || state.messages;
       state.live = null;

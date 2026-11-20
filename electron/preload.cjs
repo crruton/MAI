@@ -92,6 +92,10 @@ contextBridge.exposeInMainWorld('mai', {
     // Контекст и компакция (CC5.2, CC5.3).
     compact: (sessionId, instructions) => invoke('chat:compact', { sessionId, instructions }),
     context: (payload) => invoke('context:stats', payload),
+    // Чекпоинты и откат (CC6.1).
+    checkpoints: (sessionId) => invoke('checkpoints:turns', sessionId),
+    rewindPlan: (sessionId, turn) => invoke('checkpoints:plan', { sessionId, turn }),
+    rewind: (sessionId, turn, mode) => invoke('checkpoints:rewind', { sessionId, turn, mode }),
     onEvent: (handler) => {
       const listener = (_event, data) => handler(data);
       ipcRenderer.on('chat:event', listener);
