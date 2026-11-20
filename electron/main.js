@@ -19,7 +19,7 @@ import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFi
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
 import { loadPlugins, pluginDirs } from './lib/plugins.js';
-import { disposePluginHosts } from './lib/plugin-host.js';
+import { disposePluginHosts, retirePluginHosts } from './lib/plugin-host.js';
 import {
   listArtifacts,
   readArtifact,
@@ -721,6 +721,8 @@ ipcMain.handle('project:pick', async () => {
   requireAdmin();
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (result.canceled || !result.filePaths[0]) return null;
+  // Процесс плагинов старого проекта держит его папку (cwd): останавливаем после текущих вызовов.
+  retirePluginHosts();
   saveSettings({ projectDir: result.filePaths[0] });
   return result.filePaths[0];
 });

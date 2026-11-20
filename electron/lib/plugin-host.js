@@ -164,6 +164,30 @@ export async function hostFor(key, files, signature, options = {}) {
   return host;
 }
 
+/**
+ * Останавливает хосты и ждёт выхода процессов (до `timeoutMs`). Нужно на
+ * Windows: процесс хоста держит рабочую папку проекта, и пока он не вышел,
+ * папку нельзя удалить или переименовать.
+ */
+export async function disposePluginHostsAndWait(timeoutMs = 3000) {
+  const children = [...hosts.values()].map(({ host }) => host.child).filter(Boolean);
+  const exited = children.map(
+    (child) =>
+      new Promise((resolve) => {
+        child.once('exit', resolve);
+        setTimeout(resolve, timeoutMs);
+      }),
+  );
+  disposePluginHosts();
+  await Promise.all(exited);
+}
+
+/** Остановить хосты после текущих вызовов — при смене папки проекта (освобождает её на Windows). */
+export function retirePluginHosts() {
+  for (const { host } of hosts.values()) host.retire();
+  hosts.clear();
+}
+
 export function disposePluginHosts() {
   for (const { host } of hosts.values()) host.kill();
   hosts.clear();

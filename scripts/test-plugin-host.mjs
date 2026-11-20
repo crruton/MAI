@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
 import { loadPlugins } from '../electron/lib/plugins.js';
-import { disposePluginHosts, pluginHostCount, pluginEnv } from '../electron/lib/plugin-host.js';
+import { disposePluginHostsAndWait, pluginHostCount, pluginEnv } from '../electron/lib/plugin-host.js';
 
 let pass = 0;
 let fail = 0;
@@ -144,8 +144,13 @@ app.whenReady().then(async () => {
     console.log(`  FAIL исключение: ${err?.stack || err}`);
   }
 
-  disposePluginHosts();
-  fs.rmSync(project, { recursive: true, force: true });
+  // На Windows процесс хоста держит папку проекта (cwd): сначала дождаться выхода.
+  await disposePluginHostsAndWait();
+  try {
+    fs.rmSync(project, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch {
+    /* временная папка останется — на результат не влияет */
+  }
   console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
   app.exit(fail ? 1 : 0);
 });
