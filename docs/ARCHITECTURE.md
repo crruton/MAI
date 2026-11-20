@@ -249,6 +249,13 @@ ADR 0036. `runAgent({ agentDefs })` добавляет инструмент `age
 `subagent` сужает инструменты (`def.tools`, без `NEVER_FOR_SUBAGENT`) и
 отключает ревизор и `Stop`. IPC `agents:defs(projectDir)`.
 
+### Вывод консоли на Windows
+
+`electron/lib/encoding.js`: `withUtf8Console` добавляет `chcp 65001` перед
+командой `cmd.exe` (`run_shell`, стадии досок); `createOutputDecoder` читает
+вывод как UTF-8, а невалидные куски перекодирует из cp866 или cp1251. CI
+гоняет всё на `windows-latest` (`scripts/test-windows.mjs` и электронные наборы).
+
 ## Доверие к папке и матрица прав IPC
 
 Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или

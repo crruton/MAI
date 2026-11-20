@@ -13,6 +13,7 @@ import { startRuntime, spawnPlan } from '../electron/lib/runtimes.js';
 import { execute, shellTools } from '../electron/lib/tools/shell.js';
 import { createHookRunner, normalizeHooks } from '../electron/lib/hooks.js';
 import { DEFAULT_GUARDRAILS, checkCommand } from '../electron/lib/guardrails.js';
+import { runStage } from '../electron/lib/deploy.js';
 
 if (process.platform !== 'win32') {
   console.log('Пропущено: не Windows.');
@@ -117,6 +118,17 @@ console.log('\n[2] «Стоп» останавливает дерево проц
     error = err.message;
   }
   check('run_shell: cwd вне проекта отклонён', /вне проекта/.test(error), error);
+}
+
+console.log('\n[2b] Кириллица в выводе cmd.exe');
+{
+  const out = await execute('echo живой текст', dir);
+  check('run_shell: кириллица в выводе без кракозябр', out.includes('живой текст'), JSON.stringify(out.slice(0, 200)));
+  const chunks = [];
+  await execute('echo живой вывод', dir, { onData: (t) => chunks.push(t) });
+  check('живой вывод тоже в UTF-8', chunks.join('').includes('живой вывод'), JSON.stringify(chunks));
+  const stage = await new Promise((resolve) => runStage({ projectDir: dir, command: 'echo стадия собрана', onData: () => {}, onExit: resolve }));
+  check('стадия доски: кириллица без кракозябр', String(stage.log || '').includes('стадия собрана'), JSON.stringify(stage).slice(0, 200));
 }
 
 console.log('\n[3] Guardrails на командах Windows');

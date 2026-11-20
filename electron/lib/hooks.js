@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { createOutputDecoder } from './encoding.js';
 
 export const HOOK_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'PreCompact', 'SessionStart'];
 const DEFAULT_TIMEOUT_S = 60;
@@ -102,8 +103,10 @@ function runCommand(command, { input, cwd, timeout, env }) {
         }
       }
     }, timeout * 1000);
-    child.stdout.on('data', (d) => (stdout = `${stdout}${d}`.slice(0, MAX_OUTPUT)));
-    child.stderr.on('data', (d) => (stderr = `${stderr}${d}`.slice(0, MAX_OUTPUT)));
+    const decodeOut = createOutputDecoder();
+    const decodeErr = createOutputDecoder();
+    child.stdout.on('data', (d) => (stdout = `${stdout}${decodeOut(d)}`.slice(0, MAX_OUTPUT)));
+    child.stderr.on('data', (d) => (stderr = `${stderr}${decodeErr(d)}`.slice(0, MAX_OUTPUT)));
     child.stdin.on('error', () => {});
     child.stdin.end(JSON.stringify(input));
     child.on('error', (err) => {

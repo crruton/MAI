@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { checkCommand } from '../guardrails.js';
+import { createOutputDecoder, withUtf8Console } from '../encoding.js';
 
 const MAX_OUTPUT = 24_000;
 const TIMEOUT_MS = 180_000;
@@ -113,7 +114,9 @@ export function execute(command, cwd, { onData, signal } = {}) {
       resolve(`$ ${command}\n\n[остановлено до запуска]`);
       return;
     }
-    const child = spawn(command, {
+    // На Windows консоль переводится в UTF-8, а вывод в кодировке консоли перекодируется.
+    const decode = createOutputDecoder();
+    const child = spawn(withUtf8Console(command), {
       cwd,
       shell: true,
       windowsHide: true,
@@ -131,7 +134,7 @@ export function execute(command, cwd, { onData, signal } = {}) {
     const onAbort = () => stop('остановлено пользователем');
     signal?.addEventListener('abort', onAbort, { once: true });
     const push = (d) => {
-      const text = d.toString();
+      const text = decode(d);
       out += text;
       try {
         onData?.(text);

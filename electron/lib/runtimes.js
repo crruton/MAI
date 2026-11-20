@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { createOutputDecoder } from './encoding.js';
 
 const MAX_OUTPUT = 300_000;
 const TIMEOUT_MS = 30 * 60 * 1000;
@@ -289,11 +290,14 @@ export function startRuntime({ runtime, prompt, model, projectDir, permissionMod
   }
 
   const transform = runtime.parser === 'opencode-json' ? opencodeParser() : null;
+  // Вывод CLI на Windows может прийти в кодировке консоли — перекодируем.
+  const decode = createOutputDecoder();
   let output = '';
   let finished = false;
 
   const push = (chunk) => {
-    const text = transform ? transform(chunk.toString()) : chunk.toString();
+    const raw = decode(chunk);
+    const text = transform ? transform(raw) : raw;
     if (!text) return;
     output += text;
     if (output.length > MAX_OUTPUT) output = output.slice(-MAX_OUTPUT);
