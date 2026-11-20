@@ -127,6 +127,11 @@ console.log('\n[2b] Кириллица в выводе cmd.exe');
   const chunks = [];
   await execute('echo живой вывод', dir, { onData: (t) => chunks.push(t) });
   check('живой вывод тоже в UTF-8', chunks.join('').includes('живой вывод'), JSON.stringify(chunks));
+  // Составная команда с кавычками и & внутри вложенного cmd.
+  const compound = await execute('echo один & echo "два три" & echo четыре', dir);
+  check('составная команда: все части, кириллица, кавычки', compound.includes('один') && compound.includes('"два три"') && compound.includes('четыре'), JSON.stringify(compound.slice(0, 300)));
+  const code = await execute('exit /b 3', dir);
+  check('код возврата проходит через вложенный cmd', /\[код 3/.test(code), code.slice(-80));
   const stage = await new Promise((resolve) => runStage({ projectDir: dir, command: 'echo стадия собрана', onData: () => {}, onExit: resolve }));
   check('стадия доски: кириллица без кракозябр', String(stage.log || '').includes('стадия собрана'), JSON.stringify(stage).slice(0, 200));
 }

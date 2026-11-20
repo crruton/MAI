@@ -48,7 +48,13 @@ export function createOutputDecoder({ platform = process.platform } = {}) {
   };
 }
 
-/** Команда для cmd.exe с консолью в UTF-8: chcp 65001 до самой команды. */
+/**
+ * Команда для cmd.exe с консолью в UTF-8. `chcp` в той же строке не всегда
+ * действует на эту строку: cmd разбирает её целиком заранее (проверено на
+ * windows-latest — часть вывода превращалась в «?????»). Поэтому команда
+ * выполняется во вложенном cmd, который стартует уже в консоли UTF-8.
+ * `/s` снимает внешние кавычки: `&`, `|` и кавычки внутри команды работают как обычно.
+ */
 export function withUtf8Console(command, platform = process.platform) {
-  return platform === 'win32' ? `chcp 65001 >nul & ${command}` : command;
+  return platform === 'win32' ? `chcp 65001 >nul & cmd /d /s /c "${command}"` : command;
 }
