@@ -53,3 +53,38 @@ jobs:
 
       - name: Пробелы в патчах
         run: git diff --check HEAD
+
+  # Windows — основная платформа приложения. Здесь настоящие cmd.exe, .cmd-обёртки
+  # npm, taskkill и DPAPI, которые на Linux проверяются только моделью.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Тесты
+        run: npm test
+
+      - name: Проверки только для Windows
+        run: node scripts/test-windows.mjs
+
+      - name: Транспорт Responses и экспорт
+        run: |
+          npm run test:responses
+          npm run test:export
+
+      - name: Electron (агентный цикл, память, плагины, ключи, интерфейс, smoke)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($t in 'test-agent-loop', 'test-memory-tools', 'test-plugin-host', 'test-secrets-electron', 'test-ui', 'smoke-electron') {
+            Write-Host "== $t"
+            npx electron "scripts/$t.mjs"
+            if ($LASTEXITCODE -ne 0) { throw "$t: код $LASTEXITCODE" }
+          }

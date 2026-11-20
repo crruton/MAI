@@ -41,6 +41,7 @@
     "test:permissions": "node scripts/test-policy.mjs && node scripts/test-permissions.mjs && node scripts/test-permissions-integration.mjs",
     "test:agent": "electron scripts/test-agent-loop.mjs",
     "test:plugins": "electron scripts/test-plugin-host.mjs",
+    "test:windows": "node scripts/test-windows.mjs",
     "test:shell": "node scripts/test-shell.mjs",
     "test:electron": "electron scripts/smoke-electron.mjs",
     "test:ui": "electron scripts/test-ui.mjs",

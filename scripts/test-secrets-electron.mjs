@@ -64,6 +64,7 @@ app.whenReady().then(async () => {
     check('в окно ключ не отдаётся', pub.providers.mai.apiKey === '***' && !JSON.stringify(pub).includes('sk-plain-0123'));
     check('уровень защиты виден', ['os', 'weak', 'none'].includes(pub.secretsProtection), pub.secretsProtection);
     if (forcedWeak) check('шифр без ключа ОС помечен weak', pub.secretsProtection === 'weak', pub.secretsProtection);
+    if (process.platform === 'win32') check('Windows: ключи защищены DPAPI (уровень os)', pub.secretsProtection === 'os', pub.secretsProtection);
     console.log(`  защита: ${pub.secretsProtection}`);
   } catch (err) {
     fail += 1;
