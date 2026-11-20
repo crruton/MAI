@@ -16,6 +16,8 @@ function assertNotSecret(ctx, file, action = 'чтение') {
   }
 }
 
+const PREVIEW_BYTES = 1024 * 1024;
+
 function resolveInside(ctx, target) {
   const base = ctx.projectDir || process.cwd();
   const resolved = path.resolve(base, target || '.');
@@ -187,7 +189,7 @@ export const fsTools = [
       type: 'function',
       function: {
         name: 'write_file',
-        description: 'Создать или полностью перезаписать файл. Требует подтверждения пользователя.',
+        description: 'Создать или полностью перезаписать файл. Подтверждение зависит от режима разрешений.',
         parameters: {
           type: 'object',
           properties: {
@@ -198,13 +200,22 @@ export const fsTools = [
         },
       },
     },
+    precheck(ctx, args) {
+      const file = resolveInside(ctx, args.path);
+      assertNotSecret(ctx, file, 'запись');
+      return null;
+    },
+    /** Было/стало для diff в запросе разрешения (CC7.3). Большие файлы не сравниваем. */
+    preview(ctx, args) {
+      const file = resolveInside(ctx, args.path);
+      const before = fs.existsSync(file) && fs.statSync(file).size <= PREVIEW_BYTES ? fs.readFileSync(file, 'utf8') : '';
+      return { before, after: String(args.content ?? '') };
+    },
     async run(ctx, args) {
       const file = resolveInside(ctx, args.path);
       assertNotSecret(ctx, file, 'запись');
-      const allowed = await ctx.approve('write_file', `Записать файл ${file}`);
-      // approve возвращает true или строку с причиной отказа. Строка truthy,
-      // поэтому сравниваем строго: иначе отказ в режиме «План» не сработает.
-      if (allowed !== true) return typeof allowed === 'string' ? allowed : 'Пользователь отклонил запись файла.';
+      // Чекпоинт до записи: откат вернёт исходное содержимое (CC6.1).
+      ctx.beforeWrite?.(file);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, args.content ?? '', 'utf8');
       return `Записано: ${file} (${(args.content || '').length} символов)`;
@@ -215,7 +226,7 @@ export const fsTools = [
       type: 'function',
       function: {
         name: 'edit_file',
-        description: 'Заменить точный фрагмент текста в файле. Требует подтверждения пользователя.',
+        description: 'Заменить точный фрагмент текста в файле. Подтверждение зависит от режима разрешений.',
         parameters: {
           type: 'object',
           properties: {
@@ -227,6 +238,28 @@ export const fsTools = [
         },
       },
     },
+    /**
+     * Проверка до запроса разрешения: если фрагмента нет, пользователя не
+     * спрашивают зря. Возвращает текст ошибки или null.
+     */
+    precheck(ctx, args) {
+      const file = resolveInside(ctx, args.path);
+      assertNotSecret(ctx, file, 'изменение');
+      if (!fs.existsSync(file)) return `Файл не найден: ${file}`;
+      const text = fs.readFileSync(file, 'utf8');
+      const count = text.split(args.old_string).length - 1;
+      if (count === 0) return `Фрагмент не найден в ${file}`;
+      if (count > 1) return `Фрагмент встречается ${count} раз — уточните old_string`;
+      return null;
+    },
+    preview(ctx, args) {
+      const file = resolveInside(ctx, args.path);
+      if (fs.statSync(file).size > PREVIEW_BYTES) {
+        return { before: String(args.old_string ?? ''), after: String(args.new_string ?? '') };
+      }
+      const before = fs.readFileSync(file, 'utf8');
+      return { before, after: before.replace(args.old_string, () => args.new_string) };
+    },
     async run(ctx, args) {
       const file = resolveInside(ctx, args.path);
       assertNotSecret(ctx, file, 'изменение');
@@ -234,9 +267,8 @@ export const fsTools = [
       const count = text.split(args.old_string).length - 1;
       if (count === 0) return `Фрагмент не найден в ${file}`;
       if (count > 1) return `Фрагмент встречается ${count} раз — уточните old_string`;
-      const allowed = await ctx.approve('edit_file', `Изменить файл ${file}`);
-      if (allowed !== true) return typeof allowed === 'string' ? allowed : 'Пользователь отклонил изменение файла.';
-      fs.writeFileSync(file, text.replace(args.old_string, args.new_string), 'utf8');
+      ctx.beforeWrite?.(file);
+      fs.writeFileSync(file, text.replace(args.old_string, () => args.new_string), 'utf8');
       return `Изменено: ${file}`;
     },
   },

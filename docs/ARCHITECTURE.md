@@ -30,7 +30,7 @@
 | `electron/preload.cjs` | мост `window.mai`, список каналов |
 | `electron/lib/config.js` | настройки, ключ, каталог данных |
 | `electron/lib/models.js` | `GET /v1/models`, фильтр чат-моделей, кэш 5 мин |
-| `electron/lib/sessions.js` | `sessions.json` |
+| `electron/lib/sessions.js`, `session-store.js` | `sessions/<id>.json`, `sessions/index.json` (ADR 0034) |
 | `electron/lib/agent.js` | цикл агента, стриминг, вызов инструментов |
 | `electron/lib/skills.js` | навыки, `AGENTS.md` |
 | `electron/lib/mcp.js` | MCP-менеджер (stdio + streamable HTTP) |
@@ -96,50 +96,188 @@ main кладёт резолвер в `state.approvals` и отправляет 
 
 ## Плагины
 
-`loadPlugins(projectDir)` импортирует `*.js` из `<проект>/.mai-code/plugins` и
-`%APPDATA%/mai-code/plugins` с кэш-бэстером по `mtime`. Плагин может вернуть:
+Плагины исполняются в отдельном процессе (ADR 0030). `loadPlugins(projectDir)`
+собирает `*.js` из `<проект>/.mai-code/plugins` (только для доверенной папки,
+ADR 0028) и `%APPDATA%/mai-code/plugins` и передаёт их хосту
+`electron/plugin-host/worker.mjs`, запущенному через `utilityProcess.fork`.
+main получает манифест и обёртки: `tools[].run` и `transforms[]` отправляют
+сообщение хосту и ждут ответ с таймаутом (загрузка 15 с, вызов 120 с, хук 10 с).
 
-- `tools: [{ schema, run }]` — добавляются к общему списку инструментов;
-- `transformMessages(messages)` — хук перед каждым запросом.
+Плагин может вернуть:
 
-Ошибка плагина не ломает диалог: она попадает в список загруженных с полем `error`.
+- `tools: [{ schema, run, kind }]` — `kind` задаёт класс действия для PolicyEngine;
+- `transformMessages(messages)` — хук перед каждым запросом, может быть async.
+
+Хост переиспользуется, пока не изменились файлы; изменились — запускается новый,
+старый останавливается после текущих вызовов. Зависший хост убивается по
+таймауту, упавший пересоздаётся при следующей загрузке. Ошибка плагина не ломает
+диалог: она попадает в список загруженных с полем `error`.
+
+Окружение хоста — копия окружения без переменных с `KEY`, `TOKEN`, `SECRET`,
+`PASSW`, `AUTH` и подобными. Модель разрешений Node (`--permission`) в
+`utilityProcess` Electron 38 не включается, поэтому файловая система и процессы
+доступны плагину с правами пользователя.
+
+Окна (A2.5): `sandbox: true`, CSP `script-src 'self'` без inline и eval.
+Буфер обмена — через `app:clipboard`, модуля `clipboard` в песочнице нет.
 
 ## Режимы разрешений
 
-Режим разрешений решает, что делать с запросом инструмента на опасное действие
-(ADR 0017). Значение хранится **в сессии** (`session.permissionMode`), а
-`settings.permissionMode` — значение по умолчанию для новых чатов. Пустая
-строка в сессии означает «взять из настроек», поэтому старые сессии работают
-без миграции. Логика — только в `electron/lib/permissions.js`.
+Решение о вызове инструмента принимает PolicyEngine (ADR 0027, первая версия —
+ADR 0017). Инструменты сами `approve` не вызывают: цикл агента вызывает
+`runToolCall` (`electron/lib/tool-runner.js`) для любого источника —
+встроенного инструмента, MCP или плагина.
 
-| Режим | Запись файлов | Команды оболочки | MCP и плагины |
-|---|---|---|---|
-| `auto` | без вопроса | без вопроса | без вопроса |
-| `manual` | спросить | спросить | спросить |
-| `acceptEdits` | без вопроса | спросить | спросить |
-| `plan` | запрет | запрет | запрет |
+Режим хранится **в сессии** (`session.permissionMode`), `settings.permissionMode` —
+значение по умолчанию. Сохранённое `auto` читается как `bypass`.
 
-`makeApprover(window, state, sessionId)` в `main.js` читает режим на каждый
-вызов: сначала из сессии, затем из настроек. Поэтому переключение в интерфейсе
-действует сразу, а разные чаты могут работать в разных режимах. `decide()`
-возвращает `allow`, `ask` или `deny` с причиной.
+| Режим | read | write | memory | exec | external (MCP, плагин) |
+|---|---|---|---|---|---|
+| `manual` | да | спросить | спросить | спросить | спросить |
+| `acceptEdits` | да | да | спросить | спросить | спросить |
+| `plan` | да | запрет | запрет | запрет | запрет |
+| `dontAsk` | да | запрет | запрет | запрет | запрет |
+| `bypass` | да | да | да | да | да |
 
-Два правила, которые легко нарушить:
+Порядок проверки: guardrails → `deny` → «План» → `ask` → чтение → `allow` → режим.
+Правила: `settings.permissions` и `session.permissionRules`, синтаксис
+`инструмент(маска)`. MCP-инструмент — `read` только при `readOnlyHint`.
 
-1. Guardrails проверяются раньше режима. Режим `auto` не отключает защиту от
-   разрушительных команд и секретов.
-2. `approve` возвращает `true` или строку с причиной отказа. Инструмент обязан
-   сравнивать строго `allowed !== true`: непустая строка истинна, поэтому
-   `if (!allowed)` пропускает отказ.
+`policyFor(sessionId)` в `main.js` читает режим и правила на каждый вызов,
+поэтому переключение действует сразу, в том числе на список инструментов
+следующей итерации. Роль `guest` не может включить `bypass`: `permissions:set`
+отказывает, `effectiveMode` понижает режим до `manual`.
 
-В режиме `plan` инструменты записи и оболочки не передаются модели вовсе
-(`hiddenToolsForMode`), а в системный промпт добавляется требование выдать план
-с альтернативами (`modePrompt`). `memory_append` относится к инструментам записи,
-поэтому в режиме `plan` он тоже скрыт; `memory_read` — инструмент чтения.
+В режиме `plan` модели передаются только инструменты класса `read`.
 
-IPC-каналы: `permissions:modes(sessionId)` возвращает `current`, `fallback` и
-список режимов; `permissions:set({ mode, sessionId })` пишет в сессию, а без
-`sessionId` — в настройки как значение по умолчанию.
+IPC-каналы:
+
+- `permissions:modes(sessionId)` — `current`, `fallback`, `role`, список режимов
+  с флагом `disabled`, правила чата и глобальные;
+- `permissions:set({ mode, sessionId })` — пишет в сессию, без `sessionId` — в настройки;
+- `permissions:rules({ sessionId, scope, kind, add, remove })` — правила чата или
+  глобальные (глобальные — только admin);
+- `permissions:audit({ limit })` — последние записи `audit.jsonl`, только admin;
+- `chat:approval({ id, allow, remember, rules, feedback })` — ответ на запрос.
+
+## Ключи и диалоговые инструменты
+
+Секреты в `settings.json` (`providers.*.apiKey`, `infra.vaultToken`,
+`mas.token`) хранятся как `enc:v1:<base64>` через `safeStorage`
+(`electron/lib/secrets.js`, ADR 0031). `loadSettings` расшифровывает,
+`saveSettings` шифрует и пишет атомарно, `migrateSecrets` при старте шифрует
+старые открытые ключи. `publicSettings` отдаёт `secretsProtection`
+(`os` / `weak` / `none`) и список нерасшифрованных путей.
+
+`ask_user` и `exit_plan` (`electron/lib/tools/interactive.js`) зовут
+`ctx.ask`: `makeAsker` в main шлёт окну событие `question`, ответ приходит
+через `chat:answer({ id, answer })`. Одобрение плана меняет режим сессии
+(`setSessionMode`) и шлёт `mode:changed`. Таймаут — 10 минут, «Стоп»
+отвечает `cancelled`.
+
+### Подтверждение в ленте и diff
+
+`runToolCall` вызывает `preview(ctx, args)` у инструментов записи и строит
+unified diff (`electron/lib/diff.js`: LCS по строкам, общие начало и конец
+отсекаются, не больше 400 строк). Diff уходит в запрос разрешения (`approval.diff`)
+и в результат (`tool_result.diff`, в истории — до 120 строк). Окно показывает
+запрос карточкой в ленте (`state.approval`), карточки инструментов — с
+заголовком по смыслу (`toolTitle`).
+
+### Очередь, живой вывод, задачи
+
+- Очередь (CC7.5): `chat:queue({ text })` кладёт сообщение в `state.queue`
+  окна, `runAgent({ pullQueued })` забирает очередь перед каждой итерацией
+  после первой и перед завершением ответа — сообщение встаёт после результатов
+  инструментов и продлевает прогон. События `queued:consumed`,
+  `queued:returned` (не взятые возвращаются в поле ввода). `chat:unqueue({ id })`
+  убирает сообщение, пока его не взял агент.
+- Живой вывод (CC7.4): `execute(command, cwd, { onData, signal })`, событие
+  `tool_progress`; abort останавливает процесс с дочерними.
+- Задачи (CC1.5): `todo_write` (класс `read`) заменяет список целиком,
+  событие `todos`; окно восстанавливает список из последнего вызова в истории.
+
+### Слэш-команды и @файл
+
+`electron/lib/commands.js`: встроенные команды выполняет окно (`runSlash` в
+`app.js`), свои команды и навыки разворачивает main —
+`commands:list(projectDir)`, `commands:expand({ projectDir, name, args })`.
+Команды проекта читаются только в доверенной папке (ADR 0028); встроенные имена
+не переопределяются. `files:search({ projectDir, query })` ищет по списку
+файлов проекта (без `node_modules`, `.git`, сборок; кэш 30 с, до 20 000
+файлов). `chat:start` находит в тексте `@путь`, проверяет, что путь внутри
+проекта, и дописывает ссылку «прочитай через read_file».
+
+### Контекст и компакция
+
+ADR 0032. `runAgent({ contextWindow })` перед каждым шагом считает занятость
+(`contextBreakdown`: usage провайдера + оценка) и шлёт событие `context`. С 80%
+окна вызывает `compactHistory` — сводка моделью, маркер `role: 'compaction'` в
+истории. Запрос строится из `activeHistory(history)`: сводка и сообщения после
+последнего маркера. IPC: `chat:compact({ sessionId, instructions })`,
+`context:stats({ sessionId, projectDir, model })`.
+
+### Чекпоинты и откат
+
+ADR 0033. `runAgent({ checkpoint })` получает регистратор `createRecorder`;
+`write_file`/`edit_file` зовут `ctx.beforeWrite(file)` до записи. IPC:
+`checkpoints:turns(sessionId)`, `checkpoints:plan({ sessionId, turn })`,
+`checkpoints:rewind({ sessionId, turn, mode: 'both' | 'code' | 'conversation' })`.
+
+### Чаты и инструкции проекта
+
+ADR 0034: `session-store.js` — `sessions/<id>.json` и `sessions/index.json`,
+`sessions:list({ projectDir, query })`. `instructions.js`: `projectInstructions`
+(AGENTS.md + AGENTS.local.md с `@`-импортами, глубина 3, только внутри проекта)
+и `nestedInstructions` — вложенные AGENTS.md дописываются к результату
+инструмента с полем `path` один раз за прогон. `memory:append({ scope, text })`
+— быстрая запись из поля ввода.
+
+### Хуки
+
+ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый прогон;
+`runToolCall({ hooks })` — `PreToolUse` после PolicyEngine и `PostToolUse` после
+выполнения; `runAgent({ hooks })` — `Stop` перед завершением и `PreCompact` перед
+автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
+сообщения. IPC `hooks:list(projectDir)`.
+
+### Субагенты
+
+ADR 0036. `runAgent({ agentDefs })` добавляет инструмент `agent`; его `run`
+вызывает `runAgent({ subagent: { def } })` с теми же `policy`, `approve`,
+`hooks`, `trusted` и обёрткой `checkpoint`, привязанной к ходу родителя.
+`subagent` сужает инструменты (`def.tools`, без `NEVER_FOR_SUBAGENT`) и
+отключает ревизор и `Stop`. IPC `agents:defs(projectDir)`.
+
+### Вывод консоли на Windows
+
+`electron/lib/encoding.js`: `withUtf8Console` добавляет `chcp 65001` перед
+командой `cmd.exe` (`run_shell`, стадии досок); `createOutputDecoder` читает
+вывод как UTF-8, а невалидные куски перекодирует из cp866 или cp1251. CI
+гоняет всё на `windows-latest` (`scripts/test-windows.mjs` и электронные наборы).
+
+## Доверие к папке и матрица прав IPC
+
+Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или
+`unknown`, хранится в `%APPDATA%/mai-code/trust.json`, наследуется вложенными
+папками; песочницы приложения доверены всегда. Без доверия `mcpConfigs` не
+берёт `.mai-code/mcp.json`, `loadPluginsFor` пропускает плагины проекта,
+`runAgent({ trusted: false })` не подмешивает `AGENTS.md`, память и навыки
+проекта, `boards:stageRun` отказывает. `chat:start`, `runtimes:run`,
+`runtimes:runMany`, `boards:correction` при `unknown` возвращают
+`{ needTrust: true, found }`, окно спрашивает и повторяет запуск.
+
+IPC: `trust:get(projectDir)`, `trust:set({ projectDir, state })` (`trusted` —
+только admin), `trust:list`, `trust:remove(projectDir)` (admin).
+
+Матрица прав (`electron/lib/ipc-permissions.js`): `guardIpc` оборачивает
+`ipcMain.handle` до регистрации обработчиков; канал `admin` отказывает гостю
+ответом `{ ok: false, forbidden: true }`. Канал вне матрицы считается `admin`.
+`scripts/test-ipc-permissions.mjs` падает, если канал не внесён в матрицу.
+
+Блокировка проекта (`electron/lib/project-lock.js`): чат, самокоррекция и
+рантайм с правом записи берут папку на время прогона; второй получает
+`{ busy: true }`.
 
 ## Вложения
 
@@ -154,6 +292,12 @@ IPC-каналы: `permissions:modes(sessionId)` возвращает `current`,
    запасной путь).
 4. В промпт уходит манифест: имя, размер, тип, путь, путь к тексту, счётчики.
    Агент читает файл через `read_file` и `grep`.
+5. Изображения (PNG, JPEG, GIF, WebP) модели с поддержкой изображений получают
+   частью `image_url` (`electron/lib/vision.js`). В сессии хранится путь
+   (`message.images`), base64 собирается на каждый запрос: до 5 МБ на файл,
+   20 МБ и 10 картинок на запрос, с последних сообщений. Поддержка — флаг
+   `vision` у модели провайдера или эвристика по имени. Если шлюз отвечает 400
+   на картинку, шаг повторяется без неё.
 
 IPC-каналы: `attachments:add`, `attachments:addImage`, `attachments:pick`,
 `attachments:remove`, `attachments:open`. Удаление и открытие проверяют, что

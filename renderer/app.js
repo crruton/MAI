@@ -24,6 +24,28 @@ const state = {
   permissionMode: 'manual',
   permissionModes: [],
   approvalOpen: false,
+  trust: null,
+  // Открытый вопрос ask_user или карточка плана exit_plan (CC1.7, CC1.8).
+  question: null,
+  // Слэш-команды: null — ещё не загружены (CC7.7).
+  commands: null,
+  // Список чатов: все проекты или текущий, строка поиска (CC6.6, CC6.7).
+  sessionsAll: false,
+  sessionsQuery: '',
+  // Редактируемое сообщение пользователя (CC6.3): индекс в истории или null.
+  editingTurn: null,
+  // Заполнение контекста модели (CC5.1): { used, window, exact }.
+  context: null,
+  // Индексы сообщений пользователя, после которых есть чекпоинт правок (CC6.1).
+  checkpointTurns: new Set(),
+  // Запрос разрешения — карточкой в ленте (CC7.1).
+  approval: null,
+  // Живой вывод команд по id вызова (CC7.4).
+  liveOutput: {},
+  // Список задач агента (CC1.5) и очередь сообщений (CC7.5).
+  todos: [],
+  todosCollapsed: false,
+  queue: [],
 };
 
 /* ---------- утилиты ---------- */
@@ -309,11 +331,13 @@ async function pickAttachments() {
 
 /* ---------- режимы разрешений ---------- */
 
+// Запасной список на случай, если IPC недоступен. Источник правды — MODE_INFO в main.
 const MODE_FALLBACK = [
-  { id: 'auto', label: 'Авто', description: 'Агент сам решает, что можно делать. Опасные команды блокируют guardrails.' },
-  { id: 'manual', label: 'Вручную', description: 'Спрашивать перед каждой правкой файла и каждой командой.' },
-  { id: 'acceptEdits', label: 'Принимать правки', description: 'Правки файлов применяются без вопросов, команды требуют подтверждения.' },
-  { id: 'plan', label: 'План', description: 'Только чтение и план с альтернативами. Файлы не меняются.' },
+  { id: 'manual', label: 'Вручную', description: 'Спрашивать перед каждой правкой, командой и внешним инструментом.' },
+  { id: 'acceptEdits', label: 'Принимать правки', description: 'Правки файлов — без вопросов, команды и внешние инструменты — с подтверждением.' },
+  { id: 'plan', label: 'План', description: 'Только чтение и план с альтернативами.' },
+  { id: 'dontAsk', label: 'Только разрешённое', description: 'Только то, что разрешено правилами; остальное отклоняется.' },
+  { id: 'bypass', label: 'Без вопросов', description: 'Всё без подтверждения, кроме guardrails и правил deny.', warning: true, adminOnly: true },
 ];
 
 async function renderModeSelect() {
@@ -322,13 +346,21 @@ async function renderModeSelect() {
   const modes = state.permissionModes.length ? state.permissionModes : MODE_FALLBACK;
   select.replaceChildren();
   for (const mode of modes) {
-    select.append(el('option', { value: mode.id, text: mode.label, title: mode.description || '' }));
+    select.append(
+      el('option', {
+        value: mode.id,
+        text: mode.warning ? `⚠ ${mode.label}` : mode.label,
+        title: mode.disabled ? `${mode.description} Недоступно для вашей роли.` : mode.description || '',
+        disabled: mode.disabled ? 'disabled' : null,
+      }),
+    );
   }
   select.value = state.permissionMode;
   const info = modes.find((m) => m.id === state.permissionMode);
   select.title = info?.description || 'Режим разрешений';
   select.classList.toggle('mode-plan', state.permissionMode === 'plan');
-  select.classList.toggle('mode-auto', state.permissionMode === 'auto');
+  select.classList.toggle('mode-bypass', state.permissionMode === 'bypass');
+  select.classList.toggle('mode-dontask', state.permissionMode === 'dontAsk');
 }
 
 /** Перечитывает режим для текущей сессии (или значение по умолчанию). */
@@ -345,7 +377,17 @@ async function refreshPermissionMode() {
 }
 
 async function setPermissionMode(mode) {
+  const info0 = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).find((m) => m.id === mode);
+  if (info0?.warning && !window.confirm(`${info0.label}: ${info0.description}\n\nВключить?`)) {
+    renderModeSelect();
+    return;
+  }
   const result = await api.permissions.set(mode, state.sessionId);
+  if (result && result.ok === false) {
+    toast(result.error || 'Режим не изменён', 'err');
+    await refreshPermissionMode();
+    return;
+  }
   state.permissionMode = result?.mode || mode;
   renderModeSelect();
   const info = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).find(
@@ -355,6 +397,157 @@ async function setPermissionMode(mode) {
     const scope = result?.scope === 'session' ? 'для этого чата' : 'по умолчанию для новых чатов';
     toast(`${info.label} ${scope}: ${info.description}`, 'ok');
   }
+}
+
+/* ---------- доверие к папке (ADR 0028) ---------- */
+
+async function refreshTrust() {
+  // Свои команды проекта зависят от папки и доверия к ней.
+  state.commands = null;
+  if (!api.trust || !state.projectDir) {
+    state.trust = null;
+    updateChrome();
+    return null;
+  }
+  try {
+    state.trust = await api.trust.get(state.projectDir);
+  } catch {
+    state.trust = null;
+  }
+  updateChrome();
+  return state.trust;
+}
+
+/**
+ * Окно «Доверять папке?». Показывает, что в папке исполняется или влияет на
+ * агента. Если есть плагины или MCP, рекомендован ответ «Ограниченно».
+ * Возвращает 'trusted', 'restricted' или null (окно закрыто без ответа).
+ */
+function askTrust(info = {}) {
+  return new Promise((resolve) => {
+    const found = info.found || {};
+    const recommended = found.executable ? 'restricted' : 'trusted';
+    const items = [];
+    if (found.plugins) items.push(`плагины .mai-code/plugins: ${found.plugins} — исполняются в приложении`);
+    if (found.mcpServers?.length) items.push(`MCP-серверы .mai-code/mcp.json: ${found.mcpServers.join(', ')} — запускают процессы`);
+    if (found.agents) items.push('AGENTS.md — инструкции агенту');
+    if (found.memory) items.push('.mai-code/memory.md — память проекта');
+    if (found.skills) items.push(`навыки проекта: ${found.skills}`);
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      resolve(value);
+    };
+    const option = (key, label, value, hint) =>
+      el(
+        'button',
+        {
+          class: `btn approve-option${value === recommended ? ' primary recommended' : ''}`,
+          type: 'button',
+          'data-trust': value,
+          onclick: () => {
+            finish(value);
+            modal.close();
+          },
+        },
+        [
+          el('span', { class: 'approve-key', text: key }),
+          el('span', { class: 'trust-option-text' }, [el('b', { text: label }), el('small', { text: hint })]),
+          value === recommended ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+        ],
+      );
+    const isAdmin = (state.auth?.role || 'admin') === 'admin';
+    const modal = openModal({
+      title: 'Доверять этой папке?',
+      small: true,
+      onClose: () => finish(null),
+      body: [
+        el('div', { class: 'approve-args', text: info.projectDir || state.projectDir || '' }),
+        el('p', {
+          text: items.length
+            ? 'В папке найдено то, что исполняется или влияет на агента:'
+            : 'В папке нет плагинов, MCP-серверов и инструкций для агента.',
+        }),
+        items.length ? el('ul', { class: 'trust-list' }, items.map((t) => el('li', { text: t }))) : null,
+        el('p', {
+          class: 'hint-text',
+          text: 'Доверяйте только своим папкам и проверенным репозиториям. Решение действует и для вложенных папок, его можно изменить в «Настройках».',
+        }),
+      ],
+      footer: [
+        isAdmin ? option('1', 'Доверяю', 'trusted', 'загрузить плагины, MCP, AGENTS.md, память и навыки проекта') : null,
+        option(isAdmin ? '2' : '1', 'Ограниченно', 'restricted', 'работать без кода и инструкций проекта; «Без вопросов» не действует'),
+      ].filter(Boolean),
+    });
+    modal.modal.classList.add('approve-modal', 'trust-modal');
+    modal.footEl.querySelector('.recommended')?.focus();
+  });
+}
+
+/** Блок «Доверие к папкам» в настройках: текущая папка и список решений. */
+function trustSettingsBlock() {
+  const box = el('div', { class: 'trust-settings' });
+  const label = { trusted: 'доверена', restricted: 'ограниченно', unknown: 'нет решения' };
+  const render = async () => {
+    const [current, list] = await Promise.all([refreshTrust(), api.trust?.list ? api.trust.list() : []]);
+    box.replaceChildren(
+      el('div', { class: 'hint-text', text: `Текущая папка: ${label[current?.state] || 'нет решения'}${current?.inherited ? ` (наследуется от ${current.folder})` : ''}` }),
+      el('div', { class: 'row' }, [
+        el('button', {
+          class: 'btn small',
+          type: 'button',
+          text: 'Решить заново',
+          onclick: async () => {
+            if (await decideTrust(await api.trust.get(state.projectDir))) render();
+          },
+        }),
+      ]),
+      ...(list || []).map((item) =>
+        el('div', { class: 'trust-row' }, [
+          el('span', { class: `project-trust trust-${item.state}`, text: label[item.state] || item.state }),
+          el('span', { class: 'trust-folder', text: item.folder, title: item.folder }),
+          el('button', {
+            class: 'btn ghost small',
+            type: 'button',
+            text: 'Забыть',
+            onclick: async () => {
+              const result = await api.trust.remove(item.folder).catch((err) => ({ ok: false, error: err.message }));
+              if (result?.ok === false) toast(result.error || 'Не удалось', 'err');
+              render();
+            },
+          }),
+        ]),
+      ),
+    );
+  };
+  render();
+  return box;
+}
+
+/** Решение о доверии с сохранением. true — решение принято. */
+async function decideTrust(info) {
+  const decision = await askTrust(info);
+  if (!decision) return false;
+  const result = await api.trust.set(info.projectDir || state.projectDir, decision);
+  if (result?.ok === false) {
+    toast(result.error || 'Решение не сохранено', 'err');
+    return false;
+  }
+  await refreshTrust();
+  toast(decision === 'trusted' ? 'Папка доверена' : 'Папка открыта ограниченно', 'ok');
+  return true;
+}
+
+/** Запуск, которому может понадобиться решение о доверии: спрашиваем и повторяем один раз. */
+async function withTrust(start) {
+  let result = await start();
+  if (result?.needTrust) {
+    const decided = await decideTrust(result);
+    if (!decided) return { ok: false, error: 'Запуск отменён: нет решения о доверии к папке' };
+    result = await start();
+  }
+  return result;
 }
 
 /* ---------- модальные окна ---------- */
@@ -405,21 +598,234 @@ function renderAll() {
   const stick = isNearBottom();
   box.replaceChildren();
 
-  if (!state.messages.length && !state.live && !state.liveRuntimes.length) {
+  if (!state.messages.length && !state.live && !state.liveRuntimes.length && !state.question && !state.approval) {
     box.append(emptyState());
     return;
   }
 
-  for (const message of state.messages) {
-    const node = messageNode(message);
+  state.messages.forEach((message, index) => {
+    const node = messageNode(message, index);
     if (node) box.append(node);
-  }
+  });
   if (state.live) box.append(liveNode());
   for (const live of state.liveRuntimes) {
     box.append(runtimeNode(live.name, live.output, null, true));
   }
-  if (stick) box.scrollTop = box.scrollHeight;
+  if (state.question) box.append(questionCard());
+  if (state.approval) box.append(approvalCard());
+  if (stick || state.question || state.approval) box.scrollTop = box.scrollHeight;
 }
+
+/* ---------- вопросы агента и карточка плана (CC1.7, CC1.8) ---------- */
+
+/**
+ * Системное уведомление, когда окно не в фокусе (CC7.14): агент ждёт ответа
+ * или закончил. Клик возвращает окно.
+ */
+function notify(title, body) {
+  try {
+    if (document.hasFocus() || typeof Notification === 'undefined') return;
+    if (Notification.permission === 'denied') return;
+    const show = () => {
+      const n = new Notification(title, { body: String(body || '').slice(0, 180), silent: false });
+      n.onclick = () => {
+        window.focus();
+        api.focusMain?.();
+        n.close();
+      };
+    };
+    if (Notification.permission === 'granted') show();
+    else Notification.requestPermission().then((p) => p === 'granted' && show());
+  } catch {
+    /* уведомления недоступны — не мешаем работе */
+  }
+}
+
+function openQuestion(event) {
+  notify(event.kind === 'plan' ? 'План готов' : 'Агент спрашивает', event.kind === 'plan' ? 'Выберите, как выполнить план' : event.questions?.[0]?.question);
+  const questions = event.questions || [];
+  state.question = {
+    ...event,
+    // Рекомендованный вариант выбран заранее: Enter сразу отвечает рекомендацией.
+    picks: questions.map((q) => {
+      const index = q.options.findIndex((o) => o.recommended);
+      return index >= 0 ? [index] : [];
+    }),
+    other: questions.map(() => ''),
+    feedback: '',
+    alternative: Number.isInteger(event.recommended) ? event.recommended : 0,
+  };
+  renderAll();
+  setTimeout(() => document.querySelector('.question-card .recommended, .question-card .primary')?.focus(), 0);
+}
+
+function answerQuestion(answer) {
+  const current = state.question;
+  if (!current) return;
+  state.question = null;
+  api.chat.answer(current.id, answer);
+  renderAll();
+}
+
+function submitQuestions() {
+  const q = state.question;
+  const answers = q.questions.map((item, i) => {
+    const labels = (q.picks[i] || []).map((index) => item.options[index]?.label).filter(Boolean);
+    const other = String(q.other[i] || '').trim();
+    if (item.multiSelect) return other ? [...labels, other] : labels;
+    return other || labels[0] || '';
+  });
+  answerQuestion({ answers });
+}
+
+function questionsBody(q) {
+  return q.questions.map((item, qi) =>
+    el('div', { class: 'question-block' }, [
+      el('div', { class: 'question-title' }, [
+        item.header ? el('span', { class: 'question-chip', text: item.header }) : null,
+        el('span', { text: item.question }),
+        item.multiSelect ? el('span', { class: 'hint-text', text: ' (можно несколько)' }) : null,
+      ]),
+      el(
+        'div',
+        { class: 'question-options' },
+        item.options.map((option, oi) => {
+          const picked = (q.picks[qi] || []).includes(oi);
+          return el(
+            'button',
+            {
+              class: `question-option${picked ? ' picked' : ''}${option.recommended ? ' recommended' : ''}`,
+              type: 'button',
+              'aria-pressed': picked ? 'true' : 'false',
+              onclick: () => {
+                const list = q.picks[qi] || [];
+                q.picks[qi] = item.multiSelect ? (picked ? list.filter((x) => x !== oi) : [...list, oi]) : [oi];
+                if (!item.multiSelect) q.other[qi] = '';
+                renderAll();
+              },
+            },
+            [
+              el('span', { class: 'approve-key', text: String(oi + 1) }),
+              el('span', { class: 'question-option-text' }, [
+                el('b', { text: option.label }),
+                option.description ? el('small', { text: option.description }) : null,
+              ]),
+              option.recommended ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+            ],
+          );
+        }),
+      ),
+      el('input', {
+        class: 'question-other',
+        placeholder: 'Другое…',
+        value: q.other[qi] || '',
+        oninput: (e) => {
+          q.other[qi] = e.target.value;
+        },
+      }),
+    ]),
+  );
+}
+
+function planBody(q) {
+  const tiles = (q.alternatives || []).map((alt, index) =>
+    el(
+      'button',
+      {
+        class: `plan-alt${q.alternative === index ? ' picked' : ''}${q.recommended === index ? ' recommended' : ''}`,
+        type: 'button',
+        onclick: () => {
+          q.alternative = index;
+          renderAll();
+        },
+      },
+      [
+        el('div', { class: 'plan-alt-head' }, [
+          el('b', { text: alt.title }),
+          el('span', { class: `risk-badge risk-${alt.risk}`, text: RISK_LABEL[alt.risk] || alt.risk }),
+          q.recommended === index ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+        ]),
+        alt.summary ? el('div', { class: 'plan-alt-text', text: alt.summary }) : null,
+        alt.pros ? el('div', { class: 'plan-alt-pros', text: `+ ${alt.pros}` }) : null,
+        alt.cons ? el('div', { class: 'plan-alt-cons', text: `− ${alt.cons}` }) : null,
+      ],
+    ),
+  );
+  return [
+    el('div', { class: 'md plan-text', html: renderMarkdown(q.plan || '') }),
+    tiles.length ? el('div', { class: 'docs-group-title', text: 'Альтернативы' }) : null,
+    tiles.length ? el('div', { class: 'plan-alts' }, tiles) : null,
+  ];
+}
+
+function questionCard() {
+  const q = state.question;
+  const isPlan = q.kind === 'plan';
+  const feedback = el('textarea', {
+    class: 'approve-feedback',
+    rows: '2',
+    placeholder: isPlan ? 'Замечания к плану (необязательно)' : 'Комментарий (необязательно)',
+    value: q.feedback || '',
+    oninput: (e) => {
+      q.feedback = e.target.value;
+    },
+  });
+  feedback.value = q.feedback || '';
+  const bypassAllowed = (state.permissionModes || []).some((m) => m.id === 'bypass' && !m.disabled);
+  const approve = (mode) => answerQuestion({ action: 'approve', mode, alternative: q.alternative, feedback: q.feedback });
+  const footer = isPlan
+    ? [
+        el('button', { class: 'btn primary recommended', type: 'button', onclick: () => approve('acceptEdits') }, [
+          el('span', { text: 'Выполнить: принимать правки' }),
+          el('span', { class: 'recommended-badge', text: 'Рекомендуется' }),
+        ]),
+        el('button', { class: 'btn', type: 'button', text: 'Выполнить: вручную', onclick: () => approve('manual') }),
+        bypassAllowed ? el('button', { class: 'btn', type: 'button', text: '⚠ Без вопросов', onclick: () => approve('bypass') }) : null,
+        el('button', {
+          class: 'btn ghost',
+          type: 'button',
+          text: 'Доработать план',
+          onclick: () => answerQuestion({ action: 'revise', feedback: q.feedback }),
+        }),
+      ]
+    : [
+        el('button', { class: 'btn primary recommended', type: 'button', text: 'Ответить', onclick: submitQuestions }),
+        el('button', { class: 'btn ghost', type: 'button', text: 'Пропустить', onclick: () => answerQuestion({ cancelled: true }) }),
+      ];
+  return el('div', { class: `question-card${isPlan ? ' plan-card' : ''}` }, [
+    el('div', { class: 'question-head', text: isPlan ? 'План готов — как выполнить?' : 'Агент спрашивает' }),
+    ...(isPlan ? planBody(q) : questionsBody(q)),
+    feedback,
+    el('div', { class: 'question-foot' }, footer.filter(Boolean)),
+  ]);
+}
+
+/** Клавиши карточки: 1–4 — вариант (первый вопрос), Enter — рекомендованное, Esc — пропустить. */
+document.addEventListener('keydown', (event) => {
+  const q = state.question;
+  if (!q || state.approvalOpen) return;
+  const tag = event.target?.tagName || '';
+  if (event.target?.id === 'input') return; // поле ввода чата — своё поведение
+  if (tag === 'BUTTON' && (event.key === 'Enter' || event.key === ' ')) return; // нативный клик
+  const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(tag);
+  // В поле «Другое…» Enter отправляет ответ; в textarea Enter — перевод строки.
+  if (inField && event.key !== 'Escape' && !(event.key === 'Enter' && tag === 'INPUT')) return;
+  if (!inField && q.kind === 'questions' && /^[1-4]$/.test(event.key) && q.questions.length) {
+    const item = q.questions[0];
+    const index = Number(event.key) - 1;
+    if (!item.options[index]) return;
+    q.picks[0] = item.multiSelect ? [...new Set([...(q.picks[0] || []), index])] : [index];
+    renderAll();
+    event.preventDefault();
+  } else if (event.key === 'Enter' && !event.shiftKey) {
+    if (q.kind === 'plan') answerQuestion({ action: 'approve', mode: 'acceptEdits', alternative: q.alternative, feedback: q.feedback });
+    else submitQuestions();
+    event.preventDefault();
+  } else if (event.key === 'Escape') {
+    answerQuestion(q.kind === 'plan' ? { action: 'revise', feedback: q.feedback } : { cancelled: true });
+    event.preventDefault();
+  }
+});
 
 function emptyState() {
   const wrap = el('div', { class: 'empty' }, [
@@ -505,19 +911,76 @@ function pickExportFormat(anchor) {
   });
 }
 
-function messageNode(message) {
+function messageNode(message, index = -1) {
   if (message.role === 'user') {
-    return el('div', { class: 'msg msg-user' }, [
+    const edited = state.checkpointTurns?.has(index);
+    return el('div', { class: `msg msg-user${state.editingTurn === index ? ' editing' : ''}` }, [
+      state.sessionId && index >= 0 && !state.running
+        ? el('button', {
+            class: 'edit-btn',
+            type: 'button',
+            title: 'Изменить и отправить заново: сообщение и всё после него заменятся',
+            text: '✎',
+            onclick: () => startEdit(index),
+          })
+        : null,
+      state.sessionId && index >= 0 && !state.running
+        ? el('button', {
+            class: `rewind-btn${edited ? ' edited' : ''}`,
+            type: 'button',
+            title: edited ? 'Вернуться сюда: откатить правки файлов и диалог' : 'Вернуться сюда: откатить диалог',
+            text: '↺',
+            onclick: () => openRewind(index),
+          })
+        : null,
       el('div', { class: 'bubble', text: message.display || message.content || '' }),
     ]);
   }
   if (message.role === 'runtime') {
     return runtimeNode(message.name || 'Рантайм', message.content || '', message.code, false);
   }
+  if (message.role === 'compaction') {
+    return el('div', { class: 'msg msg-compaction' }, [
+      el('details', { class: 'compaction-card' }, [
+        el('summary', {
+          text: `Контекст ${message.auto ? 'автоматически ' : ''}сжат: ${message.messages || 0} сообщений → сводка${message.instructions ? ` (учтено: ${message.instructions})` : ''}`,
+        }),
+        el('div', { class: 'md', html: renderMarkdown(message.content || '') }),
+      ]),
+    ]);
+  }
+  if (message.role === 'hook') {
+    return el('div', { class: 'msg msg-review' }, [
+      el('div', { class: 'review-card hook-card' }, [
+        el('div', { class: 'review-head', text: `Хук ${message.event || ''} · работа не принята` }),
+        el('div', { class: 'md', html: renderMarkdown(String(message.content || '').replace(/^\[Хук [^\]]+\]\s*/, '')) }),
+      ]),
+    ]);
+  }
+  if (message.role === 'review') {
+    // Замечание ревизора — не реплика пользователя (ADR 0027, A3.4).
+    return el('div', { class: 'msg msg-review' }, [
+      el('div', { class: 'review-card' }, [
+        el('div', { class: 'review-head', text: `Ревизор · раунд ${message.round || ''} · на доработку` }),
+        el('div', { class: 'md', html: renderMarkdown(String(message.content || '').replace(/^\[Ревизор, раунд \d+\]\s*/, '')) }),
+      ]),
+    ]);
+  }
   if (message.role === 'assistant') {
     const head = el('div', { class: 'msg-head' }, [
-      el('div', { class: 'msg-name', text: `MAI · ${modelLabel(state.model)}` }),
+      el('div', { class: 'msg-name', text: `MAI · ${modelLabel(message.model || state.model)}` }),
     ]);
+    if (message.usage) {
+      // Токены шага (A3.8): вход · выход, из входа — кэш.
+      const u = message.usage;
+      head.append(
+        el('span', {
+          class: 'msg-usage',
+          text: `↑${contextLabel(u.input)} ↓${contextLabel(u.output)}`,
+          title: `Токены шага: вход ${u.input}${u.cached ? ` (из кэша ${u.cached})` : ''}, выход ${u.output}, всего ${u.total}`,
+        }),
+      );
+    }
     if (message.content) head.append(exportMenu(message.content));
     const body = el('div', { class: 'msg-body' }, [head]);
     if (message.reasoning) body.append(thinkingBlock(message.reasoning));
@@ -580,19 +1043,67 @@ function safeJson(raw) {
   }
 }
 
+/** Заголовок карточки инструмента по-человечески (CC7.2): «Edit main.js +3 −1», «Bash npm test». */
+function toolTitle(name, argsText, result) {
+  let args = {};
+  try {
+    args = JSON.parse(argsText || '{}');
+  } catch {
+    args = {};
+  }
+  const file = (value) => String(value || '').split(/[\\/]/).filter(Boolean).slice(-2).join('/');
+  const stats = result?.diff ? ` +${result.diff.added} −${result.diff.removed}` : '';
+  switch (name) {
+    case 'read_file': {
+      const range = args.offset || args.limit ? `:${args.offset || 1}${args.limit ? `-${(args.offset || 1) + args.limit - 1}` : ''}` : '';
+      return { verb: 'Read', detail: `${file(args.path)}${range}` };
+    }
+    case 'list_files':
+      return { verb: 'List', detail: file(args.path) || '.' };
+    case 'grep':
+      return { verb: 'Grep', detail: `${args.pattern || ''}${args.path ? ` в ${file(args.path)}` : ''}` };
+    case 'write_file':
+      return { verb: result?.diff?.created ? 'Create' : 'Write', detail: `${file(args.path)}${stats}` };
+    case 'edit_file':
+      return { verb: 'Edit', detail: `${file(args.path)}${stats}` };
+    case 'run_shell':
+      return { verb: 'Bash', detail: String(args.command || '') };
+    case 'memory_append':
+      return { verb: 'Memory', detail: `+ ${args.scope || 'project'}` };
+    case 'ask_user':
+      return { verb: 'Ask', detail: args.questions?.[0]?.question || '' };
+    case 'exit_plan':
+      return { verb: 'Plan', detail: 'план на согласование' };
+    case 'load_skill':
+      return { verb: 'Skill', detail: args.name || '' };
+    case 'agent':
+      return { verb: `Agent ${args.type || ''}`.trim(), detail: args.description || String(args.prompt || '').slice(0, 120) };
+    default:
+      return { verb: name.startsWith('mcp__') ? `MCP ${name.split('__')[1]}` : name, detail: String(argsText || '').slice(0, 160) };
+  }
+}
+
 function toolCard(id, name, argsText) {
   const result = state.toolResults[id];
   const status = result ? (result.ok ? 'ok' : 'err') : 'run';
-  const card = el('div', { class: `tool-card${result && !result.ok ? ' open' : ''}` });
+  const live = !result ? state.liveOutput[id] : '';
+  // Пока команда идёт, карточка раскрыта и показывает живой вывод (CC7.4).
+  const card = el('div', { class: `tool-card${(result && !result.ok) || live ? ' open' : ''}` });
+  const title = toolTitle(name, argsText, result);
   const head = el('div', { class: 'tool-head' }, [
     el('span', { class: `tool-dot ${status}` }),
-    el('span', { class: 'tool-name', text: name }),
-    el('span', { class: 'tool-args', text: String(argsText || '').slice(0, 160) }),
+    el('span', { class: 'tool-name', text: title.verb, title: name }),
+    el('span', { class: 'tool-args', text: String(title.detail || '').slice(0, 200) }),
   ]);
   head.addEventListener('click', () => card.classList.toggle('open'));
   const body = el('div', { class: 'tool-body' });
   body.append(el('div', { class: 'tool-label', text: 'Аргументы' }));
   body.append(el('pre', { text: String(argsText || '') }));
+  if (live) {
+    body.append(el('div', { class: 'tool-label', text: 'Вывод (идёт)' }));
+    body.append(el('pre', { class: 'tool-live', text: live.slice(-6000) }));
+  }
+  if (result?.diff) body.append(diffView(result.diff, { limit: 200 }));
   if (result) {
     body.append(el('div', { class: 'tool-label', text: result.ok ? 'Результат' : 'Ошибка' }));
     body.append(el('pre', { text: String(result.content || '').slice(0, 20000) }));
@@ -604,6 +1115,19 @@ function toolCard(id, name, argsText) {
 function renderSessions() {
   const box = $('#sessions');
   box.replaceChildren();
+  const scope = $('#sessions-scope');
+  if (scope) {
+    scope.textContent = state.sessionsAll ? 'все проекты' : 'этот проект';
+    scope.title = state.sessionsAll ? 'Показать только чаты текущей папки' : 'Показать чаты всех проектов';
+  }
+  if (!state.sessions.length) {
+    box.append(
+      el('div', {
+        class: 'sessions-empty',
+        text: state.sessionsQuery ? 'Ничего не найдено' : state.sessionsAll ? 'Чатов пока нет' : 'В этой папке чатов нет — «все проекты» покажет остальные',
+      }),
+    );
+  }
   for (const session of state.sessions) {
     const node = el('button', {
       class: `session${session.id === state.sessionId ? ' active' : ''}`,
@@ -611,7 +1135,11 @@ function renderSessions() {
       onclick: () => loadSession(session.id),
     }, [
       el('span', { class: 'session-title', text: session.title || 'Без названия' }),
-      el('span', { class: 'session-meta', text: `${modelLabel(session.model)} · ${fmtDate(session.updatedAt)}` }),
+      el('span', {
+        class: 'session-meta',
+        text: `${modelLabel(session.model)} · ${fmtDate(session.updatedAt)}${state.sessionsAll && session.projectDir ? ` · ${shortPath(session.projectDir)}` : ''}`,
+      }),
+      session.match ? el('span', { class: 'session-match', text: `…${session.match}…` }) : null,
     ]);
     const del = el('span', {
       class: 'del',
@@ -690,6 +1218,17 @@ function renderRuntimes() {
 function updateChrome() {
   $('#project-name').textContent = shortPath(state.projectDir);
   $('#project-name').title = state.projectDir || '';
+  const badge = $('#project-trust');
+  if (badge) {
+    const trust = state.trust?.projectDir === state.projectDir ? state.trust.state : '';
+    badge.hidden = !trust || trust === 'trusted';
+    badge.className = `project-trust trust-${trust || 'none'}`;
+    badge.textContent = trust === 'restricted' ? 'ограниченно' : trust === 'unknown' ? 'не доверена' : '';
+    badge.title =
+      trust === 'restricted'
+        ? 'Плагины, MCP, AGENTS.md, память и навыки проекта не загружаются'
+        : 'Решение о доверии к папке спросим перед первым запуском';
+  }
   const provider = providerOf(state.model);
   const ready = Boolean(provider?.apiKeySet);
   $('#conn').classList.toggle('bad', !ready);
@@ -700,8 +1239,12 @@ function updateChrome() {
 
 /* ---------- данные ---------- */
 
+/** Список чатов: текущего проекта или всех (CC6.6), с поиском по тексту (CC6.7). */
 async function refreshSessions() {
-  state.sessions = await api.sessions.list();
+  state.sessions = await api.sessions.list({
+    projectDir: state.sessionsAll ? '' : state.projectDir,
+    query: state.sessionsQuery || '',
+  });
   renderSessions();
 }
 
@@ -712,7 +1255,13 @@ async function loadSession(id) {
   state.messages = session.messages || [];
   state.model = session.model || state.model;
   if (session.projectDir) state.projectDir = session.projectDir;
+  refreshTrust();
   state.toolResults = {};
+  state.liveOutput = {};
+  state.todos = todosFromHistory(state.messages);
+  renderTodos();
+  refreshContext();
+  await refreshCheckpoints();
   state.live = null;
   state.liveRuntimes = [];
   clearAttachments();
@@ -722,6 +1271,7 @@ async function loadSession(id) {
       state.toolResults[message.tool_call_id] = {
         ok: !String(message.content || '').startsWith('Ошибка'),
         content: message.content,
+        diff: message.diff || null,
       };
     }
   }
@@ -732,9 +1282,16 @@ async function loadSession(id) {
 }
 
 function newChat() {
+  state.editingTurn = null;
+  if ($('#edit-banner')) $('#edit-banner').hidden = true;
   state.sessionId = null;
   state.messages = [];
   state.toolResults = {};
+  state.liveOutput = {};
+  state.todos = [];
+  renderTodos();
+  state.context = null;
+  renderContextMeter();
   state.live = null;
   state.liveRuntimes = [];
   clearAttachments();
@@ -761,14 +1318,34 @@ async function loadModels(force = false) {
 
 /* ---------- отправка ---------- */
 
-async function send() {
-  if (state.running) return;
+/**
+ * Отправка. `override` — запрос из слэш-команды: агенту уходит развёрнутый
+ * шаблон, в чате видна сама команда (CC7.7, CC7.8).
+ */
+async function send(override = null) {
+  closeSuggest();
+  if (state.running) {
+    await queueMessage();
+    return;
+  }
   const input = $('#input');
-  const text = input.value.trim();
+  const typed = input.value.trim();
+  if (!override && typed.startsWith('/') && !typed.startsWith('//')) {
+    await runSlash(typed);
+    return;
+  }
+  // `# правило` — в память, а не агенту (CC4.3). `##` и многострочный текст — обычное сообщение.
+  if (!override && /^#\s+\S/.test(typed) && !typed.includes('\n')) {
+    rememberLine(typed.replace(/^#\s+/, ''));
+    return;
+  }
+  const text = override ? override.text : typed;
   const hasFiles = state.attachments.length > 0;
   if (!text && !hasFiles) return;
-  const display = text || 'Прикреплённые файлы';
+  const display = override?.display || text || 'Прикреплённые файлы';
   const prompt = text + attachmentBlock();
+  // Картинки уходят модели как изображения, если она их принимает (F1).
+  const images = state.attachments.filter((item) => item.kind === 'image').map((item) => item.path);
 
   const runtime = activeRuntime();
   const multi = state.runtime === '__all__';
@@ -786,6 +1363,9 @@ async function send() {
     return;
   }
 
+  // Редактирование: диалог откатывается к сообщению только когда всё готово к отправке.
+  if (state.editingTurn !== null && !(await applyEdit())) return;
+
   input.value = '';
   autosize();
   clearAttachments();
@@ -799,20 +1379,23 @@ async function send() {
     return;
   }
 
-  state.messages.push({ role: 'user', content: display });
+  state.messages.push({ role: 'user', content: display, display });
   state.live = { content: '', reasoning: '', tools: [] };
   state.running = true;
   setRunning(true);
   renderAll();
 
-  const result = await api.chat.start({
-    sessionId: state.sessionId,
-    text: prompt,
-    displayText: display,
-    model: state.model,
-    projectDir: state.projectDir,
-    permissionMode: state.permissionMode,
-  });
+  const result = await withTrust(() =>
+    api.chat.start({
+      sessionId: state.sessionId,
+      text: prompt,
+      displayText: display,
+      model: state.model,
+      projectDir: state.projectDir,
+      permissionMode: state.permissionMode,
+      images,
+    }),
+  );
   if (!result.ok) {
     toast(result.error, 'err');
     state.running = false;
@@ -836,14 +1419,16 @@ async function sendRuntime(runtime, prompt, display = prompt) {
   setRunning(true);
   renderAll();
 
-  const result = await api.runtimes.run({
-    sessionId: state.sessionId,
-    runtime: id,
-    text: prompt,
-    displayText: display,
-    model: state.model,
-    projectDir: state.projectDir,
-  });
+  const result = await withTrust(() =>
+    api.runtimes.run({
+      sessionId: state.sessionId,
+      runtime: id,
+      text: prompt,
+      displayText: display,
+      model: state.model,
+      projectDir: state.projectDir,
+    }),
+  );
 
   if (!result.ok) {
     toast(result.error, 'err');
@@ -874,14 +1459,16 @@ async function sendRuntimeMany(prompt, display = prompt) {
   setRunning(true);
   renderAll();
 
-  const result = await api.runtimes.runMany({
-    sessionId: state.sessionId,
-    runtimes: ids,
-    text: prompt,
-    displayText: display,
-    model: state.model,
-    projectDir: state.projectDir,
-  });
+  const result = await withTrust(() =>
+    api.runtimes.runMany({
+      sessionId: state.sessionId,
+      runtimes: ids,
+      text: prompt,
+      displayText: display,
+      model: state.model,
+      projectDir: state.projectDir,
+    }),
+  );
 
   if (!result.ok) {
     toast(result.error, 'err');
@@ -902,9 +1489,826 @@ function setRunning(running) {
   $('#composer-hint').textContent = running
     ? state.liveRuntimes.length
       ? 'Рантайм работает…'
-      : 'Агент работает…'
+      : 'Агент работает · Enter — в очередь · Esc — остановить'
     : '';
 }
+
+/* ---------- слэш-команды и @файл (CC7.7–CC7.9) ---------- */
+
+const INIT_PROMPT = [
+  'Изучи этот проект: структура, стек, команды сборки и тестов, соглашения в коде.',
+  'Напиши или обнови AGENTS.md в корне проекта: короткие обязательные правила для агентов —',
+  'как собирать и тестировать, где что лежит, чего не делать. Без воды, только проверенное.',
+  'Если AGENTS.md уже есть — сохрани действующие правила и дополни.',
+].join(' ');
+
+async function loadCommands() {
+  try {
+    state.commands = await api.commands.list(state.projectDir);
+  } catch {
+    state.commands = [];
+  }
+  return state.commands;
+}
+
+function commandHelp() {
+  const rows = (state.commands || []).map((c) =>
+    el('div', { class: 'help-row' }, [
+      el('code', { text: `/${c.name}${c.argumentHint ? ` ${c.argumentHint}` : ''}` }),
+      el('span', { text: c.description || '' }),
+      el('span', { class: 'hint-text', text: { builtin: '', project: 'проект', global: 'глобальная', skill: 'навык' }[c.source] || '' }),
+    ]),
+  );
+  openModal({
+    title: 'Команды и клавиши',
+    body: [
+      el('div', { class: 'help-table' }, rows),
+      el('div', { class: 'docs-group-title', text: 'Клавиши' }),
+      el('div', { class: 'hint-text', text: 'Enter — отправить (во время работы — в очередь) · Shift+Enter — новая строка · Esc — остановить · Shift+Tab — режим · ↑ — последнее сообщение · @ — файл проекта · / — команда' }),
+      el('div', { class: 'hint-text', text: 'Свои команды: .mai-code/commands/<имя>.md (проект) и папка commands в данных приложения. В тексте — $ARGUMENTS и $1…$9.' }),
+    ],
+  });
+}
+
+/** Выполняет `/команда аргументы`. */
+async function runSlash(text) {
+  const input = $('#input');
+  const match = /^\/(\S+)\s*([\s\S]*)$/.exec(text);
+  if (!match) return;
+  const name = match[1].toLowerCase();
+  const args = match[2].trim();
+  const clear = () => {
+    input.value = '';
+    autosize();
+  };
+  switch (name) {
+    case 'help':
+      clear();
+      await loadCommands();
+      commandHelp();
+      return;
+    case 'clear':
+      clear();
+      newChat();
+      return;
+    case 'resume':
+      clear();
+      await openResume(args);
+      return;
+    case 'model': {
+      const q = args.toLowerCase();
+      const found = state.models.find((m) => m.key.toLowerCase() === q) || state.models.find((m) => `${m.key} ${m.name || ''}`.toLowerCase().includes(q));
+      if (!q || !found) {
+        toast(q ? `Модель «${args}» не найдена` : 'Укажите часть названия модели: /model opus', 'err');
+        return;
+      }
+      clear();
+      state.model = found.key;
+      $('#model-select').value = found.key;
+      state.settings = await api.settings.save({ activeModel: found.key });
+      updateChrome();
+      toast(`Модель: ${modelLabel(found.key)}`, 'ok');
+      return;
+    }
+    case 'mode': {
+      const modes = state.permissionModes.length ? state.permissionModes : MODE_FALLBACK;
+      const found = modes.find((m) => m.id.toLowerCase() === args.toLowerCase() || m.label.toLowerCase() === args.toLowerCase());
+      if (!found) {
+        toast(`Режимы: ${modes.map((m) => m.id).join(', ')}`, 'err');
+        return;
+      }
+      clear();
+      await setPermissionMode(found.id);
+      return;
+    }
+    case 'init':
+      clear();
+      await send({ text: INIT_PROMPT, display: '/init' });
+      return;
+    case 'memory':
+      clear();
+      openMemory();
+      return;
+    case 'export':
+      clear();
+      $('#export-chat')?.click();
+      return;
+    case 'hook':
+      // Тихо, если хук просто отработал; заметно — если заблокировал или упал.
+      if (event.decision === 'deny' || event.decision === 'block') toast(`Хук ${event.event}: заблокировано`, 'err');
+      else if (event.error) toast(`Хук ${event.event} завершился с ошибкой: ${event.error}`, 'err');
+      break;
+    case 'context':
+      clear();
+      await openContext();
+      return;
+    case 'compact':
+      clear();
+      await compactNow(args);
+      return;
+    case 'cost':
+      clear();
+      openCost();
+      return;
+    case 'hooks':
+      clear();
+      await openHooks();
+      return;
+    case 'agents':
+      clear();
+      await openSubagents();
+      return;
+    default: {
+      const result = await api.commands.expand(state.projectDir, name, args);
+      if (!result?.ok) {
+        toast(result?.error || `Команда /${name} не найдена. /help — список`, 'err');
+        return;
+      }
+      clear();
+      await send({ text: result.prompt, display: text });
+    }
+  }
+}
+
+/* ---------- хуки (ADR 0035) ---------- */
+
+async function openHooks() {
+  const info = await api.chat.hooks(state.projectDir);
+  const rows = info.rows || [];
+  openModal({
+    title: 'Хуки',
+    body: [
+      rows.length
+        ? el(
+            'div',
+            { class: 'help-table' },
+            rows.map((r) =>
+              el('div', { class: 'help-row hook-row' }, [
+                el('code', { text: `${r.event}${r.matcher && r.matcher !== '*' ? ` · ${r.matcher}` : ''}` }),
+                el('span', { class: 'suggest-path', text: r.command }),
+                el('span', { class: 'hint-text', text: `${r.source === 'project' ? 'проект' : 'глобальный'} · ${r.timeout} с` }),
+              ]),
+            ),
+          )
+        : el('p', { text: 'Хуков нет.' }),
+      info.trusted ? null : el('p', { class: 'hint-text', text: 'Папка не доверена: хуки проекта не загружены.' }),
+      el('p', {
+        class: 'hint-text',
+        text: `Хуки проекта — ${info.projectFile}; глобальные — поле hooks в settings.json. Команда получает JSON на stdin; код 2 блокирует действие (причина — stderr), JSON { "decision", "reason", "additionalContext" } на stdout — решение и контекст.`,
+      }),
+    ],
+  });
+}
+
+async function openSubagents() {
+  const defs = await api.chat.agents(state.projectDir);
+  openModal({
+    title: 'Субагенты',
+    body: [
+      el(
+        'div',
+        { class: 'help-table' },
+        defs.map((d) =>
+          el('div', { class: 'help-row' }, [
+            el('code', { text: d.name }),
+            el('span', { text: d.description }),
+            el('span', { class: 'hint-text', text: `${{ builtin: 'встроенный', project: 'проект', global: 'глобальный' }[d.source] || d.source} · ${d.tools ? d.tools.join(', ') : 'все инструменты'}` }),
+          ]),
+        ),
+      ),
+      el('p', {
+        class: 'hint-text',
+        text: 'Агент сам поручает подзадачу инструментом agent и получает только итог. Свои типы — .mai-code/agents/<имя>.md: frontmatter description и tools (через запятую), тело — промпт. Разрешения субагента — те же, что у чата.',
+      }),
+    ],
+  });
+}
+
+/* ---------- быстрая запись в память (CC4.3) ---------- */
+
+function rememberLine(text) {
+  const save = async (scope) => {
+    modal.close();
+    const result = await api.memory.append({ projectDir: state.projectDir, scope, text });
+    if (result?.ok === false) {
+      toast(result.error || 'Не удалось записать в память', 'err');
+      return;
+    }
+    const input = $('#input');
+    input.value = '';
+    autosize();
+    toast(result.changed === false ? 'Это уже есть в памяти' : `Записано в ${scope === 'global' ? 'глобальную память' : 'память проекта'}`, 'ok');
+  };
+  const option = (key, label, scope, hint, recommended) =>
+    el('button', { class: `btn approve-option${recommended ? ' primary recommended' : ''}`, type: 'button', 'data-scope': scope, onclick: () => save(scope) }, [
+      el('span', { class: 'approve-key', text: key }),
+      el('span', { class: 'trust-option-text' }, [el('b', { text: label }), el('small', { text: hint })]),
+      recommended ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+    ]);
+  const modal = openModal({
+    title: 'Запомнить?',
+    small: true,
+    body: [el('div', { class: 'approve-args', text: text }), el('p', { class: 'hint-text', text: 'Память подмешивается в системный промпт агента. Версии и откат — в панели «Память».' })],
+    footer: [
+      option('1', 'В память проекта', 'project', '.mai-code/memory.md — только этот проект', true),
+      option('2', 'В глобальную память', 'global', 'для всех проектов', false),
+    ],
+  });
+  modal.modal.classList.add('approve-modal', 'remember-modal');
+  modal.footEl.querySelector('.recommended')?.focus();
+}
+
+/* ---------- редактирование сообщения и /resume (CC6.3, CC6.4) ---------- */
+
+function startEdit(index) {
+  const message = state.messages[index];
+  if (!message || message.role !== 'user') return;
+  state.editingTurn = index;
+  const input = $('#input');
+  input.value = message.display || message.content || '';
+  autosize();
+  input.focus();
+  $('#edit-banner').hidden = false;
+  renderAll();
+}
+
+function cancelEdit() {
+  if (state.editingTurn === null) return;
+  state.editingTurn = null;
+  $('#edit-banner').hidden = true;
+  $('#input').value = '';
+  autosize();
+  renderAll();
+}
+
+/** Перед отправкой отредактированного сообщения диалог откатывается к нему (файлы не трогаем). */
+async function applyEdit() {
+  const turn = state.editingTurn;
+  if (turn === null) return true;
+  const result = await api.chat.rewind(state.sessionId, turn, 'conversation');
+  if (!result?.ok) {
+    toast(result?.error || 'Не удалось заменить сообщение', 'err');
+    return false;
+  }
+  state.messages = result.messages || [];
+  state.editingTurn = null;
+  $('#edit-banner').hidden = true;
+  return true;
+}
+
+async function openResume(query = '') {
+  const search = el('input', { class: 'sessions-search', type: 'search', placeholder: 'Поиск по заголовку и тексту…', value: query });
+  const list = el('div', { class: 'resume-list' });
+  const render = async () => {
+    const items = await api.sessions.list({ query: search.value });
+    list.replaceChildren(
+      ...(items.length
+        ? items.slice(0, 30).map((item) =>
+            el('button', {
+              class: `session${item.id === state.sessionId ? ' active' : ''}`,
+              type: 'button',
+              onclick: async () => {
+                modal.close();
+                await loadSession(item.id);
+                refreshSessions();
+              },
+            }, [
+              el('span', { class: 'session-title', text: item.title || 'Без названия' }),
+              el('span', { class: 'session-meta', text: `${fmtDate(item.updatedAt)} · ${shortPath(item.projectDir)} · запросов: ${item.count}` }),
+              item.match ? el('span', { class: 'session-match', text: `…${item.match}…` }) : null,
+            ]),
+          )
+        : [el('div', { class: 'sessions-empty', text: 'Ничего не найдено' })]),
+    );
+  };
+  let timer = null;
+  search.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(render, 200);
+  });
+  const modal = openModal({ title: 'Продолжить чат', body: [search, list] });
+  modal.modal.classList.add('resume-modal');
+  await render();
+  search.focus();
+}
+
+/* ---------- чекпоинты и откат (CC6.1) ---------- */
+
+async function refreshCheckpoints() {
+  if (!state.sessionId) {
+    state.checkpointTurns = new Set();
+    return;
+  }
+  try {
+    const turns = await api.chat.checkpoints(state.sessionId);
+    state.checkpointTurns = new Set(turns.map((t) => t.turn));
+  } catch {
+    state.checkpointTurns = new Set();
+  }
+}
+
+async function openRewind(turn) {
+  const plan = await api.chat.rewindPlan(state.sessionId, turn);
+  if (!plan?.ok) {
+    toast(plan?.error || 'Откат недоступен', 'err');
+    return;
+  }
+  const files = plan.files || [];
+  const actionText = { restore: 'вернуть', delete: 'удалить (файла не было)', skip: 'пропустить' };
+  const recommended = files.length ? 'both' : 'conversation';
+  const run = async (mode) => {
+    modal.close();
+    const result = await api.chat.rewind(state.sessionId, turn, mode);
+    if (!result?.ok) {
+      toast(result?.error || 'Откат не выполнен', 'err');
+      return;
+    }
+    if (mode !== 'code') {
+      state.messages = result.messages || [];
+      state.toolResults = {};
+      for (const m of state.messages) {
+        if (m.role === 'tool' && m.tool_call_id) state.toolResults[m.tool_call_id] = { ok: !String(m.content || '').startsWith('Ошибка'), content: m.content, diff: m.diff || null };
+      }
+      state.todos = todosFromHistory(state.messages);
+      renderTodos();
+      const input = $('#input');
+      input.value = result.text || '';
+      autosize();
+      input.focus();
+    }
+    await refreshCheckpoints();
+    renderAll();
+    refreshContext();
+    const parts = [];
+    if (mode !== 'conversation') parts.push(`файлов возвращено: ${result.restored?.length || 0}`);
+    if (mode !== 'code') parts.push('диалог возвращён к сообщению');
+    if (result.failed?.length) parts.push(`не удалось: ${result.failed.map((f) => f.file).join(', ')}`);
+    toast(`Откат: ${parts.join(' · ')}`, result.failed?.length ? 'err' : 'ok');
+  };
+  const option = (key, label, mode, hint, disabled = false) =>
+    el(
+      'button',
+      {
+        class: `btn approve-option${mode === recommended ? ' primary recommended' : ''}`,
+        type: 'button',
+        'data-mode': mode,
+        disabled: disabled ? 'disabled' : null,
+        onclick: () => run(mode),
+      },
+      [
+        el('span', { class: 'approve-key', text: key }),
+        el('span', { class: 'trust-option-text' }, [el('b', { text: label }), el('small', { text: hint })]),
+        mode === recommended ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+      ],
+    );
+  const modal = openModal({
+    title: 'Вернуться к сообщению?',
+    small: true,
+    body: [
+      el('div', { class: 'approve-args', text: plan.text }),
+      files.length
+        ? el('div', { class: 'rewind-files' }, [
+            el('div', { class: 'docs-group-title', text: `Файлы (${files.length})` }),
+            ...files.map((f) =>
+              el('div', { class: 'rewind-file' }, [
+                el('span', { class: 'suggest-path', text: f.file }),
+                el('span', { class: 'hint-text', text: `${actionText[f.action] || f.action}${f.changed ? '' : ' · уже как было'}${f.reason ? ` · ${f.reason}` : ''}` }),
+              ]),
+            ),
+          ])
+        : el('p', { class: 'hint-text', text: 'После этого сообщения агент не правил файлы через write_file и edit_file.' }),
+      el('p', {
+        class: 'hint-text',
+        text: `Диалог: сообщение и ${Math.max(0, plan.later - 1)} следующих уйдут из чата, текст вернётся в поле ввода. Изменения, сделанные командами run_shell, откат не возвращает.`,
+      }),
+    ],
+    footer: [
+      option('1', 'Код и диалог', 'both', 'файлы и чат — как до этого сообщения', !files.length),
+      option('2', 'Только диалог', 'conversation', 'файлы остаются как есть'),
+      option('3', 'Только код', 'code', 'чат остаётся, файлы — как до сообщения', !files.length),
+    ],
+  });
+  modal.modal.classList.add('approve-modal', 'rewind-modal');
+  modal.footEl.querySelector('.recommended')?.focus();
+}
+
+/* ---------- контекст, компакция, стоимость (CC5.1–CC5.5) ---------- */
+
+function renderContextMeter() {
+  const meter = $('#context-meter');
+  if (!meter) return;
+  const c = state.context;
+  if (!c?.window || !c.used) {
+    meter.hidden = true;
+    return;
+  }
+  const pct = Math.min(100, Math.round((c.used / c.window) * 100));
+  meter.hidden = false;
+  meter.textContent = `контекст ${pct}%`;
+  meter.className = `context-meter${pct >= 85 ? ' ctx-high' : pct >= 70 ? ' ctx-mid' : ''}`;
+  meter.title = `${c.exact ? '' : '≈ '}${contextLabel(c.used)} из ${contextLabel(c.window)} токенов. С 80% ранняя часть диалога сжимается в сводку. /context — подробно`;
+}
+
+async function refreshContext() {
+  if (!state.sessionId) {
+    state.context = null;
+    renderContextMeter();
+    return;
+  }
+  try {
+    const stats = await api.chat.context({ sessionId: state.sessionId, model: state.model });
+    state.context = { used: stats.used, window: stats.window, exact: stats.exact };
+  } catch {
+    state.context = null;
+  }
+  renderContextMeter();
+}
+
+async function openContext() {
+  const stats = await api.chat.context({ sessionId: state.sessionId, projectDir: state.projectDir, model: state.model });
+  const max = Math.max(1, ...stats.parts.map((p) => p.tokens));
+  const pct = Math.round((stats.used / stats.window) * 100);
+  openModal({
+    title: 'Контекст модели',
+    body: [
+      el('p', {
+        text: `${stats.exact ? '' : '≈ '}${contextLabel(stats.used)} из ${contextLabel(stats.window)} токенов (${pct}%). ${stats.exact ? 'По данным провайдера за последний запрос и оценке новых сообщений.' : 'Оценка по размеру текста: провайдер ещё не прислал usage.'}`,
+      }),
+      el(
+        'div',
+        { class: 'context-parts' },
+        stats.parts
+          .filter((p) => p.tokens > 0)
+          .map((p) =>
+            el('div', { class: 'context-row' }, [
+              el('span', { text: p.label }),
+              el('span', { class: 'context-bar' }, [el('i', { style: `width:${Math.max(2, Math.round((p.tokens / max) * 100))}%` })]),
+              el('span', { class: 'context-num', text: `≈ ${contextLabel(p.tokens)}` }),
+            ]),
+          ),
+      ),
+      el('p', { class: 'hint-text', text: 'С 80% ранняя часть диалога автоматически сжимается в сводку. Вручную — /compact [что сохранить].' }),
+    ],
+  });
+}
+
+async function compactNow(instructions = '') {
+  if (state.running) {
+    toast('Агент работает — сожмите контекст после ответа', 'err');
+    return;
+  }
+  if (!state.sessionId) {
+    toast('Нет чата для компакции', 'err');
+    return;
+  }
+  setHint('Сжимаю контекст…');
+  const result = await api.chat.compact(state.sessionId, instructions);
+  setHint('');
+  if (!result?.ok) {
+    toast(result?.error || 'Компакция не удалась', 'err');
+    return;
+  }
+  state.messages = result.messages;
+  renderAll();
+  await refreshContext();
+  toast(`Контекст сжат: ${result.marker.messages} сообщений → сводка`, 'ok');
+}
+
+function setHint(text) {
+  const hint = $('#composer-hint');
+  if (hint) hint.textContent = text;
+}
+
+/** Цена модели за 1 млн токенов из настроек провайдера, если задана. */
+function priceOf(modelKey) {
+  const [providerId, ...rest] = String(modelKey || '').split('/');
+  const id = rest.join('/');
+  const provider = state.settings?.providers?.[providerId];
+  return (provider?.models || []).find((m) => m.id === id)?.price || null;
+}
+
+function openCost() {
+  const byModel = new Map();
+  for (const m of state.messages) {
+    if (m.role !== 'assistant' || !m.usage) continue;
+    const key = m.model ? (m.model.includes('/') ? m.model : `${String(state.model).split('/')[0]}/${m.model}`) : state.model;
+    const row = byModel.get(key) || { input: 0, output: 0, cached: 0, steps: 0 };
+    row.input += m.usage.input || 0;
+    row.output += m.usage.output || 0;
+    row.cached += m.usage.cached || 0;
+    row.steps += 1;
+    byModel.set(key, row);
+  }
+  let total = 0;
+  let priced = true;
+  const rows = [...byModel.entries()].map(([key, row]) => {
+    const price = priceOf(key);
+    const cost = price ? (row.input * price.input + row.output * (price.output || 0)) / 1e6 : null;
+    if (cost == null) priced = false;
+    else total += cost;
+    return el('div', { class: 'context-row' }, [
+      el('span', { text: modelLabel(key) }),
+      el('span', { class: 'context-num', text: `${row.steps} шагов · ↑${contextLabel(row.input)}${row.cached ? ` (кэш ${contextLabel(row.cached)})` : ''} ↓${contextLabel(row.output)}` }),
+      el('span', { class: 'context-num', text: cost == null ? 'цена не задана' : `$${cost.toFixed(4)}` }),
+    ]);
+  });
+  openModal({
+    title: 'Токены и стоимость чата',
+    body: [
+      rows.length ? el('div', { class: 'context-parts' }, rows) : el('p', { text: 'Провайдер ещё не прислал данных о токенах для этого чата.' }),
+      rows.length && total ? el('p', { text: `Итого: $${total.toFixed(4)}${priced ? '' : ' (без моделей без цены)'}` }) : null,
+      el('p', { class: 'hint-text', text: 'Цена задаётся у модели провайдера: "price": { "input": 3, "output": 15 } — долларов за 1 млн токенов.' }),
+    ],
+  });
+}
+
+/* ---------- всплывающие подсказки ---------- */
+
+const suggest = { kind: '', items: [], index: 0, token: null, timer: null };
+
+function closeSuggest() {
+  suggest.kind = '';
+  suggest.items = [];
+  const box = $('#suggest');
+  if (box) box.hidden = true;
+}
+
+function renderSuggest() {
+  const box = $('#suggest');
+  if (!box) return;
+  if (!suggest.items.length) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  box.replaceChildren(
+    ...suggest.items.map((item, i) =>
+      el(
+        'button',
+        {
+          class: `suggest-item${i === suggest.index ? ' active' : ''}`,
+          type: 'button',
+          onmousedown: (e) => {
+            e.preventDefault();
+            suggest.index = i;
+            acceptSuggest(false);
+          },
+        },
+        suggest.kind === 'slash'
+          ? [
+              el('code', { text: `/${item.name}` }),
+              item.argumentHint ? el('span', { class: 'hint-text', text: item.argumentHint }) : null,
+              el('span', { class: 'suggest-desc', text: item.description || '' }),
+              item.source !== 'builtin' ? el('span', { class: 'suggest-source', text: { project: 'проект', global: 'глобальная', skill: 'навык' }[item.source] || '' }) : null,
+            ]
+          : [el('span', { class: 'suggest-path', text: item })],
+      ),
+    ),
+  );
+}
+
+/** Что подсказывать по тексту до курсора: команду в начале строки или файл после @. */
+async function updateSuggest() {
+  const input = $('#input');
+  const before = input.value.slice(0, input.selectionStart ?? input.value.length);
+  const slash = /^\/(\S*)$/.exec(before);
+  if (slash && !input.value.includes('\n')) {
+    if (!state.commands) await loadCommands();
+    const q = slash[1].toLowerCase();
+    const list = (state.commands || []).filter((c) => c.name.toLowerCase().startsWith(q));
+    const more = (state.commands || []).filter((c) => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q));
+    suggest.kind = 'slash';
+    suggest.items = [...list, ...more].slice(0, 12);
+    suggest.index = 0;
+    suggest.token = { start: 0, end: before.length };
+    renderSuggest();
+    return;
+  }
+  const mention = /(^|\s)@([^\s@]*)$/.exec(before);
+  if (mention && state.projectDir) {
+    const query = mention[2];
+    const start = before.length - query.length - 1;
+    clearTimeout(suggest.timer);
+    suggest.timer = setTimeout(async () => {
+      const items = await api.files.search(state.projectDir, query).catch(() => []);
+      // Курсор мог уйти, пока шёл поиск.
+      const now = input.value.slice(0, input.selectionStart ?? input.value.length);
+      if (!/(^|\s)@([^\s@]*)$/.test(now)) return;
+      suggest.kind = 'mention';
+      suggest.items = items;
+      suggest.index = 0;
+      suggest.token = { start, end: now.length };
+      renderSuggest();
+    }, 120);
+    return;
+  }
+  closeSuggest();
+}
+
+/** Подставляет выбранное. Команда без аргументов по Enter выполняется сразу. */
+function acceptSuggest(run) {
+  const input = $('#input');
+  const item = suggest.items[suggest.index];
+  if (!item || !suggest.token) return;
+  const { start, end } = suggest.token;
+  if (suggest.kind === 'slash') {
+    input.value = `/${item.name}${item.argumentHint ? ' ' : ''}${input.value.slice(end)}`;
+    closeSuggest();
+    autosize();
+    input.focus();
+    if (run && !item.argumentHint) send();
+    return;
+  }
+  const insert = `@${item}${item.endsWith('/') ? '' : ' '}`;
+  input.value = `${input.value.slice(0, start)}${insert}${input.value.slice(end)}`;
+  const caret = start + insert.length;
+  input.setSelectionRange(caret, caret);
+  closeSuggest();
+  autosize();
+  input.focus();
+  // Папка: сразу показать её содержимое.
+  if (item.endsWith('/')) updateSuggest();
+}
+
+function onSuggestKey(event) {
+  if (!suggest.items.length) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    const step = event.key === 'ArrowDown' ? 1 : -1;
+    suggest.index = (suggest.index + step + suggest.items.length) % suggest.items.length;
+    renderSuggest();
+  } else if (event.key === 'Tab' && !event.shiftKey) {
+    acceptSuggest(false);
+  } else if (event.key === 'Enter' && !event.shiftKey) {
+    acceptSuggest(true);
+  } else if (event.key === 'Escape') {
+    closeSuggest();
+  } else {
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
+/* ---------- очередь сообщений, задачи, клавиши (CC7.5, CC1.5, CC7.6) ---------- */
+
+/** Сообщение во время работы агента уходит в очередь и встанет в историю перед следующим шагом. */
+async function queueMessage() {
+  const input = $('#input');
+  const text = input.value.trim();
+  if (!text) return;
+  if (state.liveRuntimes.length) {
+    toast('Внешний рантайм не принимает сообщения на ходу — дождитесь ответа', 'err');
+    return;
+  }
+  if (state.attachments.length) toast('Вложения уйдут со следующим запросом, после ответа агента');
+  const result = await api.chat.queue(text, text);
+  if (result?.idle) {
+    // Агент как раз закончил — отправляем обычным запросом.
+    state.running = false;
+    await send();
+    return;
+  }
+  if (!result?.ok) {
+    toast(result?.error || 'Сообщение не поставлено в очередь', 'err');
+    return;
+  }
+  state.queue.push({ id: result.id, text });
+  input.value = '';
+  autosize();
+  renderQueue();
+}
+
+function renderQueue() {
+  const box = $('#queue');
+  if (!box) return;
+  box.hidden = !state.queue.length;
+  box.replaceChildren(
+    ...state.queue.map((item) =>
+      el('div', { class: 'queue-item', title: 'Агент прочитает это перед следующим шагом' }, [
+        el('span', { class: 'queue-label', text: 'в очереди' }),
+        el('span', { class: 'queue-text', text: item.text }),
+        el('button', {
+          class: 'queue-remove',
+          type: 'button',
+          title: 'Убрать из очереди и вернуть в поле ввода',
+          text: '✕',
+          onclick: async () => {
+            const result = await api.chat.unqueue(item.id);
+            state.queue = state.queue.filter((q) => q.id !== item.id);
+            if (result?.ok) {
+              const input = $('#input');
+              input.value = [item.text, input.value].filter(Boolean).join('\n');
+              autosize();
+            } else {
+              toast(result?.error || 'Уже передано агенту');
+            }
+            renderQueue();
+          },
+        }),
+      ]),
+    ),
+  );
+}
+
+/** Последний список задач из истории — при открытии чата. */
+function todosFromHistory(messages) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const calls = messages[i]?.tool_calls || [];
+    for (let j = calls.length - 1; j >= 0; j -= 1) {
+      if (calls[j]?.function?.name !== 'todo_write') continue;
+      try {
+        const todos = JSON.parse(calls[j].function.arguments || '{}').todos;
+        return Array.isArray(todos) ? todos : [];
+      } catch {
+        return [];
+      }
+    }
+  }
+  return [];
+}
+
+function renderTodos() {
+  const box = $('#todos');
+  if (!box) return;
+  const todos = state.todos || [];
+  box.hidden = !todos.length;
+  if (!todos.length) {
+    box.replaceChildren();
+    return;
+  }
+  const done = todos.filter((t) => t.status === 'completed').length;
+  const icon = { pending: '☐', in_progress: '◐', completed: '☑' };
+  box.replaceChildren(
+    el(
+      'button',
+      {
+        class: 'todos-head',
+        type: 'button',
+        onclick: () => {
+          state.todosCollapsed = !state.todosCollapsed;
+          renderTodos();
+        },
+      },
+      [el('span', { text: `Задачи агента: ${done} из ${todos.length}` }), el('span', { class: 'hint-text', text: state.todosCollapsed ? '▸' : '▾' })],
+    ),
+    state.todosCollapsed
+      ? null
+      : el(
+          'ul',
+          { class: 'todos-list' },
+          todos.map((t) =>
+            el('li', { class: `todo todo-${t.status}` }, [
+              el('span', { class: 'todo-icon', text: icon[t.status] || '☐' }),
+              el('span', { text: t.status === 'in_progress' && t.activeForm ? t.activeForm : t.content }),
+            ]),
+          ),
+        ),
+  );
+}
+
+function stopRun() {
+  if (state.liveRuntimes.length) api.runtimes.stop();
+  else api.chat.stop();
+}
+
+/** Режимы по кругу для Shift+Tab: недоступные пропускаются, «Без вопросов» — с подтверждением. */
+function nextMode() {
+  const modes = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).filter((m) => !m.disabled);
+  const index = modes.findIndex((m) => m.id === state.permissionMode);
+  return modes[(index + 1) % modes.length]?.id || 'manual';
+}
+
+/**
+ * Горячие клавиши (CC7.6): Esc — остановить агента, Shift+Tab — следующий
+ * режим, ↑ в пустом поле — вернуть последнее сообщение.
+ */
+document.addEventListener('keydown', (event) => {
+  if (state.approval || state.question || document.querySelector('.modal-backdrop')) return;
+  const input = $('#input');
+  if (event.key === 'Escape' && state.running) {
+    event.preventDefault();
+    stopRun();
+    return;
+  }
+  if (event.key === 'Escape' && state.editingTurn !== null) {
+    event.preventDefault();
+    cancelEdit();
+    return;
+  }
+  if (event.key === 'Tab' && event.shiftKey && (event.target === input || event.target === document.body)) {
+    event.preventDefault();
+    setPermissionMode(nextMode());
+    return;
+  }
+  if (event.key === 'ArrowUp' && event.target === input && !input.value) {
+    const last = [...state.messages].reverse().find((m) => m.role === 'user');
+    if (last) {
+      event.preventDefault();
+      input.value = last.display || last.content || '';
+      autosize();
+    }
+  }
+});
 
 /* ---------- события ---------- */
 
@@ -931,14 +2335,73 @@ function handleEvent(event) {
       scheduleRender();
       break;
     case 'tool_result':
-      state.toolResults[event.id] = { ok: event.ok, content: event.content };
+      state.toolResults[event.id] = { ok: event.ok, content: event.content, diff: event.diff || null };
       scheduleRender();
       break;
     case 'approval':
       askApproval(event);
       break;
+    case 'question':
+      openQuestion(event);
+      break;
+    case 'context':
+      state.context = { used: event.used, window: event.window, exact: event.exact };
+      renderContextMeter();
+      break;
+    case 'compact:start':
+      setHint('Сжимаю контекст…');
+      break;
+    case 'compaction':
+      state.messages.push(event.marker);
+      setHint(state.running ? 'Агент работает · Enter — в очередь · Esc — остановить' : '');
+      toast(`Контекст ${event.marker.auto ? 'автоматически ' : ''}сжат: ${event.marker.messages} сообщений → сводка`, 'ok');
+      scheduleRender();
+      break;
+    case 'tool_progress': {
+      const previous = state.liveOutput[event.id] || '';
+      state.liveOutput[event.id] = (previous + event.text).slice(-20000);
+      scheduleRender();
+      break;
+    }
+    case 'todos':
+      state.todos = event.todos || [];
+      renderTodos();
+      break;
+    case 'queued:consumed': {
+      const ids = new Set(event.ids || []);
+      for (const item of state.queue.filter((q) => ids.has(q.id))) {
+        state.messages.push({ role: 'user', content: item.text, display: item.text, queued: true });
+      }
+      state.queue = state.queue.filter((q) => !ids.has(q.id));
+      renderQueue();
+      scheduleRender();
+      break;
+    }
+    case 'queued:returned': {
+      // Агент закончил, не взяв сообщения: возвращаем их в поле ввода.
+      const input = $('#input');
+      const texts = (event.items || []).map((item) => item.text);
+      state.queue = [];
+      renderQueue();
+      if (texts.length) {
+        input.value = [...texts, input.value].filter(Boolean).join('\n');
+        autosize();
+        toast('Сообщения из очереди возвращены в поле ввода');
+      }
+      break;
+    }
+    case 'question:expired':
+      state.question = null;
+      toast('Вопрос агента остался без ответа — агент продолжил по рекомендации', 'err');
+      renderAll();
+      break;
+    case 'mode:changed':
+      refreshPermissionMode();
+      break;
     case 'approval:expired':
       state.approvalOpen = false;
+      state.approval = null;
+      renderAll();
       toast('Подтверждение истекло — действие отменено', 'err');
       break;
     case 'notice':
@@ -956,6 +2419,8 @@ function handleEvent(event) {
       );
       break;
     case 'done':
+      refreshCheckpoints().then(() => renderAll());
+      notify('Агент закончил', [...(event.messages || [])].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '');
       state.messages = event.messages || state.messages;
       state.live = null;
       state.running = false;
@@ -1017,55 +2482,141 @@ function handleEvent(event) {
   }
 }
 
+const RISK_LABEL = { low: 'Низкий риск', medium: 'Средний риск', high: 'Высокий риск' };
+const CLASS_LABEL = {
+  read: 'чтение',
+  write: 'правка файла',
+  exec: 'команда',
+  memory: 'память',
+  network: 'сеть',
+  external: 'внешний инструмент',
+};
+
+/** Diff правки: строки с подсветкой, счётчики +/−. */
+function diffView(diff, { limit = 400 } = {}) {
+  if (!diff?.lines?.length) return null;
+  const rows = diff.lines.slice(0, limit).map((line) =>
+    el('div', { class: `diff-row diff-${line.type === '+' ? 'add' : line.type === '-' ? 'del' : line.type === '@' ? 'hunk' : 'ctx'}` }, [
+      el('span', { class: 'diff-sign', text: line.type === '@' ? '' : line.type }),
+      el('span', { class: 'diff-text', text: line.text }),
+    ]),
+  );
+  return el('div', { class: 'diff-view' }, [
+    el('div', { class: 'diff-stats' }, [
+      diff.created ? el('span', { text: 'новый файл · ' }) : null,
+      el('span', { class: 'diff-plus', text: `+${diff.added}` }),
+      el('span', { text: ' ' }),
+      el('span', { class: 'diff-minus', text: `−${diff.removed}` }),
+      diff.truncated ? el('span', { class: 'hint-text', text: ' · показано не всё' }) : null,
+    ]),
+    el('div', { class: 'diff-body' }, rows),
+  ]);
+}
+
+/**
+ * Запрос разрешения (ADR 0027, CC7.1) — карточкой в ленте. Три ответа, как в
+ * Claude Code: 1 — да; 2 — да и не спрашивать (правило на чат или всегда);
+ * 3 — нет, с пояснением для агента. Рекомендованный ответ подсвечен и в фокусе.
+ */
 function askApproval(event) {
-  // Второе подтверждение не должно открываться поверх первого: нижняя модалка
-  // осталась бы без ответа, и её промис не резолвился бы никогда.
-  if (state.approvalOpen) {
-    api.chat.approve(event.id, false);
+  notify('Нужно разрешение', event.summary || event.tool || '');
+  // Второй запрос не должен перекрывать первый: первый остался бы без ответа.
+  if (state.approval) {
+    api.chat.approve(event.id, false, { feedback: 'Предыдущий запрос ещё открыт.' });
     toast('Предыдущее подтверждение ещё открыто — новое действие отклонено', 'err');
     return;
   }
   state.approvalOpen = true;
-  let answered = false;
-  const answer = (allow) => {
-    if (answered) return;
-    answered = true;
-    state.approvalOpen = false;
-    api.chat.approve(event.id, allow);
-  };
-  const body = [
-    el('p', { text: 'Агент просит разрешение на действие:' }),
-    el('div', { class: 'approve-args', text: event.summary }),
-    el('p', { class: 'hint-text', text: `Инструмент: ${event.name}` }),
-  ];
-  const modal = openModal({
-    title: 'Подтверждение',
-    body,
-    small: true,
-    // Закрытие крестиком или кликом по фону — это отказ, а не «пусть висит».
-    onClose: () => answer(false),
-    footer: [
-      el('button', {
-        class: 'btn',
-        type: 'button',
-        text: 'Отклонить',
-        onclick: () => {
-          answer(false);
-          modal.close();
-        },
-      }),
-      el('button', {
-        class: 'btn primary',
-        type: 'button',
-        text: 'Разрешить',
-        onclick: () => {
-          answer(true);
-          modal.close();
-        },
-      }),
-    ],
-  });
+  state.approval = { ...event, feedback: '', scope: 'session' };
+  renderAll();
+  setTimeout(() => document.querySelector('.approval-card .recommended')?.focus(), 0);
 }
+
+function answerApproval(allow, extra = {}) {
+  const current = state.approval;
+  if (!current) return;
+  // Пояснение берём из поля: вставка и автозаполнение не всегда шлют input.
+  const typed = document.querySelector('.approval-card .approve-feedback')?.value;
+  if (!allow && typed !== undefined) extra = { ...extra, feedback: typed };
+  state.approval = null;
+  state.approvalOpen = false;
+  api.chat.approve(current.id, allow, extra);
+  renderAll();
+}
+
+function approvalCard() {
+  const a = state.approval;
+  const recommended = a.recommended === 'deny' ? 'deny' : 'allow';
+  const suggestions = Array.isArray(a.suggestions) ? a.suggestions : [];
+  const risk = a.risk || 'medium';
+  const feedback = el('textarea', {
+    class: 'approve-feedback',
+    rows: '2',
+    placeholder: 'Что сделать иначе (необязательно, уйдёт агенту при отказе)',
+    oninput: (e) => {
+      a.feedback = e.target.value;
+    },
+  });
+  feedback.value = a.feedback || '';
+  const scope = el('select', { class: 'approve-scope', onchange: (e) => (a.scope = e.target.value) }, [
+    el('option', { value: 'session', text: 'в этом чате' }),
+    el('option', { value: 'global', text: 'всегда (все чаты)' }),
+  ]);
+  scope.value = a.scope || 'session';
+  const option = (key, label, kind, onclick) =>
+    el(
+      'button',
+      { class: `btn approve-option${kind === recommended ? ' primary recommended' : ''}`, type: 'button', 'data-key': key, onclick },
+      [
+        el('span', { class: 'approve-key', text: key }),
+        el('span', { text: label }),
+        kind === recommended ? el('span', { class: 'recommended-badge', text: 'Рекомендуется' }) : null,
+      ],
+    );
+  return el('div', { class: 'approval-card' }, [
+    el('div', { class: 'question-head', text: 'Разрешить действие?' }),
+    el('div', { class: 'approve-meta' }, [
+      el('span', { class: `risk-badge risk-${risk}`, text: RISK_LABEL[risk] || risk }),
+      el('span', { class: 'approve-class', text: CLASS_LABEL[a.cls] || a.cls || '' }),
+      el('span', { class: 'hint-text', text: a.tool || a.name || '' }),
+    ]),
+    el('div', { class: 'approve-args', text: a.summary || '' }),
+    diffView(a.diff),
+    a.why ? el('p', { class: 'hint-text', text: `Почему спрашиваем: ${a.why}.` }) : null,
+    a.rule ? el('p', { class: 'hint-text', text: `Сработало правило ask: ${a.rule}` }) : null,
+    a.args && a.cls === 'external'
+      ? el('details', { class: 'approve-details' }, [el('summary', { text: 'Аргументы' }), el('pre', { text: a.args })])
+      : null,
+    feedback,
+    el('div', { class: 'approve-actions' }, [
+      option('1', 'Да', 'allow', () => answerApproval(true)),
+      suggestions.length
+        ? el('div', { class: 'approve-always' }, [
+            option('2', `Да, и не спрашивать: ${suggestions.join(', ')}`, 'always', () =>
+              answerApproval(true, { remember: a.scope || 'session', rules: suggestions }),
+            ),
+            scope,
+          ])
+        : null,
+      option('3', 'Нет', 'deny', () => answerApproval(false, { feedback: a.feedback })),
+    ]),
+  ]);
+}
+
+/** Клавиши запроса разрешения: 1 — да, 2 — да и не спрашивать, 3/Esc — нет. */
+document.addEventListener('keydown', (event) => {
+  const a = state.approval;
+  if (!a) return;
+  const tag = event.target?.tagName || '';
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag) && event.key !== 'Escape') return;
+  const suggestions = Array.isArray(a.suggestions) ? a.suggestions : [];
+  if (event.key === '1') answerApproval(true);
+  else if (event.key === '2' && suggestions.length) answerApproval(true, { remember: a.scope || 'session', rules: suggestions });
+  else if (event.key === '3' || event.key === 'Escape') answerApproval(false, { feedback: a.feedback });
+  else return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
 
 /* ---------- настройки ---------- */
 
@@ -1191,6 +2742,24 @@ async function openSettings() {
         field('Модель ревизора', reviewerModel),
         field('Раундов доработки', reviewerRounds),
       ]),
+      el('div', { class: 'docs-group-title', text: 'Ключи и токены' }),
+      el('p', {
+        class: `hint-text secrets-${settings.secretsProtection || 'none'}`,
+        text:
+          settings.secretsProtection === 'os'
+            ? 'Ключи провайдеров, токены Vault и MAS зашифрованы хранилищем ОС: в settings.json их не прочитать.'
+            : settings.secretsProtection === 'weak'
+              ? 'Хранилище ключей ОС недоступно (Linux без keyring): ключи зашифрованы без ключа ОС — это слабая защита.'
+              : 'Хранилище ключей ОС недоступно: ключи лежат в settings.json открытым текстом.',
+      }),
+      settings.secretsUnreadable?.length
+        ? el('p', {
+            class: 'hint-text secrets-none',
+            text: `Не удалось расшифровать: ${settings.secretsUnreadable.join(', ')}. Ключи на диске сохранены; введите их заново, если хранилище ОС сменилось.`,
+          })
+        : null,
+      el('div', { class: 'docs-group-title', text: 'Доверие к папкам' }),
+      trustSettingsBlock(),
       el('div', { class: 'docs-group-title', text: 'Guardrails' }),
       el('label', { class: 'hint-text' }, [guardEnabled, ' включить guardrails для встроенного агента']),
       el('label', { class: 'hint-text' }, [guardDangerous, ' блокировать разрушительные команды (rm -rf /, format, pipe-to-shell и т. п.)']),
@@ -2627,6 +4196,10 @@ async function pickProject() {
   if (!dir) return;
   state.projectDir = dir;
   updateChrome();
+  refreshSessions();
+  // Решение о доверии — сразу при выборе папки, как в Claude Code (ADR 0028).
+  const trust = await refreshTrust();
+  if (trust?.state === 'unknown') await decideTrust(trust);
 }
 
 /* ---------- голосовой ввод через MAS ---------- */
@@ -2859,6 +4432,7 @@ async function init() {
   renderModels();
   renderRuntimes();
   renderModeSelect();
+  await refreshTrust();
   await loadModels();
   await refreshSessions();
   renderAll();
@@ -2866,6 +4440,18 @@ async function init() {
   api.chat.onEvent(handleEvent);
 
   $('#new-chat').addEventListener('click', newChat);
+  $('#sessions-scope')?.addEventListener('click', () => {
+    state.sessionsAll = !state.sessionsAll;
+    refreshSessions();
+  });
+  let searchTimer = null;
+  $('#sessions-search')?.addEventListener('input', (event) => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      state.sessionsQuery = event.target.value;
+      refreshSessions();
+    }, 200);
+  });
 
 // Экспорт всего диалога: меню форматов открывается по клику.
 $('#export-chat').addEventListener('click', async (event) => {
@@ -2889,10 +4475,7 @@ $('#export-chat').addEventListener('click', async (event) => {
   $('#mode-select').addEventListener('change', (event) => setPermissionMode(event.target.value));
   $('#send').addEventListener('click', send);
   $('#mic').addEventListener('click', toggleVoice);
-  $('#stop').addEventListener('click', () => {
-    if (state.liveRuntimes.length) api.runtimes.stop();
-    else api.chat.stop();
-  });
+  $('#stop').addEventListener('click', stopRun);
 
   $('#model-select').addEventListener('change', async (event) => {
     state.model = event.target.value;
@@ -2925,6 +4508,10 @@ $('#export-chat').addEventListener('click', async (event) => {
 
   const input = $('#input');
   input.addEventListener('input', autosize);
+  // Подсказки раньше Enter → отправить: стрелки, Tab и Enter выбирают из списка.
+  input.addEventListener('keydown', onSuggestKey);
+  input.addEventListener('input', updateSuggest);
+  input.addEventListener('blur', () => setTimeout(closeSuggest, 150));
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();

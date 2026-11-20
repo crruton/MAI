@@ -1,3 +1,4 @@
+import { runToolCall, toolEntry } from '../electron/lib/tool-runner.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -68,9 +69,23 @@ const appendCtx = ctx(true);
 const first = await appendTool.run(appendCtx, { text: '- Урок: edit_file не находит CRLF-фрагмент.' });
 check('запись выполнена', first.includes('Память обновлена'), first);
 check('указана версия v1', first.includes('v1'), first);
-check('подтверждение запрошено', appendCtx.calls.length === 1, JSON.stringify(appendCtx.calls));
-check('подтверждение с именем инструмента', appendCtx.calls[0]?.tool === 'memory_append', JSON.stringify(appendCtx.calls));
-check('в причине видно текст', /CRLF/.test(appendCtx.calls[0]?.reason || ''), appendCtx.calls[0]?.reason);
+// ADR 0027: инструмент сам не спрашивает — это делает runToolCall.
+check('инструмент сам подтверждение не запрашивает', appendCtx.calls.length === 0, JSON.stringify(appendCtx.calls));
+{
+  const asked = [];
+  await runToolCall({
+    entry: toolEntry(appendTool.schema, { source: 'builtin', run: appendTool.run }),
+    args: { text: '- Проверка сводки: CRLF.' },
+    ctx: { projectDir: project },
+    policy: { getMode: () => 'manual', getRules: () => ({}) },
+    approve: async (request) => {
+      asked.push(request);
+      return false;
+    },
+  });
+  check('запрос через runToolCall с именем инструмента', asked[0]?.tool === 'memory_append', JSON.stringify(asked));
+  check('в сводке запроса виден текст', /CRLF/.test(asked[0]?.summary || ''), asked[0]?.summary);
+}
 
 const file = path.join(project, '.mai-code', 'memory.md');
 check('файл памяти создан', fs.existsSync(file));
@@ -93,8 +108,17 @@ check('оба текста в файле', state2.project.includes('CRLF') && st
 
 console.log('\n[6] Отказ пользователя не меняет память');
 const before = fs.readFileSync(file, 'utf8');
-const denied = await appendTool.run(ctx('Пользователь отклонил запись'), { text: '- Не должно попасть в файл.' });
+// С ADR 0027 разрешение спрашивает цикл агента (runToolCall), а не инструмент.
+const deniedOutcome = await runToolCall({
+  entry: toolEntry(appendTool.schema, { source: 'builtin', run: appendTool.run }),
+  args: { text: '- Не должно попасть в файл.' },
+  ctx: { projectDir: project },
+  policy: { getMode: () => 'acceptEdits', getRules: () => ({}) },
+  approve: async () => ({ allow: false }),
+});
+const denied = deniedOutcome.content;
 check('отказ возвращён текстом', denied.includes('отклонил'), denied);
+check('в «Принимать правки» память спрашивает (F3)', deniedOutcome.decision.action === 'ask');
 check('файл не изменился', fs.readFileSync(file, 'utf8') === before);
 check('версий по-прежнему 2', readMemoryState(project).versions.project.length === 2);
 

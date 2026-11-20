@@ -25,13 +25,15 @@ function check(name, cond, extra = '') {
 
 console.log('\n[1] Нормализация режима');
 check('manual проходит', normalizeMode('manual') === 'manual');
-check('auto проходит', normalizeMode('auto') === 'auto');
+check('старое auto → bypass (миграция)', normalizeMode('auto') === 'bypass');
+check('bypass проходит', normalizeMode('bypass') === 'bypass');
+check('dontAsk проходит', normalizeMode('dontAsk') === 'dontAsk');
 check('acceptEdits проходит', normalizeMode('acceptEdits') === 'acceptEdits');
 check('plan проходит', normalizeMode('plan') === 'plan');
 check('мусор → manual', normalizeMode('hack') === DEFAULT_PERMISSION_MODE);
 check('пусто → manual', normalizeMode('') === DEFAULT_PERMISSION_MODE);
 check('null → manual', normalizeMode(null) === DEFAULT_PERMISSION_MODE);
-check('все 4 режима описаны', PERMISSION_MODES.every((id) => MODE_INFO[id]?.label));
+check('все режимы описаны', PERMISSION_MODES.every((id) => MODE_INFO[id]?.label));
 
 console.log('\n[2] Классификация инструментов');
 check('write_file — запись', isWriteTool('write_file'));
@@ -51,11 +53,20 @@ for (const tool of ['read_file', 'list_files', 'grep', 'load_skill']) {
   check(`manual + ${tool} → allow (чтение)`, d.action === 'allow', JSON.stringify(d));
 }
 
-console.log('\n[4] Режим «Авто»: разрешает без вопроса');
+console.log('\n[4] Режим «Без вопросов»: разрешает без вопроса');
 for (const tool of ['write_file', 'edit_file', 'run_shell', 'mcp__server__tool']) {
-  const d = decide({ mode: 'auto', tool });
-  check(`auto + ${tool} → allow`, d.action === 'allow', JSON.stringify(d));
+  const d = decide({ mode: 'bypass', tool });
+  check(`bypass + ${tool} → allow`, d.action === 'allow', JSON.stringify(d));
 }
+check('bypass — только для admin', MODE_INFO.bypass.adminOnly === true);
+check('bypass помечен предупреждением', MODE_INFO.bypass.warning === true);
+
+console.log('\n[4a] Режим «Только разрешённое»: отказ без вопроса');
+for (const tool of ['write_file', 'run_shell', 'mcp__server__tool']) {
+  const d = decide({ mode: 'dontAsk', tool });
+  check(`dontAsk + ${tool} → deny`, d.action === 'deny', JSON.stringify(d));
+}
+check('dontAsk + read_file → allow', decide({ mode: 'dontAsk', tool: 'read_file' }).action === 'allow');
 
 console.log('\n[5] Режим «Принимать правки»');
 check('acceptEdits + write_file → allow', decide({ mode: 'acceptEdits', tool: 'write_file' }).action === 'allow');
@@ -80,13 +91,14 @@ check('edit_file скрыт', hidden.has('edit_file'));
 check('run_shell скрыт', hidden.has('run_shell'));
 check('read_file не скрыт', !hidden.has('read_file'));
 check('в manual ничего не скрыто', hiddenToolsForMode('manual').size === 0);
-check('в auto ничего не скрыто', hiddenToolsForMode('auto').size === 0);
+check('в bypass ничего не скрыто', hiddenToolsForMode('bypass').size === 0);
 check('в acceptEdits ничего не скрыто', hiddenToolsForMode('acceptEdits').size === 0);
 
 console.log('\n[8] Промпт режима');
 check('plan упоминает альтернативы', /альтернатив/i.test(modePrompt('plan')));
 check('plan запрещает изменения', /не меняешь файлы/i.test(modePrompt('plan')));
-check('auto упоминает guardrails', /guardrails/i.test(modePrompt('auto')));
+check('bypass упоминает guardrails', /guardrails/i.test(modePrompt('bypass')));
+check('dontAsk про правила', /правил/i.test(modePrompt('dontAsk')));
 check('acceptEdits про команды', /команды/i.test(modePrompt('acceptEdits')));
 check('manual про подтверждение', /подтвержда/i.test(modePrompt('manual')));
 check('промпт не пустой для всех', PERMISSION_MODES.every((m) => modePrompt(m).length > 50));

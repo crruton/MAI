@@ -1,20 +1,25 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, clipboard } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent } from './lib/config.js';
+import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets } from './lib/config.js';
 import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
-import { listModels, resolveModel } from './lib/models.js';
-import { startRuntime, describeRuntime, probeRuntime } from './lib/runtimes.js';
-import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode } from './lib/sessions.js';
-import { runAgent } from './lib/agent.js';
+import { listModels, resolveModel, modelContext } from './lib/models.js';
+import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
+import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, addSessionRules, removeSessionRules } from './lib/sessions.js';
+import { runAgent, compactSession, describeContext } from './lib/agent.js';
+import { DEFAULT_CONTEXT } from './lib/context.js';
+import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
+import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
+import { listAgentDefs } from './lib/agent-defs.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
 import { loadPlugins, pluginDirs } from './lib/plugins.js';
+import { disposePluginHosts, retirePluginHosts } from './lib/plugin-host.js';
 import {
   listArtifacts,
   readArtifact,
@@ -54,7 +59,14 @@ import * as multica from './lib/multica.js';
 import * as sandbox from './lib/container.js';
 import { saveFromPaths, saveImage, uploadsRoot, removeSessionUploads, adoptDraftUploads, recognizeAttachment } from './lib/attachments.js';
 import { ocrStatus } from './lib/ocr.js';
-import { decide, normalizeMode, MODE_INFO, PERMISSION_MODES } from './lib/permissions.js';
+import { normalizeMode, MODE_INFO, PERMISSION_MODES } from './lib/permissions.js';
+import { effectiveMode, mergeRules, parseRule } from './lib/policy.js';
+import { createAuditLog, readAudit } from './lib/audit.js';
+import { trustState, setTrust, removeTrust, listTrust, inspectProject } from './lib/trust.js';
+import { guardIpc } from './lib/ipc-permissions.js';
+import { isImageFile } from './lib/vision.js';
+import { acquireProject } from './lib/project-lock.js';
+import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions } from './lib/commands.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
@@ -89,6 +101,12 @@ const APPROVAL_TIMEOUT_MS = 10 * 60 * 1000;
 
 let mainWindow = null;
 
+// Матрица прав IPC (ADR 0028): роль проверяется до любого обработчика.
+// Канал без записи в матрице считается admin-only.
+guardIpc(ipcMain, requireAdmin, {
+  onUnknown: (channel) => console.warn(`[ipc] канал ${channel} не внесён в матрицу прав — доступен только admin`),
+});
+
 /**
  * MCP-серверы проекта лежат в <проект>/.mai-code/mcp.json и дополняют
  * глобальные настройки. Проектные записи имеют приоритет.
@@ -104,9 +122,41 @@ function projectMcpConfig(projectDir) {
   }
 }
 
+/** Доверие к папке проекта (ADR 0028). Песочницы, созданные приложением, доверены. */
+function projectTrust(projectDir) {
+  return trustState(dataDir(), projectDir, { autoTrusted: [sandboxRoot()] });
+}
+
+function isTrusted(projectDir) {
+  return projectTrust(projectDir).state === 'trusted';
+}
+
+/** Ответ IPC, когда решения о доверии ещё нет: окно спросит и повторит запуск. */
+function needTrust(projectDir) {
+  const trust = projectTrust(projectDir);
+  if (trust.state !== 'unknown') return null;
+  return { ok: false, needTrust: true, projectDir, found: inspectProject(projectDir), error: 'Папка проекта не доверена' };
+}
+
 function mcpConfigs(projectDir) {
   const settings = loadSettings();
-  return { ...(settings.mcpServers || {}), ...projectMcpConfig(projectDir || settings.projectDir) };
+  const dir = projectDir || settings.projectDir;
+  // MCP проекта запускает процессы из чужого репозитория — только после доверия.
+  return { ...(settings.mcpServers || {}), ...(isTrusted(dir) ? projectMcpConfig(dir) : {}) };
+}
+
+/** Режим разрешений для внешнего рантайма: тот же, что у встроенного агента в этом чате. */
+function runtimeMode(sessionId, projectDir) {
+  const settings = loadSettings();
+  const session = sessionId ? getSession(sessionId) : null;
+  let mode = effectiveMode(session?.permissionMode || settings.permissionMode, authStatus().role);
+  if (mode === 'bypass' && projectDir && !isTrusted(projectDir)) mode = 'manual';
+  return mode;
+}
+
+/** loadPlugins с учётом доверия: плагины проекта исполняются в main-процессе. */
+function loadPluginsFor(projectDir) {
+  return loadPlugins(projectDir, { includeProject: isTrusted(projectDir) });
 }
 
 function send(window, event) {
@@ -118,7 +168,7 @@ function send(window, event) {
 
 function runState(window) {
   const id = window.id;
-  if (!runs.has(id)) runs.set(id, { controller: null, runtime: null, runtimeGroup: null, stage: null, correction: null, approvals: new Map() });
+  if (!runs.has(id)) runs.set(id, { controller: null, runtime: null, runtimeGroup: null, stage: null, correction: null, approvals: new Map(), questions: new Map(), queue: [] });
   return runs.get(id);
 }
 
@@ -177,7 +227,8 @@ function openBoardWindow(board, focus = '') {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // Песочница рендерера (A2.5): preload получает только безопасные модули Electron.
+      sandbox: true,
       spellcheck: false,
       backgroundThrottling: true,
     },
@@ -206,7 +257,8 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      // Песочница рендерера (A2.5): preload получает только безопасные модули Electron.
+      sandbox: true,
       spellcheck: false,
       backgroundThrottling: true,
     },
@@ -224,6 +276,14 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('[skills] не удалось установить вложенные навыки:', err?.message || err);
   }
+  // Ключи из settings.json старого формата шифруются хранилищем ОС (ADR 0031).
+  try {
+    const secrets = migrateSecrets();
+    if (secrets.migrated) emitLog(`Зашифровано секретов в settings.json: ${secrets.migrated}`);
+    if (secrets.protection !== 'os') console.warn(`[secrets] защита ключей: ${secrets.protection}`);
+  } catch (err) {
+    console.error('[secrets] не удалось зашифровать ключи:', err?.message || err);
+  }
   createWindow();
   const settings = loadSettings();
   emitLog('MAI Code запущен', { attributes: { platform: process.platform, version: app.getVersion() } });
@@ -240,6 +300,7 @@ app.on('window-all-closed', () => {
 // Останавливаем всё, что породило приложение: стадии, самокоррекцию,
 // внешние рантаймы и MCP-сервер repowise.
 app.on('before-quit', () => {
+  disposePluginHosts();
   for (const state of runs.values()) {
     try {
       state.stage?.kill();
@@ -473,9 +534,21 @@ ipcMain.handle('runtimes:run', async (event, payload) => {
   if (!runtime.command) return { ok: false, error: 'У рантайма не задана команда' };
 
   const projectDir = payload.projectDir || settings.projectDir;
+  const trustGate = needTrust(projectDir);
+  if (trustGate) return trustGate;
   const model = payload.model || settings.activeModel || '';
   const prompt = String(payload.text || '').trim();
   if (!prompt) return { ok: false, error: 'Пустой запрос' };
+
+  // Режим проверяется до записи сообщения в чат: отказ — это ошибка запуска, а не ответ рантайма.
+  const permissionMode = runtimeMode(payload.sessionId, projectDir);
+  const permission = permissionPlan(runtime, permissionMode);
+  if (!permission.ok) return { ok: false, error: permission.error, permissionDenied: true };
+  // Рантайм с правом записи занимает папку (A3.6); только чтение — нет.
+  const lock = permission.readOnly || permissionMode === 'plan'
+    ? { ok: true, release: () => {} }
+    : acquireProject(projectDir, { label: `рантайм ${runtime.name || payload.runtime}` });
+  if (!lock.ok) return { ok: false, busy: true, error: lock.error };
 
   const session = runtimeSession(payload, settings, prompt, model, projectDir, payload.displayText || prompt);
   const startedAt = Date.now();
@@ -485,9 +558,11 @@ ipcMain.handle('runtimes:run', async (event, payload) => {
     prompt,
     model,
     projectDir,
+    permissionMode,
     onData: (text) => send(window, { type: 'runtime:chunk', runtimeId: payload.runtime, text }),
     onExit: ({ code, error, output }) => {
       state.runtime = null;
+      lock.release();
       emitSpan('runtime.run', {
         startMs: startedAt,
         endMs: Date.now(),
@@ -526,7 +601,7 @@ ipcMain.handle('runtimes:run', async (event, payload) => {
     type: 'runtime:start',
     runtimeId: payload.runtime,
     name: runtime.name || payload.runtime,
-    command: describeRuntime(runtime, { prompt, model, projectDir, target: runtime.target || '' }),
+    command: describeRuntime(runtime, { prompt, model, projectDir, target: runtime.target || '' }, permissionMode),
   });
 
   return { ok: true, sessionId: session.id, title: session.title };
@@ -549,9 +624,32 @@ ipcMain.handle('runtimes:runMany', async (event, payload) => {
   if (!selected.length) return { ok: false, error: 'Нет включённых рантаймов с командой' };
 
   const projectDir = payload.projectDir || settings.projectDir;
+  const trustGate = needTrust(projectDir);
+  if (trustGate) return trustGate;
   const model = payload.model || settings.activeModel || '';
   const prompt = String(payload.text || '').trim();
   if (!prompt) return { ok: false, error: 'Пустой запрос' };
+
+  const permissionMode = runtimeMode(payload.sessionId, projectDir);
+  const refused = selected
+    .map(({ id, runtime }) => ({ id, plan: permissionPlan(runtime, permissionMode) }))
+    .filter((item) => !item.plan.ok);
+  if (refused.length) {
+    return { ok: false, permissionDenied: true, error: refused.map((item) => item.plan.error).join('\n') };
+  }
+  // Несколько агентов с правом записи в одной папке — та же гонка, что A3.6:
+  // группа занимает папку целиком, пока не завершится последний.
+  const writers = permissionMode !== 'plan' && selected.some(({ runtime }) => !permissionPlan(runtime, permissionMode).readOnly);
+  if (writers && selected.length > 1) {
+    return {
+      ok: false,
+      error:
+        'Несколько рантаймов с правом записи в одну папку перезапишут правки друг друга. ' +
+        'Запустите их в режиме «План» или по одному.',
+    };
+  }
+  const lock = writers ? acquireProject(projectDir, { label: 'группа рантаймов' }) : { ok: true, release: () => {} };
+  if (!lock.ok) return { ok: false, busy: true, error: lock.error };
 
   const session = runtimeSession(payload, settings, prompt, model, projectDir, payload.displayText || prompt);
   let pending = selected.length;
@@ -565,13 +663,14 @@ ipcMain.handle('runtimes:runMany', async (event, payload) => {
       type: 'runtime:start',
       runtimeId: id,
       name,
-      command: describeRuntime(runtime, { prompt, model, projectDir, target: runtime.target || '' }),
+      command: describeRuntime(runtime, { prompt, model, projectDir, target: runtime.target || '' }, permissionMode),
     });
     const handle = startRuntime({
       runtime,
       prompt,
       model,
       projectDir,
+      permissionMode,
       onData: (text) => send(window, { type: 'runtime:chunk', runtimeId: id, text }),
       onExit: ({ code, error, output }) => {
         emitSpan('runtime.run', {
@@ -586,7 +685,10 @@ ipcMain.handle('runtimes:runMany', async (event, payload) => {
           logError({ source: 'runtime', runtime: id, message: error || `Рантайм завершился с кодом ${code}` });
         }
         pending -= 1;
-        if (pending <= 0) state.runtimeGroup = null;
+        if (pending <= 0) {
+          state.runtimeGroup = null;
+          lock.release();
+        }
         send(window, {
           type: 'runtime:exit',
           runtimeId: id,
@@ -619,8 +721,82 @@ ipcMain.handle('project:pick', async () => {
   requireAdmin();
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (result.canceled || !result.filePaths[0]) return null;
+  // Процесс плагинов старого проекта держит его папку (cwd): останавливаем после текущих вызовов.
+  retirePluginHosts();
   saveSettings({ projectDir: result.filePaths[0] });
   return result.filePaths[0];
+});
+
+// ---------- слэш-команды и упоминания файлов (CC7.7–CC7.9) ----------
+
+ipcMain.handle('commands:list', (_e, projectDir) => {
+  const dir = projectDir || loadSettings().projectDir;
+  const trusted = isTrusted(dir);
+  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted }).map(({ name, description, argumentHint, source }) => ({
+    name,
+    description,
+    argumentHint,
+    source,
+  }));
+  const taken = new Set([...BUILTIN_COMMANDS.map((c) => c.name), ...custom.map((c) => c.name.toLowerCase())]);
+  const skills = listSkills(dir, { includeProject: trusted })
+    .filter((skill) => /^[a-z0-9][a-z0-9_-]*$/i.test(skill.name) && !taken.has(skill.name.toLowerCase()))
+    .map((skill) => ({ name: skill.name, description: skill.description || 'навык', argumentHint: '<задача>', source: 'skill' }));
+  return [...BUILTIN_COMMANDS.map((c) => ({ ...c, source: 'builtin' })), ...custom, ...skills];
+});
+
+/** Своя команда или навык → текст запроса агенту. */
+ipcMain.handle('commands:expand', (_e, payload = {}) => {
+  const dir = payload.projectDir || loadSettings().projectDir;
+  const name = String(payload.name || '').toLowerCase();
+  const trusted = isTrusted(dir);
+  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted }).find((c) => c.name.toLowerCase() === name);
+  if (custom) return { ok: true, prompt: expandTemplate(custom.body, payload.args), source: custom.source };
+  const skill = listSkills(dir, { includeProject: trusted }).find((s) => s.name.toLowerCase() === name);
+  if (skill) {
+    const task = String(payload.args || '').trim();
+    return {
+      ok: true,
+      source: 'skill',
+      prompt: `Используй навык «${skill.name}»: загрузи его инструментом load_skill и действуй по нему.${task ? `\n\nЗадача: ${task}` : ''}`,
+    };
+  }
+  return { ok: false, error: `Команда /${payload.name} не найдена` };
+});
+
+ipcMain.handle('files:search', (_e, payload = {}) => {
+  const dir = payload.projectDir || loadSettings().projectDir;
+  if (!dir) return [];
+  return searchFiles(dir, payload.query, { limit: 20 });
+});
+
+// ---------- доверие к папке (ADR 0028) ----------
+
+ipcMain.handle('trust:get', (_e, projectDir) => {
+  const dir = projectDir || loadSettings().projectDir;
+  return { projectDir: dir, ...projectTrust(dir), found: inspectProject(dir) };
+});
+
+/**
+ * Доверить папку может только admin: это включает исполнение её кода.
+ * «Ограниченно» доступно всем — это только сужает возможности.
+ */
+ipcMain.handle('trust:set', async (_e, payload) => {
+  const { projectDir, state } = payload || {};
+  if (state === 'trusted') requireAdmin();
+  const result = setTrust(dataDir(), projectDir, state);
+  // MCP проекта подключается или отключается сразу.
+  await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
+  return { ok: true, projectDir, ...result, found: inspectProject(projectDir) };
+});
+
+ipcMain.handle('trust:list', () => listTrust(dataDir()));
+
+ipcMain.handle('trust:remove', async (_e, projectDir) => {
+  requireAdmin();
+  const result = removeTrust(dataDir(), projectDir);
+  await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
+  return { ok: true, projectDir, ...result };
 });
 
 // ---------- режимы разрешений ----------
@@ -632,27 +808,62 @@ ipcMain.handle('project:pick', async () => {
 ipcMain.handle('permissions:modes', (_e, sessionId) => {
   const settings = loadSettings();
   const session = sessionId ? getSession(sessionId) : null;
+  const role = authStatus().role;
   return {
-    current: normalizeMode(session?.permissionMode || settings.permissionMode),
-    fallback: normalizeMode(settings.permissionMode),
+    current: effectiveMode(session?.permissionMode || settings.permissionMode, role),
+    fallback: effectiveMode(settings.permissionMode, role),
     sessionId: session?.id || null,
-    modes: PERMISSION_MODES.map((id) => MODE_INFO[id]),
+    role,
+    // Режим «Без вопросов» гостю не показываем выбираемым (ADR 0027).
+    modes: PERMISSION_MODES.map((id) => ({ ...MODE_INFO[id], disabled: Boolean(MODE_INFO[id].adminOnly && role !== 'admin') })),
+    rules: {
+      global: mergeRules(settings.permissions),
+      session: mergeRules(session?.permissionRules),
+    },
   };
 });
 
 /**
  * Сохраняет режим в сессию. Если сессии нет, запоминаем как значение по
  * умолчанию: иначе выбор в новом чате потерялся бы до первого сообщения.
+ * Проверка роли — здесь, в main: интерфейс можно обойти.
  */
 ipcMain.handle('permissions:set', (_e, payload) => {
   const { mode, sessionId } = payload || {};
   const next = normalizeMode(mode);
+  if (MODE_INFO[next]?.adminOnly && authStatus().role !== 'admin') {
+    return { ok: false, error: `Режим «${MODE_INFO[next].label}» доступен только роли admin`, mode: effectiveMode(next, 'guest') };
+  }
   if (sessionId) {
     const session = setSessionMode(sessionId, next);
     if (session) return { ok: true, mode: next, sessionId: session.id, scope: 'session' };
   }
   saveSettings({ permissionMode: next });
   return { ok: true, mode: next, sessionId: null, scope: 'default' };
+});
+
+/** Правила разрешений: сессия или глобально. Глобальные меняет только admin. */
+ipcMain.handle('permissions:rules', (_e, payload) => {
+  const { sessionId, scope = 'session', kind = 'allow', add = [], remove = [] } = payload || {};
+  const valid = (list) => (list || []).map(String).filter((rule) => parseRule(rule));
+  if (scope === 'global') {
+    requireAdmin();
+    const current = mergeRules(loadSettings().permissions);
+    const key = ['allow', 'ask', 'deny'].includes(kind) ? kind : 'allow';
+    const drop = new Set(valid(remove));
+    current[key] = [...current[key].filter((r) => !drop.has(r)), ...valid(add).filter((r) => !current[key].includes(r))];
+    saveSettings({ permissions: current });
+    return { ok: true, rules: current };
+  }
+  if (!sessionId) return { ok: false, error: 'нет сессии' };
+  if (remove?.length) removeSessionRules(sessionId, valid(remove));
+  const updated = add?.length ? addSessionRules(sessionId, kind, valid(add)) : getSession(sessionId);
+  return { ok: true, rules: mergeRules(updated?.permissionRules) };
+});
+
+ipcMain.handle('permissions:audit', (_e, payload) => {
+  requireAdmin();
+  return readAudit(dataDir(), { limit: Number(payload?.limit) || 200 });
 });
 
 // ---------- вложения ----------
@@ -742,12 +953,14 @@ ipcMain.handle('workspace:create', async (_e, payload) => {
 
 // ---------- сессии ----------
 
-ipcMain.handle('sessions:list', () => listSessions());
+// Фильтр по проекту и поиск по тексту (CC6.6, CC6.7).
+ipcMain.handle('sessions:list', (_e, options) => listSessions(options && typeof options === 'object' ? { projectDir: String(options.projectDir || ''), query: String(options.query || '').slice(0, 200) } : {}));
 ipcMain.handle('sessions:get', (_e, id) => getSession(id));
 ipcMain.handle('sessions:create', (_e, data) => createSession(data || {}));
 ipcMain.handle('sessions:delete', (_e, id) => {
   const session = getSession(id);
   if (session?.projectDir) removeSessionUploads(session.projectDir, id);
+  removeCheckpoints(dataDir(), id);
   return deleteSession(id);
 });
 
@@ -771,6 +984,12 @@ ipcMain.handle('chat:start', async (event, payload) => {
   }
 
   const projectDir = payload.projectDir || settings.projectDir;
+  const trustGate = needTrust(projectDir);
+  if (trustGate) return trustGate;
+  const trusted = isTrusted(projectDir);
+  // Один пишущий прогон на папку (A3.6): иначе чат и самокоррекция перезаписывают друг друга.
+  const lock = acquireProject(projectDir, { label: 'чат агента' });
+  if (!lock.ok) return { ok: false, busy: true, error: lock.error };
   const model = activeKey;
 
   // Ревизор опционален: если модель не разрешилась, работаем без него.
@@ -789,6 +1008,20 @@ ipcMain.handle('chat:start', async (event, payload) => {
     } catch {
       reviewer = null;
     }
+  }
+  // UserPromptSubmit и SessionStart (ADR 0035): до записи сообщения в чат.
+  const hooks = hookRunnerFor(window, { projectDir, sessionId: payload.sessionId || '', trusted });
+  if (payload.text && hooks.has('UserPromptSubmit')) {
+    const hook = await hooks.run('UserPromptSubmit', { prompt: String(payload.displayText || payload.text) });
+    if (hook.decision === 'block' || hook.decision === 'deny') {
+      lock.release();
+      return { ok: false, error: `Хук UserPromptSubmit не пропустил запрос: ${hook.reason || 'без причины'}` };
+    }
+    if (hook.context.length) payload.text = `${payload.text}\n\n[Контекст от хука]\n${hook.context.join('\n')}`;
+  }
+  if (!payload.sessionId && payload.text && hooks.has('SessionStart')) {
+    const start = await hooks.run('SessionStart', { source: 'new' });
+    if (start.context.length) payload.text = `${payload.text}\n\n[Контекст начала сессии]\n${start.context.join('\n')}`;
   }
   let session = payload.sessionId ? getSession(payload.sessionId) : null;
   if (!session) {
@@ -809,9 +1042,20 @@ ipcMain.handle('chat:start', async (event, payload) => {
   if (adopted && payload.text) {
     payload.text = String(payload.text).split(adopted.from).join(adopted.to);
   }
+  // Упоминания @файл — ссылкой, не копией (CC7.9): агент прочитает сам.
+  const mentions = payload.text ? resolveMentions(projectDir, payload.text) : [];
+  if (mentions.length) {
+    payload.text = `${payload.text}\n\n[Упомянуты: ${mentions.map((m) => `${m.path}${m.dir ? ' (папка)' : ''}`).join(', ')}. Прочитай их через read_file или list_files.]`;
+  }
+  // Пути изображений из вложений: в сессии храним путь, base64 собирается на запрос (F1).
+  const images = (Array.isArray(payload.images) ? payload.images : [])
+    .map((p) => String(p || ''))
+    .map((p) => (adopted ? p.split(adopted.from).join(adopted.to) : p))
+    .filter((p) => isImageFile(p))
+    .slice(0, 20);
   if (payload.text) {
     const display = payload.displayText || payload.text;
-    session.messages.push({ role: 'user', content: payload.text, display });
+    session.messages.push({ role: 'user', content: payload.text, display, ...(images.length ? { images } : {}) });
     if (!session.title || session.title === 'Новый чат') {
       session.title = display.trim().slice(0, 60) || 'Новый чат';
     }
@@ -821,7 +1065,15 @@ ipcMain.handle('chat:start', async (event, payload) => {
   const controller = new AbortController();
   state.controller = controller;
 
-  const { tools: pluginTools, transforms, loaded } = await loadPlugins(projectDir);
+  let plugins;
+  try {
+    plugins = await loadPluginsFor(projectDir);
+  } catch (err) {
+    state.controller = null;
+    lock.release();
+    return { ok: false, error: `Плагины не загрузились: ${err?.message || String(err)}` };
+  }
+  const { tools: pluginTools, transforms, loaded } = plugins;
 
   (async () => {
     try {
@@ -837,8 +1089,27 @@ ipcMain.handle('chat:start', async (event, payload) => {
         transforms,
         reviewer,
         permissionMode: session.permissionMode || '',
+        policy: policyFor(session.id, projectDir),
+        audit,
+        trusted,
+        // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
+        contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Чекпоинты правок для отката (CC6.1).
+        checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
+        hooks,
+        // Типы субагентов: встроенные и свои (проекта — только доверенная папка, ADR 0036).
+        agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: trusted }),
+        // История сохраняется после каждого шага: при сбое выполненные
+        // правки и команды не пропадают из сессии (они уже на диске).
+        onHistory: (history) => {
+          session.messages = history;
+          saveSession(session);
+        },
         emit: (e) => send(window, e),
         approve: makeApprover(window, state, session.id),
+        ask: makeAsker(window, state, session.id, projectDir),
+        // Очередь сообщений, написанных во время работы (CC7.5).
+        pullQueued: () => state.queue.splice(0),
       });
       session.messages = history;
       saveSession(session);
@@ -854,31 +1125,77 @@ ipcMain.handle('chat:start', async (event, payload) => {
         message,
         aborted,
       });
-      session.messages = session.messages;
+      // onHistory уже сохранил выполненные шаги; здесь фиксируем финальное состояние.
       saveSession(session);
     } finally {
       state.controller = null;
       state.approvals.clear();
+      state.questions.clear();
+      // Не взятые агентом сообщения возвращаем в поле ввода, чтобы они не пропали.
+      const leftover = state.queue.splice(0);
+      if (leftover.length) send(window, { type: 'queued:returned', items: leftover });
+      lock.release();
     }
   })();
 
   return { ok: true, sessionId: session.id, title: session.title };
 });
 
+const audit = (record) => auditLog()(record);
+let auditInstance = null;
+function auditLog() {
+  auditInstance ||= createAuditLog(dataDir());
+  return auditInstance;
+}
+
 /**
- * Создаёт функцию approve для агента с учётом режима разрешений.
- *
- * Режим берётся из сессии, а если там пусто — из настроек. Значение читается
- * на каждый вызов, поэтому переключение в интерфейсе действует сразу.
+ * Политика для прогона агента: режим, правила и роль читаются на каждый
+ * вызов, поэтому переключение в интерфейсе действует сразу (ADR 0027).
+ */
+function policyFor(sessionId, projectDir = '') {
+  return {
+    role: authStatus().role,
+    getMode: () => {
+      const settings = loadSettings();
+      const session = sessionId ? getSession(sessionId) : null;
+      const mode = effectiveMode(session?.permissionMode || settings.permissionMode, authStatus().role);
+      // В недоверенной папке «Без вопросов» не действует (ADR 0028).
+      if (mode === 'bypass' && projectDir && !isTrusted(projectDir)) return 'manual';
+      return mode;
+    },
+    getRules: () => {
+      const settings = loadSettings();
+      const session = sessionId ? getSession(sessionId) : null;
+      return mergeRules(settings.permissions, session?.permissionRules);
+    },
+  };
+}
+
+/**
+ * Хуки прогона (ADR 0035): глобальные и проекта (только доверенная папка).
+ * Каждое срабатывание пишется в журнал решений и показывается в окне.
+ */
+function hookRunnerFor(window, { projectDir, sessionId, trusted }) {
+  const settings = loadSettings();
+  return createHookRunner({
+    hooks: collectHooks({ settingsHooks: settings.hooks, projectDir, trusted }),
+    projectDir,
+    sessionId,
+    onRun: (record) => {
+      audit({ at: new Date().toISOString(), tool: `hook:${record.event}`, source: record.source, cls: 'hook', subject: record.command.slice(0, 300), decision: record.decision || (record.code === 0 ? 'ok' : 'error'), code: record.code, ms: record.ms, error: record.error });
+      send(window, { type: 'hook', ...record });
+    },
+  });
+}
+
+/**
+ * Создаёт функцию approve: показывает запрос в окне и ждёт ответа.
+ * Решение «спрашивать ли» уже принял PolicyEngine — сюда приходят только ask.
+ * Ответ «да, и не спрашивать» сохраняет правила в сессию или глобально.
  */
 function makeApprover(window, state, sessionId) {
-  return (name, summary) => {
-    const settings = loadSettings();
-    const session = sessionId ? getSession(sessionId) : null;
-    const mode = normalizeMode(session?.permissionMode || settings.permissionMode);
-    const decision = decide({ mode, tool: name, guardrails: settings.guardrails });
-    if (decision.action === 'allow') return Promise.resolve(true);
-    if (decision.action === 'deny') return Promise.resolve(decision.reason || false);
+  return (request, legacySummary = '') => {
+    const payload = typeof request === 'string' ? { tool: request, summary: legacySummary } : request || {};
     return new Promise((resolve) => {
       const id = crypto.randomUUID();
       // Таймаут обязателен: если окно потеряло событие или пользователь закрыл
@@ -886,22 +1203,72 @@ function makeApprover(window, state, sessionId) {
       const timer = setTimeout(() => {
         if (!state.approvals.has(id)) return;
         state.approvals.delete(id);
-        send(window, { type: 'approval:expired', id, name });
-        resolve('Подтверждение не получено за 10 минут — действие отменено.');
+        send(window, { type: 'approval:expired', id, name: payload.tool });
+        resolve({ allow: false, message: 'Подтверждение не получено за 10 минут — действие отменено.' });
       }, APPROVAL_TIMEOUT_MS);
-      state.approvals.set(id, (value) => {
+      state.approvals.set(id, (answer) => {
         clearTimeout(timer);
-        resolve(value);
+        if (answer?.allow && answer.remember && answer.rules?.length) {
+          const rules = answer.rules.filter((rule) => parseRule(rule));
+          try {
+            if (answer.remember === 'global') {
+              requireAdmin();
+              const current = mergeRules(loadSettings().permissions);
+              current.allow = [...current.allow, ...rules.filter((r) => !current.allow.includes(r))];
+              saveSettings({ permissions: current });
+            } else if (sessionId) {
+              addSessionRules(sessionId, 'allow', rules);
+            }
+          } catch (err) {
+            send(window, { type: 'notice', text: `Правило не сохранено: ${err?.message || String(err)}` });
+          }
+        }
+        resolve(answer);
       });
-      send(window, { type: 'approval', id, name, summary });
+      // Для обратной совместимости окна досок: name и summary остаются.
+      send(window, { type: 'approval', id, name: payload.tool, ...payload });
     });
   };
 }
 
+/**
+ * Вопрос пользователю из ask_user или карточка плана из exit_plan (CC1.7, CC1.8).
+ * Ответ на план с выбранным режимом сразу меняет режим сессии: PolicyEngine
+ * читает режим на каждый вызов, и следующая итерация получит инструменты записи.
+ */
+function makeAsker(window, state, sessionId, projectDir) {
+  return (request) =>
+    new Promise((resolve) => {
+      const id = crypto.randomUUID();
+      const timer = setTimeout(() => {
+        if (!state.questions.has(id)) return;
+        state.questions.delete(id);
+        send(window, { type: 'question:expired', id });
+        resolve({ cancelled: true });
+      }, APPROVAL_TIMEOUT_MS);
+      state.questions.set(id, (answer) => {
+        clearTimeout(timer);
+        if (request.kind === 'plan' && answer?.action === 'approve') {
+          const wanted = normalizeMode(answer.mode);
+          let mode = ['manual', 'acceptEdits', 'bypass'].includes(wanted) ? wanted : 'manual';
+          // Те же ограничения, что у селектора режима: гостю и в недоверенной папке — без «Без вопросов».
+          if (mode === 'bypass' && (authStatus().role !== 'admin' || !isTrusted(projectDir))) mode = 'manual';
+          if (sessionId) setSessionMode(sessionId, mode);
+          answer = { ...answer, mode };
+          send(window, { type: 'mode:changed', sessionId, mode });
+        }
+        resolve(answer);
+      });
+      send(window, { type: 'question', id, ...request });
+    });
+}
+
 /** Закрывает висящие подтверждения отказом, иначе инструмент ждёт клика вечно. */
 function denyApprovals(state) {
-  for (const resolve of state.approvals.values()) resolve(false);
+  for (const resolve of state.approvals.values()) resolve({ allow: false, message: 'Остановлено пользователем.' });
   state.approvals.clear();
+  for (const resolve of state.questions.values()) resolve({ cancelled: true });
+  state.questions.clear();
 }
 
 ipcMain.handle('chat:stop', (event) => {
@@ -912,14 +1279,181 @@ ipcMain.handle('chat:stop', (event) => {
   return true;
 });
 
-ipcMain.handle('chat:approval', (event, { id, allow } = {}) => {
+// ---------- чекпоинты и откат (CC6.1) ----------
+
+ipcMain.handle('checkpoints:turns', (_e, sessionId) => (sessionId ? checkpointTurns(dataDir(), sessionId) : []));
+
+/** Что вернёт откат к сообщению: файлы и меняются ли они с тех пор. */
+ipcMain.handle('checkpoints:plan', (_e, payload = {}) => {
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  if (!session) return { ok: false, error: 'Чат не найден' };
+  const turn = Number(payload.turn);
+  const message = session.messages?.[turn];
+  if (message?.role !== 'user') return { ok: false, error: 'Откат возможен только к сообщению пользователя' };
+  return {
+    ok: true,
+    text: message.display || message.content || '',
+    later: session.messages.length - turn,
+    files: rewindPlan(dataDir(), session.id, turn).map((f) => ({ ...f, file: path.relative(session.projectDir || '', f.file) || f.file })),
+  };
+});
+
+/**
+ * Откат к сообщению пользователя: `code` — файлы, `conversation` — история
+ * (сообщение и всё после него удаляются, текст возвращается в поле ввода), `both`.
+ */
+ipcMain.handle('checkpoints:rewind', (event, payload = {}) => {
+  const state = runState(BrowserWindow.fromWebContents(event.sender));
+  if (state.controller) return { ok: false, error: 'Агент работает — остановите его перед откатом' };
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  if (!session) return { ok: false, error: 'Чат не найден' };
+  const turn = Number(payload.turn);
+  const message = session.messages?.[turn];
+  if (message?.role !== 'user') return { ok: false, error: 'Откат возможен только к сообщению пользователя' };
+  const mode = ['code', 'conversation', 'both'].includes(payload.mode) ? payload.mode : 'both';
+  const lock = acquireProject(session.projectDir, { label: 'откат' });
+  if (!lock.ok) return { ok: false, busy: true, error: lock.error };
+  try {
+    let files = { restored: [], failed: [] };
+    if (mode !== 'conversation') files = rewindFiles(dataDir(), session.id, turn);
+    if (mode !== 'code') {
+      session.messages = session.messages.slice(0, turn);
+      saveSession(session);
+    }
+    audit({ at: new Date().toISOString(), tool: 'rewind', source: 'user', cls: 'write', subject: `ход ${turn}`, mode, decision: 'allow', restored: files.restored.length });
+    return { ok: true, mode, text: message.display || message.content || '', messages: session.messages, ...files };
+  } finally {
+    lock.release();
+  }
+});
+
+/** Типы субагентов для `/agents` (CC8.2). */
+ipcMain.handle('agents:defs', (_e, projectDir) => {
+  const dir = projectDir || loadSettings().projectDir;
+  return listAgentDefs(dir, dataDir(), { includeProject: isTrusted(dir) }).map(({ name, description, tools, source }) => ({ name, description, tools, source }));
+});
+
+/** Хуки для `/hooks`: события, matcher, команда, источник (CC3.3). */
+ipcMain.handle('hooks:list', (_e, projectDir) => {
+  const dir = projectDir || loadSettings().projectDir;
+  const trusted = isTrusted(dir);
+  const config = collectHooks({ settingsHooks: loadSettings().hooks, projectDir: dir, trusted });
+  const rows = [];
+  for (const event of HOOK_EVENTS) {
+    for (const group of config[event] || []) {
+      for (const hook of group.hooks) rows.push({ event, matcher: group.matcher || '*', command: hook.command, timeout: hook.timeout, source: hook.source });
+    }
+  }
+  return { rows, trusted, projectFile: path.join(dir || '', '.mai-code', 'hooks.json') };
+});
+
+/** Ручная компакция (`/compact [что учесть]`, CC5.3). Только когда агент не работает. */
+ipcMain.handle('chat:compact', async (event, payload = {}) => {
+  const state = runState(BrowserWindow.fromWebContents(event.sender));
+  if (state.controller) return { ok: false, error: 'Агент работает — сожмите контекст после ответа' };
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  if (!session) return { ok: false, error: 'Нет чата для компакции' };
+  const settings = loadSettings();
+  let resolved;
+  try {
+    resolved = resolveModel(settings, session.model || settings.activeModel);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  if (!resolved.provider.apiKey) return { ok: false, error: `Не задан API-ключ провайдера «${resolved.provider.name}»` };
+  try {
+    const { marker, history } = await compactSession({
+      provider: resolved.provider,
+      model: resolved.modelId,
+      messages: session.messages || [],
+      instructions: String(payload.instructions || '').slice(0, 2000),
+    });
+    if (!marker) return { ok: false, error: 'Сжимать нечего: в чате меньше двух запросов' };
+    session.messages = history;
+    saveSession(session);
+    return { ok: true, marker, messages: history };
+  } catch (err) {
+    return { ok: false, error: `Компакция не удалась: ${err?.message || String(err)}` };
+  }
+});
+
+/** Разбор контекста для `/context` (CC5.2). */
+ipcMain.handle('context:stats', (_e, payload = {}) => {
+  const settings = loadSettings();
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  const projectDir = session?.projectDir || payload.projectDir || settings.projectDir;
+  let window = DEFAULT_CONTEXT;
+  try {
+    const resolved = resolveModel(settings, payload.model || session?.model || settings.activeModel);
+    window = modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT;
+  } catch {
+    /* модель не разрешилась — окно по умолчанию */
+  }
+  return describeContext({
+    settings,
+    projectDir,
+    mode: runtimeMode(session?.id, projectDir),
+    trusted: isTrusted(projectDir),
+    mcp,
+    history: session?.messages || [],
+    window,
+  });
+});
+
+/** Сообщение во время работы агента: встанет в историю перед следующим шагом. */
+ipcMain.handle('chat:queue', (event, payload = {}) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const state = runState(window);
+  if (!state.controller) return { ok: false, idle: true };
+  const text = String(payload.text || '').trim();
+  if (!text) return { ok: false, error: 'Пустое сообщение' };
+  if (state.queue.length >= 10) return { ok: false, error: 'В очереди уже 10 сообщений' };
+  const item = { id: crypto.randomUUID(), text: text.slice(0, 100_000), display: String(payload.displayText || text).slice(0, 100_000) };
+  state.queue.push(item);
+  return { ok: true, id: item.id, size: state.queue.length };
+});
+
+ipcMain.handle('chat:unqueue', (event, payload = {}) => {
+  const state = runState(BrowserWindow.fromWebContents(event.sender));
+  const index = state.queue.findIndex((item) => item.id === payload.id);
+  if (index === -1) return { ok: false, error: 'Сообщение уже передано агенту' };
+  const [item] = state.queue.splice(index, 1);
+  return { ok: true, item };
+});
+
+ipcMain.handle('chat:answer', (event, payload = {}) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const state = runState(window);
+  const resolve = state.questions.get(payload.id);
+  if (resolve) {
+    state.questions.delete(payload.id);
+    const answer = payload.answer || {};
+    resolve({
+      cancelled: answer.cancelled === true,
+      answers: Array.isArray(answer.answers) ? answer.answers.map((a) => (Array.isArray(a) ? a.map(String) : String(a ?? ''))) : [],
+      action: answer.action === 'revise' ? 'revise' : answer.action === 'approve' ? 'approve' : '',
+      mode: String(answer.mode || ''),
+      alternative: Number.isInteger(answer.alternative) ? answer.alternative : -1,
+      feedback: String(answer.feedback || '').slice(0, 4000),
+    });
+  }
+  return true;
+});
+
+ipcMain.handle('chat:approval', (event, payload = {}) => {
+  const { id, allow, remember, rules, feedback } = payload;
   const window = BrowserWindow.fromWebContents(event.sender);
   const state = runState(window);
   const resolve = state.approvals.get(id);
   if (resolve) {
     state.approvals.delete(id);
     // allow === undefined означает «модалку закрыли без ответа» — это отказ.
-    resolve(allow === true);
+    resolve({
+      allow: allow === true,
+      remember: remember === 'global' || remember === 'session' ? remember : null,
+      rules: Array.isArray(rules) ? rules.map(String) : [],
+      feedback: String(feedback || '').slice(0, 2000),
+    });
   }
   return true;
 });
@@ -942,6 +1476,21 @@ ipcMain.handle('memory:read', (_e, projectDir) => readMemoryState(projectDir));
 ipcMain.handle('memory:write', (_e, { file, content, projectDir }) => {
   requireAdmin();
   return saveMemoryFile(projectOf({ projectDir }), file, content);
+});
+
+/** Быстрая запись `# текст` из поля ввода (CC4.3): строка в конец памяти, без дублей. */
+ipcMain.handle('memory:append', (_e, payload = {}) => {
+  const projectDir = projectOf(payload);
+  const scope = payload.scope === 'global' ? 'global' : 'project';
+  const text = String(payload.text || '').trim().slice(0, 4000);
+  if (!text) return { ok: false, error: 'Пустая запись' };
+  const state = readMemoryState(projectDir);
+  const current = String(state[scope] || '');
+  const line = text.startsWith('- ') ? text : `- ${text}`;
+  if (current.includes(text)) return { ok: true, changed: false, scope };
+  const separator = current.trim() ? (current.endsWith('\n') ? '' : '\n') : '';
+  const result = saveMemory(projectDir, { scope, content: `${current}${separator}${line}\n`, note: 'запись из поля ввода (#)' });
+  return { ok: true, changed: true, scope, version: result.version };
 });
 
 ipcMain.handle('memory:save', (_e, payload) => {
@@ -1035,7 +1584,7 @@ ipcMain.handle('mcp:remove', async (_e, name) => {
 // ---------- плагины ----------
 
 ipcMain.handle('plugins:list', async (_e, projectDir) => {
-  const { loaded } = await loadPlugins(projectDir);
+  const { loaded } = await loadPluginsFor(projectDir);
   return { plugins: loaded, dirs: pluginDirs(projectDir) };
 });
 ipcMain.handle('plugins:openFolder', async (_e, projectDir) => {
@@ -1053,12 +1602,17 @@ ipcMain.handle('plugins:createExample', async (_e, projectDir) => {
       file,
       `// Пример плагина MAI Code. Файл лежит в <проект>/.mai-code/plugins/.
 // Плагин может добавить инструмент агенту и/или переписать историю сообщений.
+// Плагин исполняется в отдельном процессе (ADR 0030): без доступа к Electron,
+// окнам и переменным окружения с ключами. Файлы проекта доступны.
 
 export default {
   name: 'example-plugin',
 
   tools: [
     {
+      // Класс действия (ADR 0027): read | write | exec | network | external.
+      // Без поля инструмент считается внешним, и пользователя спросят.
+      kind: 'read',
       schema: {
         type: 'function',
         function: {
@@ -1074,6 +1628,7 @@ export default {
   ],
 
   // Необязательный хук: можно дописать контекст в историю перед запросом.
+  // Хук может быть async и должен вернуть массив сообщений.
   // transformMessages(messages) { return messages; },
 };
 `,
@@ -1239,7 +1794,7 @@ ipcMain.handle('boards:baseline', async (_e, payload) => {
 });
 
 ipcMain.handle('boards:scan', async (_e, payload) =>
-  scanQuality(projectOf(payload), { loadPlugins }),
+  scanQuality(projectOf(payload), { loadPlugins: loadPluginsFor }),
 );
 
 ipcMain.handle('boards:git', (_e, payload) => gitStatus(projectOf(payload)));
@@ -1252,6 +1807,11 @@ ipcMain.handle('boards:stageRun', (event, payload) => {
   if (state.stage) return { ok: false, error: 'Стадия уже выполняется' };
 
   const projectDir = projectOf(payload);
+  // Команда стадии лежит в boards.json проекта: её мог подложить чужой
+  // репозиторий. Без доверия к папке стадии не запускаются (A1.11, ADR 0028).
+  if (!isTrusted(projectDir)) {
+    return { ok: false, error: 'Стадии запускают команды из boards.json проекта — сначала доверьте папку в главном окне.' };
+  }
   const data = loadBoards(projectDir);
   const stage = (data.runners.stages || []).find((s) => s.id === payload.stageId);
   if (!stage) return { ok: false, error: 'Стадия не найдена' };
@@ -1334,15 +1894,19 @@ ipcMain.handle('boards:correction', async (event, payload) => {
   if (state.correction) return { ok: false, error: 'Самокоррекция уже выполняется' };
 
   const projectDir = projectOf(payload);
+  const trustGate = needTrust(projectDir);
+  if (trustGate) return trustGate;
+  const trusted = isTrusted(projectDir);
   const settings = loadSettings();
   const resolved = resolveModel(settings, payload.model || settings.activeModel);
   if (!resolved.provider.apiKey) return { ok: false, error: 'Нет ключа выбранного провайдера' };
-
   const boards = loadBoards(projectDir);
   const selected = (boards.quality.issues || []).filter(
     (issue) => issue.status !== 'ignored' && (!payload.issueIds?.length || payload.issueIds.includes(issue.id)),
   );
   if (!selected.length) return { ok: false, error: 'Нет проблем для исправления' };
+  const lock = acquireProject(projectDir, { label: 'самокоррекция' });
+  if (!lock.ok) return { ok: false, busy: true, error: lock.error };
 
   const session = createSession({
     title: `Самокоррекция · ${new Date().toLocaleString('ru-RU')}`,
@@ -1362,7 +1926,15 @@ ipcMain.handle('boards:correction', async (event, payload) => {
 
   const controller = new AbortController();
   state.correction = controller;
-  const { tools: pluginTools, transforms } = await loadPlugins(projectDir);
+  let plugins;
+  try {
+    plugins = await loadPluginsFor(projectDir);
+  } catch (err) {
+    state.correction = null;
+    lock.release();
+    return { ok: false, error: `Плагины не загрузились: ${err?.message || String(err)}` };
+  }
+  const { tools: pluginTools, transforms } = plugins;
 
   (async () => {
     try {
@@ -1377,13 +1949,27 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         pluginTools,
         transforms,
         permissionMode: session.permissionMode || '',
+        policy: policyFor(session.id, projectDir),
+        audit,
+        trusted,
+        // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
+        contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Чекпоинты правок для отката (CC6.1).
+        checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
+        // История сохраняется после каждого шага: при сбое выполненные
+        // правки и команды не пропадают из сессии (они уже на диске).
+        onHistory: (history) => {
+          session.messages = history;
+          saveSession(session);
+        },
         emit: (e) => send(window, e),
         approve: makeApprover(window, state, session.id),
+        ask: makeAsker(window, state, session.id, projectDir),
       });
       session.messages = history;
       saveSession(session);
       if (controller.signal.aborted) throw new Error('Остановлено пользователем');
-      const scan = await scanQuality(projectDir, { loadPlugins });
+      const scan = await scanQuality(projectDir, { loadPlugins: loadPluginsFor });
       updateCorrection(projectDir, correction.id, {
         status: 'done',
         finishedAt: new Date().toISOString(),
@@ -1412,6 +1998,7 @@ ipcMain.handle('boards:correction', async (event, payload) => {
     } finally {
       state.correction = null;
       state.approvals.clear();
+      lock.release();
     }
   })();
 
@@ -1650,9 +2237,12 @@ ipcMain.handle('repowise:context', (_e, payload) =>
 ipcMain.handle('repowise:risk', (_e, payload) =>
   repowiseResult(() => repowise.risk(projectOf(payload), payload.range)),
 );
-ipcMain.handle('repowise:distill', (_e, payload) =>
-  repowiseResult(() => repowise.distill(projectOf(payload), payload.command)),
-);
+ipcMain.handle('repowise:distill', (_e, payload) => {
+  // Команда выполняется в оболочке: те же guardrails, что у run_shell.
+  const guard = checkCommand(String(payload?.command || ''), { guardrails: loadSettings().guardrails });
+  if (!guard.allowed) return { ok: false, output: `Guardrails заблокировали команду: ${guard.reason}` };
+  return repowiseResult(() => repowise.distill(projectOf(payload), payload.command));
+});
 
 ipcMain.handle('repowise:connectMcp', async (_e, payload) => {
   const projectDir = projectOf(payload);
@@ -1676,7 +2266,14 @@ ipcMain.handle('repowise:stopServe', (_e, payload) => repowise.stopServe(project
 // ---------- прочее ----------
 
 ipcMain.handle('app:openPath', async (_e, target) => {
+  // shell.openPath запускает файл ассоциированной программой — это исполнение.
+  // Окну нужно только открывать папки, поэтому файлы не открываем (ADR 0028).
   if (!target) return false;
+  try {
+    if (!fs.statSync(target).isDirectory()) return false;
+  } catch {
+    return false;
+  }
   await shell.openPath(target);
   return true;
 });
@@ -1690,6 +2287,12 @@ ipcMain.handle('app:openExternal', async (_e, url) => {
   return true;
 });
 ipcMain.handle('app:dataDir', () => dataDir());
+
+// В песочнице preload нет модуля clipboard — запись идёт через main (A2.5).
+ipcMain.handle('app:clipboard', (_e, text) => {
+  clipboard.writeText(String(text ?? '').slice(0, 5_000_000));
+  return true;
+});
 
 ipcMain.handle('app:focusMain', () => {
   if (mainWindow && !mainWindow.isDestroyed()) {

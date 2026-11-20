@@ -35,6 +35,7 @@ const excludes = [
   '*.pem',
   'settings.json',
   'sessions.json',
+  'sessions.json.migrated',
   'mai-api-key.txt',
 ];
 

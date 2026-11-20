@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createOutputDecoder, withUtf8Console } from './encoding.js';
 
 const MAX_LOG = 200_000;
 
@@ -24,7 +25,9 @@ export function runStage({ projectDir, command, onData, onExit }) {
     return { kill() {} };
   }
 
-  const child = spawn(command, {
+  // Консоль в UTF-8 и перекодировка вывода из кодировки консоли (Windows).
+  const decode = createOutputDecoder();
+  const child = spawn(withUtf8Console(command), {
     cwd: projectDir,
     shell: true,
     windowsHide: true,
@@ -35,7 +38,7 @@ export function runStage({ projectDir, command, onData, onExit }) {
   let log = '';
   let finished = false;
   const push = (chunk) => {
-    const text = chunk.toString();
+    const text = decode(chunk);
     log += text;
     if (log.length > MAX_LOG) log = log.slice(-MAX_LOG);
     onData(text);

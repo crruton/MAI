@@ -33,17 +33,111 @@ app.disableHardwareAcceleration();
 
 // Заглушки: фронтенд не должен падать из-за отсутствия бэкенда.
 const MODES = [
-  { id: 'auto', label: 'Авто', description: 'Агент сам решает' },
   { id: 'manual', label: 'Вручную', description: 'Спрашивать всегда' },
   { id: 'acceptEdits', label: 'Принимать правки', description: 'Правки без вопросов' },
   { id: 'plan', label: 'План', description: 'Только чтение и план' },
+  { id: 'dontAsk', label: 'Только разрешённое', description: 'Только по правилам' },
+  { id: 'bypass', label: 'Без вопросов', description: 'Всё без подтверждения', warning: true, adminOnly: true, disabled: true },
 ];
+// Доверие к папке (раздел [15]): выбранная папка не доверена, в ней плагин и MCP.
+const trustCalls = [];
+let trustStateValue = 'trusted';
+const PICKED = path.join(os.tmpdir(), 'mai-ui-untrusted');
+ipcMain.handle('trust:get', (_e, dir) => ({
+  projectDir: dir,
+  state: dir === PICKED ? trustStateValue : 'trusted',
+  folder: dir,
+  inherited: false,
+  found: { plugins: 1, mcpServers: ['fs'], agents: true, memory: false, skills: 0, executable: true },
+}));
+ipcMain.handle('trust:set', (_e, payload) => {
+  trustCalls.push(payload);
+  trustStateValue = payload.state;
+  return { ok: true, projectDir: payload.projectDir, state: payload.state };
+});
+ipcMain.handle('trust:list', () => []);
+ipcMain.handle('project:pick', () => {
+  trustStateValue = 'unknown';
+  return PICKED;
+});
+// Ответы на запросы разрешения из окна (раздел [14]).
+const approvals = [];
+// Слэш-команды и @файл (раздел [19]).
+const expandCalls = [];
+ipcMain.handle('commands:list', () => [
+  { name: 'help', description: 'Список команд', source: 'builtin' },
+  { name: 'clear', description: 'Новый чат', source: 'builtin' },
+  { name: 'mode', description: 'Режим', argumentHint: '<режим>', source: 'builtin' },
+  { name: 'init', description: 'AGENTS.md', source: 'builtin' },
+  { name: 'review', description: 'Ревью изменений', argumentHint: '<путь>', source: 'project' },
+  { name: 'handoff', description: 'навык передачи', argumentHint: '<задача>', source: 'skill' },
+]);
+ipcMain.handle('commands:expand', (_e, payload) => {
+  expandCalls.push(payload);
+  return { ok: true, prompt: `Ревью ${payload.args}` };
+});
+ipcMain.handle('files:search', (_e, payload) => (String(payload.query).startsWith('sr') ? ['src/', 'src/app.js', 'scripts/sr.mjs'] : []));
+// Контекст и компакция (раздел [20]).
+const compactCalls = [];
+ipcMain.handle('context:stats', () => ({
+  window: 128000,
+  used: 96000,
+  exact: true,
+  parts: [
+    { key: 'system', label: 'Системный промпт, AGENTS.md, память', tokens: 8000 },
+    { key: 'tool', label: 'Результаты инструментов', tokens: 70000 },
+  ],
+}));
+ipcMain.handle('chat:compact', (_e, payload) => {
+  compactCalls.push(payload);
+  return { ok: true, marker: { role: 'compaction', content: 'сводка', messages: 12 }, messages: [{ role: 'compaction', content: '**сводка** работы', messages: 12 }] };
+});
+// Чекпоинты и откат (раздел [21]).
+const rewindCalls = [];
+ipcMain.handle('checkpoints:turns', () => [{ turn: 0, files: 2 }]);
+ipcMain.handle('checkpoints:plan', () => ({
+  ok: true,
+  text: 'Покажи отчёт',
+  later: 2,
+  files: [
+    { file: 'src/a.js', action: 'restore', changed: true },
+    { file: 'src/new.js', action: 'delete', changed: true },
+  ],
+}));
+ipcMain.handle('checkpoints:rewind', (_e, payload) => {
+  rewindCalls.push(payload);
+  return { ok: true, mode: payload.mode, text: 'Покажи отчёт', messages: [], restored: ['a', 'b'], failed: [] };
+});
+const memoryAppends = [];
+ipcMain.handle('memory:append', (_e, payload) => {
+  memoryAppends.push(payload);
+  return { ok: true, changed: true, scope: payload.scope };
+});
+ipcMain.handle('hooks:list', () => ({
+  rows: [{ event: 'PreToolUse', matcher: 'write_file', command: 'node check.js', timeout: 30, source: 'project' }],
+  trusted: true,
+  projectFile: '/p/.mai-code/hooks.json',
+}));
+ipcMain.handle('agents:defs', () => [
+  { name: 'explore', description: 'Исследователь', tools: ['read_file'], source: 'builtin' },
+  { name: 'reviewer', description: 'Ревьюер', tools: null, source: 'project' },
+]);
+const answers = [];
+ipcMain.handle('chat:answer', (_e, payload) => {
+  answers.push(payload);
+  return true;
+});
+ipcMain.handle('chat:approval', (_e, payload) => {
+  approvals.push(payload);
+  return true;
+});
 
 ipcMain.handle('settings:get', () => ({
   projectDir: root,
   activeModel: 'test-model',
   permissionMode: 'manual',
-  providers: [],
+  // Провайдер «с ключом»: send() доходит до chat:start (мок ниже отвечает отказом).
+  providers: { 'test-model': { name: 'Test', apiKeySet: true, models: [] } },
   models: [],
 }));
 ipcMain.handle('runtimes:list', () => ({}));
@@ -59,7 +153,17 @@ const TEST_SESSION = {
     { role: 'assistant', content: '# Отчёт\n\nТекст ответа с **разметкой**.' },
   ],
 };
-ipcMain.handle('sessions:list', () => [TEST_SESSION]);
+const sessionListCalls = [];
+ipcMain.handle('sessions:list', (_e, options) => {
+  sessionListCalls.push(options || {});
+  return [{ ...TEST_SESSION, projectDir: root, updatedAt: '2026-11-20T10:00:00Z', count: 1, ...(options?.query ? { match: 'фрагмент с отчётом' } : {}) }];
+});
+// chat:start записывает запрос и отвечает отказом: прогон не начинается.
+const chatStarts = [];
+ipcMain.handle('chat:start', (_e, payload) => {
+  chatStarts.push(payload);
+  return { ok: false, error: 'тест: без прогона' };
+});
 ipcMain.handle('sessions:get', (_e, id) => (id === TEST_SESSION.id ? TEST_SESSION : null));
 
 // Экспорт: записываем вызовы, файл не пишем.
@@ -107,8 +211,15 @@ ipcMain.handle('memory:restore', (_e, payload) => {
 });
 // Окно досок грузится в разделе [9]: без заглушки Electron пишет в лог
 // «No handler registered for 'boards:load'», и это выглядит как дефект.
+// Раздел [16]: доска с задачей из «чужого» boards.json — приоритет с разметкой.
+let craftedBoards = null;
+const clipboardCalls = [];
+ipcMain.handle('app:clipboard', (_e, text) => {
+  clipboardCalls.push(text);
+  return true;
+});
 ipcMain.handle('boards:load', () => ({
-  boards: loadBoards(root),
+  boards: craftedBoards || loadBoards(root),
   projectDir: root,
   settings: { projectDir: root, activeModel: 'test-model' },
 }));
@@ -123,6 +234,8 @@ app.whenReady().then(async () => {
       preload: path.join(root, 'electron', 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Как в приложении (A2.5): preload работает в песочнице.
+      sandbox: true,
     },
   });
 
@@ -163,12 +276,16 @@ app.whenReady().then(async () => {
     check('visibility не hidden', info.visibility !== 'hidden', info.visibility);
     check('opacity не 0', info.opacity !== '0', info.opacity);
     check('селектор в пределах окна', info.inViewport === true, JSON.stringify(info));
-    check('опций 4', info.options?.length === 4, JSON.stringify(info.options));
+    check('опций 5', info.options?.length === 5, JSON.stringify(info.options));
     check(
       'подписи режимов на месте',
-      info.options?.map((o) => o.text).join(',') === 'Авто,Вручную,Принимать правки,План',
+      info.options?.map((o) => o.text).join(',') === 'Вручную,Принимать правки,План,Только разрешённое,⚠ Без вопросов',
       JSON.stringify(info.options),
     );
+    const bypassDisabled = await win.webContents.executeJavaScript(
+      `document.querySelector('#mode-select option[value="bypass"]')?.disabled === true`,
+    );
+    check('«Без вопросов» недоступен, если main пометил disabled', bypassDisabled === true);
     check('выбран manual', info.value === 'manual', info.value);
 
     console.log('\n[1b] Контраст раскрытого списка');
@@ -531,6 +648,515 @@ app.whenReady().then(async () => {
     check('меню закрылось после выбора', chatPick.pickerGone === true, JSON.stringify(chatPick));
     check('IPC export:chat вызван', exportCalls.some((c) => c.channel === 'chat'), JSON.stringify(exportCalls));
     check('чат передан списком сообщений', exportCalls.some((c) => c.channel === 'chat' && Array.isArray(c.messages) && c.messages.length >= 2), JSON.stringify(exportCalls));
+
+    console.log('\n[14] Запрос разрешения: рекомендованный ответ и правила (ADR 0027)');
+    win.webContents.send('chat:event', {
+      type: 'approval',
+      id: 'appr-1',
+      tool: 'run_shell',
+      name: 'run_shell',
+      cls: 'exec',
+      summary: 'git push origin dev',
+      risk: 'high',
+      why: 'необратимая операция git',
+      recommended: 'deny',
+      suggestions: ['run_shell(git push*)'],
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const modal1 = await win.webContents.executeJavaScript(`(() => {
+      const m = document.querySelector('.approval-card');
+      if (!m) return { found: false };
+      const rec = m.querySelector('.approve-option.recommended');
+      return {
+        found: true,
+        recommended: rec?.textContent || '',
+        focused: document.activeElement === rec,
+        risk: m.querySelector('.risk-badge')?.className || '',
+        options: [...m.querySelectorAll('.approve-option')].map((b) => b.textContent),
+      };
+    })()`);
+    check('модалка запроса открыта', modal1.found === true, JSON.stringify(modal1));
+    check('высокий риск: рекомендовано «Нет»', /Нет/.test(modal1.recommended) && /Рекомендуется/.test(modal1.recommended), JSON.stringify(modal1));
+    check('рекомендованная кнопка в фокусе', modal1.focused === true, JSON.stringify(modal1));
+    check('бейдж высокого риска', /risk-high/.test(modal1.risk), modal1.risk);
+    check('три варианта ответа', modal1.options.length === 3, JSON.stringify(modal1.options));
+    check('вариант 2 показывает правило', modal1.options.some((t) => t.includes('run_shell(git push*)')), JSON.stringify(modal1.options));
+
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 300));
+    const a1 = approvals.find((a) => a.id === 'appr-1');
+    check('клавиша 2: разрешено с правилом на чат', a1?.allow === true && a1?.remember === 'session' && a1?.rules?.[0] === 'run_shell(git push*)', JSON.stringify(a1));
+
+    win.webContents.send('chat:event', {
+      type: 'approval',
+      id: 'appr-2',
+      tool: 'write_file',
+      cls: 'write',
+      summary: 'Записать файл src/a.js',
+      risk: 'medium',
+      recommended: 'allow',
+      suggestions: [],
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const modal2 = await win.webContents.executeJavaScript(`(() => {
+      const m = document.querySelector('.approval-card');
+      const rec = m?.querySelector('.approve-option.recommended');
+      const area = m?.querySelector('.approve-feedback');
+      if (area) area.value = 'сначала прочитай файл';
+      return { recommended: rec?.textContent || '', options: m ? m.querySelectorAll('.approve-option').length : 0 };
+    })()`);
+    check('средний риск: рекомендовано «Да»', /^1Да/.test(modal2.recommended), JSON.stringify(modal2));
+    check('без подсказки правила — два варианта', modal2.options === 2, JSON.stringify(modal2));
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 300));
+    const a2 = approvals.find((a) => a.id === 'appr-2');
+    check('клавиша 3: отказ с пояснением', a2?.allow === false && a2?.feedback === 'сначала прочитай файл', JSON.stringify(a2));
+    check('карточка запроса закрыта', await win.webContents.executeJavaScript(`!document.querySelector('.approval-card')`));
+
+    console.log('\n[14b] Запрос в ленте с diff и заголовки карточек инструментов (CC7.1–CC7.3)');
+    win.webContents.send('chat:event', {
+      type: 'approval',
+      id: 'appr-3',
+      tool: 'edit_file',
+      cls: 'write',
+      summary: 'Изменить файл src/a.js',
+      risk: 'medium',
+      recommended: 'allow',
+      suggestions: ['write_file(src/**)', 'edit_file(src/**)'],
+      diff: { added: 1, removed: 1, lines: [{ type: '@', text: '@@ строка 1 @@' }, { type: '-', text: 'old()' }, { type: '+', text: 'new()' }] },
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const feedCard = await win.webContents.executeJavaScript(`(() => {
+      const c = document.querySelector('.approval-card');
+      return {
+        found: Boolean(c),
+        inFeed: Boolean(c?.closest('#messages')),
+        modal: Boolean(c?.closest('.modal')),
+        del: c?.querySelector('.diff-del .diff-text')?.textContent || '',
+        add: c?.querySelector('.diff-add .diff-text')?.textContent || '',
+        stats: c?.querySelector('.diff-stats')?.textContent || '',
+      };
+    })()`);
+    check('запрос — карточкой в ленте, без модалки', feedCard.found && feedCard.inFeed && !feedCard.modal, JSON.stringify(feedCard));
+    check('diff показан: было и стало', feedCard.del === 'old()' && feedCard.add === 'new()', JSON.stringify(feedCard));
+    check('счётчики +1 −1', /\+1/.test(feedCard.stats) && /−1/.test(feedCard.stats), feedCard.stats);
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('клавиша 1 разрешила', approvals.find((x) => x.id === 'appr-3')?.allow === true);
+
+    // Живые карточки рисуются через requestAnimationFrame, а в скрытом окне он не идёт:
+    // результат приходит событием, отрисовку делает done.
+    win.webContents.send('chat:event', { type: 'tool_result', id: 'tc-1', name: 'edit_file', ok: true, content: 'Изменено', diff: { added: 3, removed: 1, lines: [{ type: '+', text: 'x' }] } });
+    win.webContents.send('chat:event', {
+      type: 'done',
+      messages: [
+        { role: 'user', content: 'правь' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            { id: 'tc-1', type: 'function', function: { name: 'edit_file', arguments: JSON.stringify({ path: 'src/deep/main.js', old_string: 'a', new_string: 'b' }) } },
+            { id: 'tc-2', type: 'function', function: { name: 'run_shell', arguments: JSON.stringify({ command: 'npm test' }) } },
+          ],
+        },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const titles = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.tool-head')].map((h) => h.querySelector('.tool-name').textContent + ' ' + h.querySelector('.tool-args').textContent)`);
+    check('Edit с файлом и счётчиками', titles.some((t) => t === 'Edit deep/main.js +3 −1'), JSON.stringify(titles));
+    check('Bash с командой', titles.some((t) => t === 'Bash npm test'), JSON.stringify(titles));
+
+    console.log('\n[15] Доверие к папке при выборе проекта (ADR 0028)');
+    await win.webContents.executeJavaScript(`document.querySelector('#project-btn').click()`);
+    await new Promise((r) => setTimeout(r, 600));
+    const trustModal = await win.webContents.executeJavaScript(`(() => {
+      const m = document.querySelector('.trust-modal');
+      if (!m) return { found: false };
+      const rec = m.querySelector('.recommended');
+      return {
+        found: true,
+        recommended: rec?.dataset.trust || '',
+        focused: document.activeElement === rec,
+        items: [...m.querySelectorAll('.trust-list li')].map((li) => li.textContent),
+        badge: document.querySelector('#project-trust')?.textContent || '',
+      };
+    })()`);
+    check('окно доверия открыто после выбора папки', trustModal.found === true, JSON.stringify(trustModal));
+    check('при плагинах и MCP рекомендовано «Ограниченно»', trustModal.recommended === 'restricted', JSON.stringify(trustModal));
+    check('рекомендованный ответ в фокусе', trustModal.focused === true);
+    check('найденное перечислено', trustModal.items.some((t) => t.includes('плагины')) && trustModal.items.some((t) => t.includes('fs')), JSON.stringify(trustModal.items));
+    check('значок «не доверена» у папки', trustModal.badge === 'не доверена', trustModal.badge);
+    await win.webContents.executeJavaScript(`document.querySelector('.trust-modal [data-trust="restricted"]').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('решение сохранено через trust:set', trustCalls.some((c) => c.state === 'restricted'), JSON.stringify(trustCalls));
+    check(
+      'значок «ограниченно» у папки',
+      (await win.webContents.executeJavaScript(`document.querySelector('#project-trust')?.textContent`)) === 'ограниченно',
+    );
+
+    console.log('\n[16] Песочница, CSP и экранирование данных проекта (A2.5)');
+    const csp = await win.webContents.executeJavaScript(
+      `document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content || ''`,
+    );
+    check('CSP задан в главном окне', /script-src 'self'/.test(csp) && /object-src 'none'/.test(csp), csp);
+    const copied = await win.webContents.executeJavaScript(`window.mai.clipboard.writeText('скопировано').then(() => true)`);
+    check('буфер обмена через main работает в песочнице', copied === true && clipboardCalls.includes('скопировано'), JSON.stringify(clipboardCalls));
+    const crafted = loadBoards(root);
+    crafted.delivery.tasks = [
+      { id: 't1', title: 'задача', column: 'backlog', status: 'backlog', priority: '<img src=x id=pwned onerror="window.__pwned=1">' },
+    ];
+    craftedBoards = crafted;
+    await win.loadFile(path.join(root, 'renderer', 'board.html'), { query: { board: 'delivery' } });
+    await new Promise((r) => setTimeout(r, 1200));
+    const xss = await win.webContents.executeJavaScript(`(() => ({
+      injected: Boolean(document.getElementById('pwned')),
+      ran: window.__pwned === 1,
+      text: document.body.innerText.includes('<img src=x'),
+      csp: Boolean(document.querySelector('meta[http-equiv="Content-Security-Policy"]')),
+    }))()`);
+    check('разметка из boards.json не стала элементом', xss.injected === false, JSON.stringify(xss));
+    check('скрипт из boards.json не выполнен', xss.ran === false);
+    check('приоритет показан как текст', xss.text === true, JSON.stringify(xss));
+    check('CSP задан в окне досок', xss.csp === true);
+    craftedBoards = null;
+    const cspErrors = errors.filter((e) => /Content Security Policy|Refused to/i.test(e));
+    check('нет нарушений CSP за весь прогон', cspErrors.length === 0, cspErrors.join(' | '));
+
+    console.log('\n[17] Вопрос агента и карточка плана в ленте (CC1.7, CC1.8)');
+    await win.loadFile(path.join(root, 'renderer', 'index.html'));
+    // Ждём конца init(): подписка на события идёт после загрузки моделей и сессий.
+    for (let i = 0; i < 50; i += 1) {
+      const ready = await win.webContents.executeJavaScript(`document.querySelectorAll('#mode-select option').length > 0 && document.querySelectorAll('.session').length > 0`);
+      if (ready) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    win.webContents.send('chat:event', {
+      type: 'question',
+      id: 'q-1',
+      kind: 'questions',
+      questions: [
+        {
+          question: 'Какую базу взять?',
+          header: 'База',
+          options: [
+            { label: 'Postgres', description: 'уже есть в infra', recommended: true },
+            { label: 'SQLite', recommended: false },
+          ],
+        },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const card = await win.webContents.executeJavaScript(`(() => {
+      const c = document.querySelector('.question-card');
+      if (!c) return { found: false };
+      const first = c.querySelector('.question-option');
+      return {
+        found: true,
+        inFeed: Boolean(c.closest('#messages')),
+        modal: Boolean(document.querySelector('.modal-backdrop')),
+        firstText: first?.textContent || '',
+        firstRecommended: first?.classList.contains('recommended'),
+        firstPicked: first?.classList.contains('picked'),
+      };
+    })()`);
+    check('вопрос показан карточкой в ленте, не модалкой', card.found && card.inFeed && !card.modal, JSON.stringify(card));
+    check('рекомендованный вариант первым, с бейджем', card.firstRecommended && /Рекомендуется/.test(card.firstText), JSON.stringify(card));
+    check('рекомендованный выбран заранее', card.firstPicked === true);
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 300));
+    const q1 = answers.find((a) => a.id === 'q-1');
+    check('Enter отвечает рекомендованным', q1?.answer?.answers?.[0] === 'Postgres', JSON.stringify(q1));
+    check('карточка закрылась', await win.webContents.executeJavaScript(`!document.querySelector('.question-card')`));
+
+    win.webContents.send('chat:event', {
+      type: 'question',
+      id: 'q-2',
+      kind: 'questions',
+      questions: [{ question: 'Где хранить?', options: [{ label: 'диск', recommended: true }, { label: 'S3' }] }],
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 200));
+    await win.webContents.executeJavaScript(`document.querySelector('.question-card .btn.primary').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('клавиша 2 выбирает второй вариант', answers.find((a) => a.id === 'q-2')?.answer?.answers?.[0] === 'S3', JSON.stringify(answers));
+
+    win.webContents.send('chat:event', {
+      type: 'question',
+      id: 'p-1',
+      kind: 'plan',
+      plan: '# План\n\n1. Добавить кэш',
+      alternatives: [
+        { title: 'Кэш в памяти', risk: 'low' },
+        { title: 'Redis', risk: 'medium', pros: 'общий для процессов' },
+      ],
+      recommended: 1,
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const planCard = await win.webContents.executeJavaScript(`(() => {
+      const c = document.querySelector('.plan-card');
+      if (!c) return { found: false };
+      const alts = [...c.querySelectorAll('.plan-alt')];
+      return {
+        found: true,
+        planRendered: Boolean(c.querySelector('.plan-text h1')),
+        recommendedTitle: alts.find((a) => a.classList.contains('recommended'))?.querySelector('b')?.textContent || '',
+        pickedTitle: alts.find((a) => a.classList.contains('picked'))?.querySelector('b')?.textContent || '',
+        buttons: [...c.querySelectorAll('.question-foot .btn')].map((b) => b.textContent),
+      };
+    })()`);
+    check('карточка плана в ленте, план отрисован', planCard.found && planCard.planRendered, JSON.stringify(planCard));
+    check('рекомендованная альтернатива подсвечена и выбрана', planCard.recommendedTitle === 'Redis' && planCard.pickedTitle === 'Redis', JSON.stringify(planCard));
+    check('кнопки выполнения и доработки', planCard.buttons.some((t) => /принимать правки/.test(t)) && planCard.buttons.some((t) => /Доработать/.test(t)), JSON.stringify(planCard.buttons));
+    await win.webContents.executeJavaScript(`(() => {
+      const area = document.querySelector('.plan-card .approve-feedback');
+      area.value = 'добавь тесты';
+      area.dispatchEvent(new Event('input', { bubbles: true }));
+      [...document.querySelectorAll('.plan-card .question-foot .btn')].find((b) => /Доработать/.test(b.textContent)).click();
+    })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    const p1 = answers.find((a) => a.id === 'p-1');
+    check('«Доработать» уходит с замечаниями', p1?.answer?.action === 'revise' && p1?.answer?.feedback === 'добавь тесты', JSON.stringify(p1));
+
+    console.log('\n[18] Задачи агента, очередь, живой вывод, клавиши (CC1.5, CC7.4–CC7.6)');
+    win.webContents.send('chat:event', {
+      type: 'todos',
+      todos: [
+        { content: 'Прочитать код', status: 'completed' },
+        { content: 'Добавить тест', activeForm: 'Добавляю тест', status: 'in_progress' },
+        { content: 'Обновить docs', status: 'pending' },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const todos = await win.webContents.executeJavaScript(`(() => {
+      const box = document.querySelector('#todos');
+      return {
+        visible: box && !box.hidden,
+        head: box?.querySelector('.todos-head')?.textContent || '',
+        items: [...(box?.querySelectorAll('.todo') || [])].map((li) => li.className + ':' + li.textContent),
+      };
+    })()`);
+    check('панель задач видна', todos.visible === true, JSON.stringify(todos));
+    check('счётчик выполненных', /1 из 3/.test(todos.head), todos.head);
+    check('задача в работе — в форме «делаю»', todos.items.some((t) => t.includes('todo-in_progress') && t.includes('Добавляю тест')), JSON.stringify(todos.items));
+    check('выполненная отмечена', todos.items.some((t) => t.includes('todo-completed')));
+
+    win.webContents.send('chat:event', { type: 'queued:returned', items: [{ id: 'x', text: 'не успел уйти' }] });
+    await new Promise((r) => setTimeout(r, 300));
+    check('невзятое из очереди вернулось в поле ввода', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === 'не успел уйти');
+    await win.webContents.executeJavaScript(`document.querySelector('#input').value = ''`);
+
+    const modeBefore = await win.webContents.executeJavaScript(`document.querySelector('#mode-select').value`);
+    await win.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('#input');
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+    })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const modeAfter = await win.webContents.executeJavaScript(`document.querySelector('#mode-select').value`);
+    check('Shift+Tab переключает режим', modeBefore !== modeAfter, `${modeBefore} → ${modeAfter}`);
+    check('Shift+Tab не выбирает недоступный режим', modeAfter !== 'bypass', modeAfter);
+
+
+    win.webContents.send('chat:event', { type: 'tool_progress', id: 'tc-live', text: 'сборка 42%\n' });
+    win.webContents.send('chat:event', {
+      type: 'done',
+      messages: [
+        { role: 'user', content: 'собери' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'tc-live', type: 'function', function: { name: 'run_shell', arguments: JSON.stringify({ command: 'npm run build' }) } }] },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const live = await win.webContents.executeJavaScript(`(() => {
+      const pre = document.querySelector('.tool-live');
+      return { text: pre?.textContent || '', open: Boolean(pre?.closest('.tool-card.open')) };
+    })()`);
+    check('живой вывод в раскрытой карточке', /сборка 42%/.test(live.text) && live.open, JSON.stringify(live));
+    await win.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('#input');
+      input.value = '';
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    })()`);
+    check('↑ в пустом поле возвращает последнее сообщение', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === 'собери');
+
+
+    console.log('\n[19] Слэш-команды и @файл (CC7.7–CC7.9)');
+    const type = (text) =>
+      win.webContents.executeJavaScript(`(() => {
+        const input = document.querySelector('#input');
+        input.focus();
+        input.value = ${JSON.stringify(text)};
+        input.setSelectionRange(input.value.length, input.value.length);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      })()`);
+    const key = (k) =>
+      win.webContents.executeJavaScript(`document.querySelector('#input').dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(k)}, bubbles: true, cancelable: true }))`);
+    const menu = () =>
+      win.webContents.executeJavaScript(`(() => {
+        const box = document.querySelector('#suggest');
+        return { open: box && !box.hidden, items: [...(box?.querySelectorAll('.suggest-item') || [])].map((b) => b.textContent), active: box?.querySelector('.active')?.textContent || '' };
+      })()`);
+    await type('/re');
+    await new Promise((r) => setTimeout(r, 300));
+    let m = await menu();
+    check('/ открывает меню команд', m.open && m.items.some((t) => t.startsWith('/review')), JSON.stringify(m));
+    check('команда проекта помечена', m.items.some((t) => t.includes('/review') && t.includes('проект')), JSON.stringify(m.items));
+    await type('/');
+    await new Promise((r) => setTimeout(r, 200));
+    await key('ArrowDown');
+    m = await menu();
+    check('стрелка вниз двигает выбор', m.active.startsWith('/clear'), m.active);
+    await type('/rev');
+    await new Promise((r) => setTimeout(r, 200));
+    await key('Tab');
+    await new Promise((r) => setTimeout(r, 100));
+    check('Tab подставляет команду с пробелом для аргумента', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === '/review ');
+    await type('/review src/app.js');
+    await key('Enter');
+    await new Promise((r) => setTimeout(r, 400));
+    check('своя команда разворачивается через commands:expand', expandCalls.some((c) => c.name === 'review' && c.args === 'src/app.js'), JSON.stringify(expandCalls));
+
+    await type('/help');
+    await key('Enter'); // выбрать из меню
+    await new Promise((r) => setTimeout(r, 200));
+    if (!(await win.webContents.executeJavaScript(`Boolean(document.querySelector('.help-table'))`))) {
+      await key('Enter');
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    const help = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.help-row code')].map((c) => c.textContent)`);
+    check('/help показывает команды', help.includes('/review <путь>') && help.includes('/init'), JSON.stringify(help));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    await type('посмотри @sr');
+    await new Promise((r) => setTimeout(r, 450));
+    m = await menu();
+    check('@ ищет файлы проекта', m.open && m.items.includes('src/app.js'), JSON.stringify(m));
+    await key('ArrowDown');
+    await key('Enter');
+    await new Promise((r) => setTimeout(r, 150));
+    check('Enter подставляет путь, а не отправляет', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === 'посмотри @src/app.js ');
+    await type('');
+
+    console.log('\n[20] Контекст, компакция, стоимость (CC5.1–CC5.5)');
+    win.webContents.send('chat:event', { type: 'context', used: 112000, window: 128000, exact: true });
+    await new Promise((r) => setTimeout(r, 200));
+    const meterInfo = await win.webContents.executeJavaScript(`(() => { const m = document.querySelector('#context-meter'); return { hidden: m.hidden, text: m.textContent, cls: m.className, title: m.title }; })()`);
+    check('индикатор контекста виден', !meterInfo.hidden && meterInfo.text === 'контекст 88%', JSON.stringify(meterInfo));
+    check('у порога — красный', /ctx-high/.test(meterInfo.cls));
+    check('в подсказке токены из окна', /112K из 128K/.test(meterInfo.title), meterInfo.title);
+    win.webContents.send('chat:event', {
+      type: 'done',
+      messages: [
+        { role: 'compaction', content: '**Сделано:** база', messages: 8, auto: true },
+        { role: 'user', content: 'дальше' },
+        { role: 'assistant', content: 'ок', model: 'test-model', usage: { input: 1200, output: 300, cached: 800, total: 1500 } },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const compactCard = await win.webContents.executeJavaScript(`document.querySelector('.compaction-card summary')?.textContent || ''`);
+    check('карточка компакции в ленте', /автоматически сжат: 8 сообщений/.test(compactCard), compactCard);
+    const usage = await win.webContents.executeJavaScript(`document.querySelector('.msg-usage')?.textContent || ''`);
+    check('токены шага в шапке ответа', /↑1K ↓300/.test(usage), usage);
+    const typeCmd = async (text) => {
+      await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); })()`);
+      await win.webContents.executeJavaScript(`document.querySelector('#input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`);
+      await new Promise((r) => setTimeout(r, 400));
+    };
+    await typeCmd('/context');
+    const ctx = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.context-row')].map((r) => r.textContent)`);
+    check('/context показывает части', ctx.some((t) => t.includes('Результаты инструментов')), JSON.stringify(ctx));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await typeCmd('/cost');
+    const cost = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.context-row')].map((r) => r.textContent).join(' | ')`);
+    check('/cost показывает токены и кэш', /1 шагов · ↑1K \(кэш 800\) ↓300/.test(cost), cost);
+    check('без цены — честно «цена не задана»', /цена не задана/.test(cost), cost);
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[21] Откат к сообщению (CC6.1)');
+    await win.webContents.executeJavaScript(`document.querySelector('.session')?.click()`);
+    await new Promise((r) => setTimeout(r, 600));
+    const btn = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector('.msg-user .rewind-btn'); return { found: Boolean(b), edited: b?.classList.contains('edited') }; })()`);
+    check('у своего сообщения есть кнопка отката', btn.found, JSON.stringify(btn));
+    check('сообщение с правками отмечено', btn.edited === true);
+    await win.webContents.executeJavaScript(`document.querySelector('.msg-user .rewind-btn').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const rw = await win.webContents.executeJavaScript(`(() => {
+      const m = document.querySelector('.rewind-modal');
+      return {
+        found: Boolean(m),
+        files: [...(m?.querySelectorAll('.rewind-file') || [])].map((f) => f.textContent),
+        recommended: m?.querySelector('.recommended')?.dataset.mode || '',
+        note: m?.textContent.includes('run_shell') || false,
+      };
+    })()`);
+    check('окно отката с файлами', rw.found && rw.files.length === 2 && rw.files.some((t) => t.includes('удалить')), JSON.stringify(rw));
+    check('рекомендовано «Код и диалог»', rw.recommended === 'both', rw.recommended);
+    check('честно про run_shell', rw.note === true);
+    await win.webContents.executeJavaScript(`document.querySelector('.rewind-modal .recommended').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('откат вызван с режимом both и номером сообщения', rewindCalls.some((c) => c.mode === 'both' && c.turn === 0 && c.sessionId === 'test-session'), JSON.stringify(rewindCalls));
+    check('текст сообщения вернулся в поле ввода', (await win.webContents.executeJavaScript(`document.querySelector('#input').value`)) === 'Покажи отчёт');
+
+    console.log('\n[22] Чаты по проекту, поиск, /resume, редактирование, # в память (CC6.3–CC6.7, CC4.3)');
+    const lastList = () => sessionListCalls.at(-1) || {};
+    check('список чатов — по текущему проекту', lastList().projectDir === root, JSON.stringify(lastList()));
+    await win.webContents.executeJavaScript(`document.querySelector('#sessions-scope').click()`);
+    await new Promise((r) => setTimeout(r, 200));
+    check('«все проекты» снимает фильтр', lastList().projectDir === '', JSON.stringify(lastList()));
+    await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('#sessions-search'); s.value = 'отчёт'; s.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await new Promise((r) => setTimeout(r, 450));
+    check('поиск уходит в main', lastList().query === 'отчёт', JSON.stringify(lastList()));
+    check('фрагмент совпадения в списке', (await win.webContents.executeJavaScript(`document.querySelector('.session-match')?.textContent || ''`)).includes('фрагмент'));
+
+    await win.webContents.executeJavaScript(`document.querySelector('.session').click()`);
+    await new Promise((r) => setTimeout(r, 600));
+    await win.webContents.executeJavaScript(`document.querySelector('.msg-user .edit-btn').click()`);
+    await new Promise((r) => setTimeout(r, 200));
+    const editing = await win.webContents.executeJavaScript(`({ value: document.querySelector('#input').value, banner: !document.querySelector('#edit-banner').hidden, marked: Boolean(document.querySelector('.msg-user.editing')) })`);
+    check('✎ кладёт текст в поле и показывает плашку', editing.value === 'Покажи отчёт' && editing.banner && editing.marked, JSON.stringify(editing));
+    const rewindsBefore = rewindCalls.length;
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = 'Покажи отчёт за неделю'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    check('отправка правки сначала откатывает диалог', rewindCalls.slice(rewindsBefore).some((c) => c.mode === 'conversation' && c.turn === 0), JSON.stringify(rewindCalls.slice(rewindsBefore)));
+    check('затем уходит новый текст', chatStarts.some((c) => c.displayText === 'Покажи отчёт за неделю'), JSON.stringify(chatStarts.map((c) => c.displayText)));
+
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '# тесты запускать через npm.cmd'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    const rec = await win.webContents.executeJavaScript(`document.querySelector('.remember-modal .recommended')?.dataset.scope || ''`);
+    check('# открывает «Запомнить?», рекомендована память проекта', rec === 'project', rec);
+    await win.webContents.executeJavaScript(`document.querySelector('.remember-modal .recommended').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('строка ушла в память, а не агенту', memoryAppends.some((m) => m.text === 'тесты запускать через npm.cmd' && m.scope === 'project') && !chatStarts.some((c) => /npm\.cmd/.test(c.text)), JSON.stringify(memoryAppends));
+
+    console.log('\n[23] Хуки: /hooks и карточка Stop (ADR 0035)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/hooks'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const hookRows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.hook-row')].map((r) => r.textContent)`);
+    check('/hooks показывает хуки с источником', hookRows.some((t) => t.includes('PreToolUse · write_file') && t.includes('node check.js') && t.includes('проект')), JSON.stringify(hookRows));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+    win.webContents.send('chat:event', { type: 'done', messages: [{ role: 'user', content: 'сделай' }, { role: 'hook', event: 'Stop', content: '[Хук Stop, раунд 1] Работа не принята: тесты не запускались' }] });
+    await new Promise((r) => setTimeout(r, 300));
+    const hookCard = await win.webContents.executeJavaScript(`document.querySelector('.hook-card')?.textContent || ''`);
+    check('замечание хука — отдельной карточкой, не репликой пользователя', /Хук Stop/.test(hookCard) && /тесты не запускались/.test(hookCard), hookCard);
+
+    console.log('\n[24] Субагенты: /agents и карточка вызова (ADR 0036)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/agents'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const agentRows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.help-row')].map((r) => r.textContent)`);
+    check('/agents показывает типы, источник и инструменты', agentRows.some((t) => t.includes('explore') && t.includes('read_file')) && agentRows.some((t) => t.includes('reviewer') && t.includes('проект') && t.includes('все инструменты')), JSON.stringify(agentRows));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+    win.webContents.send('chat:event', { type: 'tool_result', id: 'ag-1', name: 'agent', ok: true, content: '[Субагент explore «найти конфиг»: шагов 2]\n\nнашёл' });
+    win.webContents.send('chat:event', {
+      type: 'done',
+      messages: [
+        { role: 'user', content: 'разберись' },
+        { role: 'assistant', content: null, tool_calls: [{ id: 'ag-1', type: 'function', function: { name: 'agent', arguments: JSON.stringify({ type: 'explore', description: 'найти конфиг', prompt: 'найди' }) } }] },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    const agentTitle = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.tool-head')].map((h) => h.querySelector('.tool-name').textContent + ' ' + h.querySelector('.tool-args').textContent)`);
+    check('карточка вызова: «Agent explore найти конфиг»', agentTitle.includes('Agent explore найти конфиг'), JSON.stringify(agentTitle));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

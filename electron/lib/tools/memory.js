@@ -68,7 +68,7 @@ export const memoryTools = [
       function: {
         name: 'memory_append',
         description:
-          'Дописать блок в конец памяти (memory.md) и создать версию. Требует подтверждения пользователя. ' +
+          'Дописать блок в конец памяти (memory.md) и создать версию. Подтверждение зависит от режима разрешений. ' +
           'Пиши коротко: решение, причина, границы применимости. Не дублируй то, что уже записано.',
         parameters: {
           type: 'object',
@@ -97,11 +97,6 @@ export const memoryTools = [
       const current = String(state[scope] || '');
       if (current.includes(addition)) {
         return `Этот текст уже есть в памяти (${scope}). Версия не создана.`;
-      }
-
-      const allowed = await ctx.approve('memory_append', `Дописать в память (${scope}): ${addition.slice(0, 120)}`);
-      if (allowed !== true) {
-        return typeof allowed === 'string' ? allowed : 'Пользователь отклонил запись в память.';
       }
 
       const separator = current.trim() ? (current.endsWith('\n') ? '\n' : '\n\n') : '';

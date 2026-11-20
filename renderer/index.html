@@ -3,6 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- CSP (бэклог A2.5): скрипты только из приложения, без inline и eval. Стили inline нужны Mermaid. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+    />
     <title>MAI Code</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -20,13 +25,19 @@
         <button class="btn primary new-chat" id="new-chat">＋ Новый чат</button>
         <button class="btn export-chat" id="export-chat" title="Скачать весь диалог">⤓ Скачать чат</button>
 
-        <div class="sidebar-section">Чаты</div>
+        <div class="sidebar-section sessions-head">
+          <span>Чаты</span>
+          <!-- Чаты текущей папки или все (CC6.6). -->
+          <button class="sessions-scope" id="sessions-scope" type="button" title="Показать чаты всех проектов">этот проект</button>
+        </div>
+        <input class="sessions-search" id="sessions-search" type="search" placeholder="Поиск по чатам…" />
         <div class="sessions" id="sessions"></div>
 
         <div class="sidebar-footer">
           <button class="project-btn" id="project-btn" title="Сменить папку проекта">
             <span class="project-icon">📁</span>
             <span class="project-name" id="project-name">Папка не выбрана</span>
+            <span class="project-trust" id="project-trust" hidden></span>
           </button>
           <button class="btn ghost small new-project" id="new-project-btn" title="Создать изолированную песочницу проекта">＋ Новый проект</button>
           <div class="conn" id="conn"><i></i><span>MAI</span></div>
@@ -81,7 +92,12 @@
         </section>
 
         <footer class="composer-wrap">
+          <!-- Список задач агента (CC1.5) и очередь сообщений (CC7.5). -->
+          <div class="todos" id="todos" hidden></div>
           <div class="composer" id="composer">
+            <div class="edit-banner" id="edit-banner" hidden>Редактирование сообщения: после отправки оно и всё, что после него, заменятся · Esc — отменить</div>
+            <div class="queue" id="queue" hidden></div>
+            <div class="suggest" id="suggest" role="listbox" hidden></div>
             <div class="attachments" id="attachments" hidden></div>
             <textarea id="input" rows="1" placeholder="Опишите задачу…  Enter — отправить, Shift+Enter — новая строка. Файлы можно перетащить сюда"></textarea>
             <div class="composer-actions">
@@ -95,6 +111,7 @@
               <div class="mode-wrap">
                 <select id="mode-select" class="mode-select" title="Режим разрешений"></select>
               </div>
+              <button class="context-meter" id="context-meter" type="button" title="Заполнение контекста модели — /context" hidden></button>
               <span class="composer-hint" id="composer-hint"></span>
               <button class="btn icon send" id="send" title="Отправить">➤</button>
               <button class="btn icon stop" id="stop" title="Остановить" hidden>■</button>

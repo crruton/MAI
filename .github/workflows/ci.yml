@@ -36,8 +36,68 @@ jobs:
       - name: Проверки экспорта ответов
         run: npm run test:export
 
+      # Агентный цикл и инструменты памяти импортируют electron.app,
+      # поэтому идут под Electron в виртуальном дисплее (ADR 0027).
+      - name: Агентный цикл и память (Electron)
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
+        run: |
+          xvfb-run -a npx electron --no-sandbox scripts/test-agent-loop.mjs
+          xvfb-run -a npx electron --no-sandbox scripts/test-memory-tools.mjs
+          xvfb-run -a npx electron --no-sandbox scripts/test-plugin-host.mjs
+          xvfb-run -a npx electron --no-sandbox scripts/test-secrets-electron.mjs
+          xvfb-run -a npx electron --no-sandbox scripts/test-ui.mjs
+
       - name: Ссылки в документации
         run: npm run docs:check
 
       - name: Пробелы в патчах
         run: git diff --check HEAD
+
+  # Windows — основная платформа приложения. Здесь настоящие cmd.exe, .cmd-обёртки
+  # npm, taskkill и DPAPI, которые на Linux проверяются только моделью.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Тесты
+        run: npm test
+
+      - name: Проверки только для Windows
+        run: node scripts/test-windows.mjs
+
+      - name: Транспорт Responses и экспорт
+        run: |
+          npm run test:responses
+          npm run test:export
+
+      # Каждый набор — отдельным процессом с ограничением 5 минут: зависание
+      # одного набора видно по имени, а не по таймауту всей задачи.
+      - name: Electron (агентный цикл, память, плагины, ключи, интерфейс, smoke)
+        shell: pwsh
+        run: |
+          $electron = Join-Path $PWD 'node_modules\electron\dist\electron.exe'
+          $failed = @()
+          foreach ($t in 'test-agent-loop', 'test-memory-tools', 'test-plugin-host', 'test-secrets-electron', 'test-ui', 'smoke-electron') {
+            Write-Host "== $t"
+            $p = Start-Process -FilePath $electron -ArgumentList "scripts/$t.mjs" -NoNewWindow -PassThru -RedirectStandardOutput "$t.out.txt" -RedirectStandardError "$t.err.txt"
+            $null = $p.Handle  # без этого ExitCode после WaitForExit бывает пустым
+            if (-not $p.WaitForExit(300000)) {
+              Stop-Process -Id $p.Id -Force
+              Get-Content "$t.out.txt" -ErrorAction SilentlyContinue | Select-Object -Last 40
+              Write-Host "${t}: ЗАВИС (5 минут)"
+              $failed += $t
+              continue
+            }
+            Get-Content "$t.out.txt" -ErrorAction SilentlyContinue | Select-String -Pattern 'FAIL|Итог|исключение'
+            if ($p.ExitCode -ne 0) { $failed += $t; Get-Content "$t.err.txt" -ErrorAction SilentlyContinue | Select-Object -Last 20 }
+          }
+          if ($failed.Count) { throw "Не прошли: $($failed -join ', ')" }

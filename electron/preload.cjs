@@ -1,4 +1,5 @@
-const { contextBridge, ipcRenderer, clipboard, webUtils } = require('electron');
+// Песочница (A2.5): из electron доступны только contextBridge, ipcRenderer, webUtils и подобные.
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
 
@@ -39,9 +40,26 @@ contextBridge.exposeInMainWorld('mai', {
     status: (payload) => invoke('ocr:status', payload),
     recognize: (payload) => invoke('ocr:recognize', payload),
   },
+  // Слэш-команды и @файл (CC7.7–CC7.9).
+  commands: {
+    list: (projectDir) => invoke('commands:list', projectDir),
+    expand: (projectDir, name, args) => invoke('commands:expand', { projectDir, name, args }),
+  },
+  files: {
+    search: (projectDir, query) => invoke('files:search', { projectDir, query }),
+  },
+  // Доверие к папке проекта (ADR 0028).
+  trust: {
+    get: (projectDir) => invoke('trust:get', projectDir),
+    set: (projectDir, state) => invoke('trust:set', { projectDir, state }),
+    list: () => invoke('trust:list'),
+    remove: (projectDir) => invoke('trust:remove', projectDir),
+  },
   permissions: {
     modes: (sessionId) => invoke('permissions:modes', sessionId),
     set: (mode, sessionId) => invoke('permissions:set', { mode, sessionId }),
+    rules: (payload) => invoke('permissions:rules', payload),
+    audit: (limit) => invoke('permissions:audit', { limit }),
   },
   workspace: {
     root: () => invoke('workspace:root'),
@@ -56,7 +74,7 @@ contextBridge.exposeInMainWorld('mai', {
     setRole: (role) => invoke('auth:setRole', role),
   },
   sessions: {
-    list: () => invoke('sessions:list'),
+    list: (options) => invoke('sessions:list', options),
     get: (id) => invoke('sessions:get', id),
     create: (data) => invoke('sessions:create', data),
     remove: (id) => invoke('sessions:delete', id),
@@ -64,7 +82,24 @@ contextBridge.exposeInMainWorld('mai', {
   chat: {
     start: (payload) => invoke('chat:start', payload),
     stop: () => invoke('chat:stop'),
-    approve: (id, allow) => invoke('chat:approval', { id, allow }),
+    // extra: { remember: 'session'|'global', rules: [...], feedback: '...' } (ADR 0027)
+    approve: (id, allow, extra = {}) => invoke('chat:approval', { id, allow, ...extra }),
+    // Ответ на ask_user или карточку плана exit_plan (CC1.7, CC1.8).
+    answer: (id, answer) => invoke('chat:answer', { id, answer }),
+    // Очередь сообщений во время работы агента (CC7.5).
+    queue: (text, displayText) => invoke('chat:queue', { text, displayText }),
+    unqueue: (id) => invoke('chat:unqueue', { id }),
+    // Контекст и компакция (CC5.2, CC5.3).
+    compact: (sessionId, instructions) => invoke('chat:compact', { sessionId, instructions }),
+    // Хуки (ADR 0035).
+    hooks: (projectDir) => invoke('hooks:list', projectDir),
+    // Типы субагентов (ADR 0036).
+    agents: (projectDir) => invoke('agents:defs', projectDir),
+    context: (payload) => invoke('context:stats', payload),
+    // Чекпоинты и откат (CC6.1).
+    checkpoints: (sessionId) => invoke('checkpoints:turns', sessionId),
+    rewindPlan: (sessionId, turn) => invoke('checkpoints:plan', { sessionId, turn }),
+    rewind: (sessionId, turn, mode) => invoke('checkpoints:rewind', { sessionId, turn, mode }),
     onEvent: (handler) => {
       const listener = (_event, data) => handler(data);
       ipcRenderer.on('chat:event', listener);
@@ -79,6 +114,8 @@ contextBridge.exposeInMainWorld('mai', {
     read: (projectDir) => invoke('memory:read', projectDir),
     write: (file, content, projectDir) => invoke('memory:write', { file, content, projectDir }),
     save: (payload) => invoke('memory:save', payload),
+    // `# текст` в поле ввода → строка в память (CC4.3).
+    append: (payload) => invoke('memory:append', payload),
     version: (payload) => invoke('memory:version', payload),
     restore: (payload) => invoke('memory:restore', payload),
   },
@@ -201,11 +238,9 @@ contextBridge.exposeInMainWorld('mai', {
     stopServe: (payload) => invoke('repowise:stopServe', payload),
   },
   clipboard: {
-    // navigator.clipboard на file:// в Electron часто запрещён — используем нативный модуль.
-    writeText: (text) => {
-      clipboard.writeText(String(text ?? ''));
-      return true;
-    },
+    // navigator.clipboard на file:// в Electron часто запрещён, а модуля clipboard
+    // в песочнице нет — пишем через main.
+    writeText: (text) => invoke('app:clipboard', String(text ?? '')),
   },
   openPath: (target) => invoke('app:openPath', target),
   // В Electron 38 у File больше нет свойства path: путь даёт только webUtils.
