@@ -2850,6 +2850,18 @@ async function openSettings() {
     placeholder: 'Дополнительные запреты: по одному регулярному выражению в строке',
   });
   guardExtra.value = (guard.extraDeny || []).join('\n');
+  // Песочница для команд агента (ADR 0040).
+  const shellBox = settings.shellSandbox || {};
+  const shellDocker = el('input', { type: 'checkbox', class: 'shell-sandbox-docker' });
+  shellDocker.checked = shellBox.mode === 'docker';
+  const shellImage = el('input', { class: 'shell-sandbox-image', value: shellBox.image || 'node:22-bookworm-slim' });
+  const shellNetwork = el('select', { class: 'shell-sandbox-network' }, [
+    el('option', { value: 'none', text: 'выключена' }),
+    el('option', { value: 'bridge', text: 'включена' }),
+  ]);
+  shellNetwork.value = shellBox.network === 'bridge' ? 'bridge' : 'none';
+  const shellHost = el('textarea', { rows: '2', class: 'shell-sandbox-host', placeholder: 'Команды на хосте, по маске в строке: git *' });
+  shellHost.value = (shellBox.hostCommands || []).join('\n');
   const telemetry = settings.telemetry || {};
   const telemetryEnabled = el('input', { type: 'checkbox' });
   telemetryEnabled.checked = Boolean(telemetry.enabled);
@@ -2965,6 +2977,14 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Guardrails не заменяют песочницу: внешние рантаймы запускаются как отдельные процессы/контейнеры и не проходят эти проверки.',
       }),
+      el('div', { class: 'docs-group-title', text: 'Команды агента' }),
+      el('label', { class: 'hint-text' }, [shellDocker, ' выполнять run_shell в Docker-песочнице (проект в /workspace, без лишних прав)']),
+      el('div', { class: 'row' }, [field('Образ', shellImage), field('Сеть в контейнере', shellNetwork)]),
+      field('На хосте (маски)', shellHost),
+      el('p', {
+        class: 'hint-text',
+        text: 'Команда в контейнере — Linux (sh), даже на Windows. Если Docker не запущен, команда не выполнится на хосте молча — агент получит ошибку. Правки файлов проекта из контейнера видны сразу.',
+      }),
       el('div', { class: 'docs-group-title', text: 'OpenTelemetry' }),
       el('label', { class: 'hint-text' }, [telemetryEnabled, ' отправлять логи и трейсы в OTLP-коллектор']),
       field('OTLP HTTP endpoint', telemetryEndpoint),
@@ -3021,6 +3041,12 @@ async function openSettings() {
               allowSecrets: guardAllowSecrets.checked,
               maxCommandLength: Math.max(100, Math.min(20000, Number(guardMaxLength.value || 4000))),
               extraDeny: guardExtra.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+            },
+            shellSandbox: {
+              mode: shellDocker.checked ? 'docker' : 'off',
+              image: shellImage.value.trim(),
+              network: shellNetwork.value,
+              hostCommands: shellHost.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
             },
             telemetry: {
               enabled: telemetryEnabled.checked,

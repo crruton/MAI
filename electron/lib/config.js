@@ -5,6 +5,7 @@ import { createSecretBox, openSettings, sealSettings, keepUnreadable, plaintextS
 import { envCandidates, readEnvFiles } from './env.js';
 import { RUNTIME_PRESETS } from './runtimes.js';
 import { DEFAULT_GUARDRAILS } from './guardrails.js';
+import { normalizeShellSandbox } from './shell-sandbox.js';
 
 const DEFAULTS = {
   temperature: 0.3,
@@ -276,6 +277,7 @@ export function loadSettings() {
     providers,
     runtimes: bootstrapRuntimes(saved),
     guardrails: { ...DEFAULT_GUARDRAILS, ...(saved.guardrails || {}) },
+    shellSandbox: normalizeShellSandbox(saved.shellSandbox),
     permissions: {
       allow: Array.isArray(saved.permissions?.allow) ? saved.permissions.allow : [],
       ask: Array.isArray(saved.permissions?.ask) ? saved.permissions.ask : [],
@@ -325,6 +327,10 @@ export function saveSettings(patch) {
 
   if (patch.repowise) {
     next.repowise = { ...(current.repowise || {}), ...patch.repowise };
+  }
+
+  if (patch.shellSandbox) {
+    next.shellSandbox = normalizeShellSandbox({ ...(current.shellSandbox || {}), ...patch.shellSandbox });
   }
 
   if (patch.guardrails) {

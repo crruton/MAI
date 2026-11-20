@@ -64,6 +64,9 @@
   откатывает правки агента и диалог к этому месту, ✎ — изменить сообщение и
   отправить заново. Чаты по умолчанию — текущего проекта, есть поиск по тексту и
   `/resume`. `# правило` в поле ввода записывает строку в память.
+- **Песочница для команд** — `run_shell` в одноразовом Docker-контейнере:
+  проект в `/workspace`, без сети и лишних прав, маски команд для хоста;
+  включается в «Настройки» → «Команды агента» (ADR 0040).
 - **Пакеты плагинов** — команды, агенты, навыки, плагины, хуки и MCP в одной
   папке с `mai-package.json`; установка из папки или git, выключение без
   удаления, `/packages` (ADR 0037).
@@ -182,6 +185,7 @@ AGENTROUTER_API_KEY=sk-...
 | MCP проекта | `<проект>/.mai-code/mcp.json` |
 | Хуки проекта | `<проект>/.mai-code/hooks.json` |
 | Правила разрешений проекта | `<проект>/.mai-code/settings.json` (в git), `settings.local.json` (только у вас) |
+| Песочница команд агента | поле `shellSandbox` в `settings.json` (ADR 0040) |
 | Настройки организации | `%ProgramData%\mai-code\managed-settings.json`, `/etc/mai-code/…`, `/Library/Application Support/mai-code/…` (или `MAI_MANAGED_SETTINGS`) |
 | Пакеты плагинов | `%APPDATA%\mai-code\packages\`, `<проект>/.mai-code/packages\` |
 | Свои команды и типы субагентов | `<проект>/.mai-code/commands\`, `agents\` и то же в `%APPDATA%\mai-code\` |

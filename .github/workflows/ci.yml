@@ -30,6 +30,12 @@ jobs:
       - name: Тесты
         run: npm test
 
+      # Настоящий Docker на раннере: команда агента в песочнице (ADR 0040).
+      - name: Песочница команд в Docker
+        env:
+          MAI_DOCKER_TEST: '1'
+        run: node scripts/test-shell-sandbox.mjs
+
       - name: Проверки транспорта Responses API
         run: npm run test:responses
 

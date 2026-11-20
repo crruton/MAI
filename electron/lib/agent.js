@@ -641,6 +641,8 @@ export async function runAgent({
       allowOutsideProject: settings.allowOutsideProject,
       guardrails: settings.guardrails,
       repowise: settings.repowise,
+      shellSandbox: settings.shellSandbox,
+      dockerAvailable: settings.dockerAvailable,
       trusted,
       ask,
       skillDirs,

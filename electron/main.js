@@ -15,6 +15,7 @@ import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
 import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
 import { listAgentDefs } from './lib/agent-defs.js';
+import { normalizeShellSandbox } from './lib/shell-sandbox.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
@@ -163,6 +164,19 @@ function managed() {
 function managedHooks() {
   const org = managed();
   return org.hooks ? [{ source: 'managed', config: org.hooks }] : [];
+}
+
+/** Docker проверяется не чаще раза в минуту и только когда песочница команд включена (ADR 0040). */
+let dockerCache = { at: 0, available: false };
+function dockerReady() {
+  if (Date.now() - dockerCache.at < 60_000) return dockerCache.available;
+  dockerCache = { at: Date.now(), available: Boolean(sandbox.dockerStatus().available) };
+  return dockerCache.available;
+}
+
+function agentSettings(settings) {
+  const shellSandbox = normalizeShellSandbox(settings.shellSandbox);
+  return { ...settings, shellSandbox, dockerAvailable: shellSandbox.mode === 'docker' ? dockerReady : () => false };
 }
 
 /** «Без вопросов» недоступен: гость, недоверенная папка или запрет организации. */
@@ -416,7 +430,13 @@ ipcMain.handle('ocr:recognize', async (_e, payload) => {
 });
 
 ipcMain.handle('settings:save', async (_e, patch) => {
+  // Настройки, которые расширяют права агента или меняют изоляцию, — только admin.
   if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth || patch.guardrails || patch.telemetry) {
+    requireAdmin();
+  }
+  const current = loadSettings();
+  if ('allowOutsideProject' in (patch || {}) && Boolean(patch.allowOutsideProject) !== Boolean(current.allowOutsideProject)) requireAdmin();
+  if (patch?.shellSandbox && JSON.stringify(normalizeShellSandbox({ ...current.shellSandbox, ...patch.shellSandbox })) !== JSON.stringify(normalizeShellSandbox(current.shellSandbox))) {
     requireAdmin();
   }
   const clean = { ...patch };
@@ -1157,7 +1177,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
   (async () => {
     try {
       const history = await runAgent({
-        settings,
+        settings: agentSettings(settings),
         provider: resolved.provider,
         projectDir,
         model: resolved.modelId,
@@ -2070,7 +2090,7 @@ ipcMain.handle('boards:correction', async (event, payload) => {
   (async () => {
     try {
       const history = await runAgent({
-        settings,
+        settings: agentSettings(settings),
         provider: resolved.provider,
         projectDir,
         model: resolved.modelId,

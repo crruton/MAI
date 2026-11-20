@@ -2,6 +2,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { checkCommand } from '../guardrails.js';
 import { createOutputDecoder, withUtf8Console } from '../encoding.js';
+import { sandboxPlan, dockerRunArgs } from '../shell-sandbox.js';
 
 const MAX_OUTPUT = 24_000;
 const TIMEOUT_MS = 180_000;
@@ -78,7 +79,28 @@ export const shellTools = [
         return `Guardrails заблокировали команду: ${check.reason}`;
       }
       const cwd = resolveCwd(ctx, args.cwd);
-      return await execute(effectiveCommand(ctx, args), cwd, { onData: ctx.progress, signal: ctx.signal });
+      const command = effectiveCommand(ctx, args);
+      // Песочница для команд (ADR 0040): docker, хост по списку или отказ, если Docker недоступен.
+      const plan = sandboxPlan(command, ctx.shellSandbox, { dockerAvailable: Boolean(ctx.dockerAvailable?.()) });
+      if (plan.where === 'blocked') return `$ ${command}\n\n${plan.why}`;
+      const container =
+        plan.where === 'docker'
+          ? {
+              name: `mai-shell-${process.pid}-${Date.now().toString(36)}`,
+              label: plan.why,
+              build: (name) =>
+                dockerRunArgs({
+                  command,
+                  projectDir: ctx.projectDir || cwd,
+                  cwd,
+                  config: ctx.shellSandbox,
+                  name,
+                  uid: typeof process.getuid === 'function' ? process.getuid() : undefined,
+                  gid: typeof process.getgid === 'function' ? process.getgid() : undefined,
+                }),
+            }
+          : null;
+      return await execute(command, cwd, { onData: ctx.progress, signal: ctx.signal, container });
     },
   },
 ];
@@ -107,7 +129,7 @@ function killTree(child) {
  * @param {(text: string) => void} [options.onData] живой вывод для карточки (CC7.4)
  * @param {AbortSignal} [options.signal] «Стоп» останавливает процесс, а не только ожидание
  */
-export function execute(command, cwd, { onData, signal } = {}) {
+export function execute(command, cwd, { onData, signal, container = null } = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
     if (signal?.aborted) {
@@ -116,18 +138,29 @@ export function execute(command, cwd, { onData, signal } = {}) {
     }
     // На Windows консоль переводится в UTF-8, а вывод в кодировке консоли перекодируется.
     const decode = createOutputDecoder();
-    const child = spawn(withUtf8Console(command), {
-      cwd,
-      shell: true,
-      windowsHide: true,
-      detached: process.platform !== 'win32',
-      env: { ...process.env, FORCE_COLOR: '0' },
-    });
+    // В контейнере — `docker run` без оболочки хоста; остановка — `docker kill`.
+    const child = container
+      ? spawn('docker', container.build(container.name), { cwd, windowsHide: true, env: { ...process.env, FORCE_COLOR: '0' } })
+      : spawn(withUtf8Console(command), {
+          cwd,
+          shell: true,
+          windowsHide: true,
+          detached: process.platform !== 'win32',
+          env: { ...process.env, FORCE_COLOR: '0' },
+        });
+    if (container) child.stdin?.end();
     let out = '';
     let stopped = '';
     const stop = (reason) => {
       if (stopped) return;
       stopped = reason;
+      if (container) {
+        try {
+          spawn('docker', ['kill', container.name], { windowsHide: true }).on('error', () => {});
+        } catch {
+          /* контейнер уже завершён */
+        }
+      }
       killTree(child);
     };
     const timer = setTimeout(() => stop(`таймаут ${TIMEOUT_MS / 1000} с — процесс остановлен`), TIMEOUT_MS);
@@ -150,7 +183,8 @@ export function execute(command, cwd, { onData, signal } = {}) {
       signal?.removeEventListener('abort', onAbort);
       const trimmed = out.length > MAX_OUTPUT ? `${out.slice(0, MAX_OUTPUT)}\n… обрезано` : out;
       const note = stopped ? `\n[${stopped}]` : '';
-      resolve(`$ ${command}\n\n${trimmed || '(нет вывода)'}${note}\n\n[код ${code}, ${Date.now() - started} мс]`);
+      const where = container ? ` · ${container.label}` : '';
+      resolve(`$ ${command}\n\n${trimmed || '(нет вывода)'}${note}\n\n[код ${code}, ${Date.now() - started} мс${where}]`);
     });
     child.on('error', (err) => {
       clearTimeout(timer);

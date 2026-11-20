@@ -280,6 +280,16 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
 
+### Песочница для команд
+
+ADR 0040. `electron/lib/shell-sandbox.js`: `normalizeShellSandbox` (в
+`loadSettings`/`saveSettings`), `hostAllowed(command, masks)`,
+`sandboxPlan(command, cfg, { dockerAvailable })` → `host | docker | blocked`,
+`dockerRunArgs(...)`. `run_shell` (`tools/shell.js`) получает в контексте
+`shellSandbox` и `dockerAvailable()` — main передаёт их через
+`agentSettings(settings)` (кеш `docker info` на минуту). `execute(..., { container })`
+запускает `docker run` без оболочки хоста и останавливает его `docker kill`.
+
 ### Уровни настроек и панель «Разрешения»
 
 ADR 0038. `electron/lib/settings-levels.js`: `readManaged()` (файл организации,
