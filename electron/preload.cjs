@@ -91,6 +91,8 @@ contextBridge.exposeInMainWorld('mai', {
     unqueue: (id) => invoke('chat:unqueue', { id }),
     // Контекст и компакция (CC5.2, CC5.3).
     compact: (sessionId, instructions) => invoke('chat:compact', { sessionId, instructions }),
+    // Хуки (ADR 0035).
+    hooks: (projectDir) => invoke('hooks:list', projectDir),
     context: (payload) => invoke('context:stats', payload),
     // Чекпоинты и откат (CC6.1).
     checkpoints: (sessionId) => invoke('checkpoints:turns', sessionId),

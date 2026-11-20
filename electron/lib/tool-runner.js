@@ -68,7 +68,7 @@ function deniedText(entry, decision, answer) {
  * @param {Function} [p.audit] (record) → void
  * @returns {Promise<{ok:boolean, content:string, decision:object, approved:boolean}>}
  */
-export async function runToolCall({ entry, args, ctx, policy = {}, approve, audit }) {
+export async function runToolCall({ entry, args, ctx, policy = {}, approve, audit, hooks = null }) {
   const started = Date.now();
   const mode = policy.getMode ? policy.getMode() : 'manual';
   const rules = policy.getRules ? policy.getRules() : {};
@@ -117,7 +117,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
     }
   }
 
-  const decision = evaluate({
+  let decision = evaluate({
     tool: entry.name,
     cls: entry.cls,
     subject,
@@ -126,6 +126,21 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
     guardrails: ctx.guardrails,
     role: policy.role || 'admin',
   });
+
+  // PreToolUse (ADR 0035): хук не может разрешить то, что запретили guardrails,
+  // правило deny или «План», но может запретить, потребовать вопрос или снять его.
+  let hookNote = '';
+  if (decision.action !== 'deny' && hooks?.has('PreToolUse', entry.name)) {
+    const hook = await hooks.run('PreToolUse', { tool_name: entry.name, tool_input: args, tool_class: entry.cls, permission_mode: mode });
+    if (hook.decision === 'deny') {
+      decision = { ...decision, action: 'deny', source: 'hook', reason: `Хук PreToolUse отклонил вызов: ${hook.reason || 'без причины'}` };
+    } else if (hook.decision === 'ask' && decision.action === 'allow') {
+      decision = { ...decision, action: 'ask', source: 'hook', why: hook.reason || 'так требует хук PreToolUse' };
+    } else if (hook.decision === 'allow' && decision.action === 'ask') {
+      decision = { ...decision, action: 'allow', source: 'hook' };
+    }
+    if (hook.context.length) hookNote = hook.context.join('\n');
+  }
 
   let answer = null;
   if (decision.action === 'ask') {
@@ -183,7 +198,15 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
       },
       args,
     );
-    return { ok: true, content: String(result), decision, approved: true, diff: shortDiff };
+    let content = String(result);
+    if (hookNote) content = `${content}\n\n[Хук PreToolUse]\n${hookNote}`;
+    // PostToolUse: контекст от хука дописывается к результату; block — замечание агенту.
+    if (hooks?.has('PostToolUse', entry.name)) {
+      const post = await hooks.run('PostToolUse', { tool_name: entry.name, tool_input: args, tool_response: content.slice(0, 20000) });
+      if (post.context.length) content = `${content}\n\n[Хук PostToolUse]\n${post.context.join('\n')}`;
+      if (post.decision === 'block') content = `${content}\n\n[Хук PostToolUse: ${post.reason || 'результат не принят'}. Исправь и проверь снова.]`;
+    }
+    return { ok: true, content, decision, approved: true, diff: shortDiff };
   } catch (err) {
     return { ok: false, content: `Ошибка: ${err?.message || String(err)}`, decision, approved: true };
   }

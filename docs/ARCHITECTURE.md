@@ -233,6 +233,14 @@ ADR 0034: `session-store.js` — `sessions/<id>.json` и `sessions/index.json`,
 инструмента с полем `path` один раз за прогон. `memory:append({ scope, text })`
 — быстрая запись из поля ввода.
 
+### Хуки
+
+ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый прогон;
+`runToolCall({ hooks })` — `PreToolUse` после PolicyEngine и `PostToolUse` после
+выполнения; `runAgent({ hooks })` — `Stop` перед завершением и `PreCompact` перед
+автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
+сообщения. IPC `hooks:list(projectDir)`.
+
 ## Доверие к папке и матрица прав IPC
 
 Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или

@@ -88,6 +88,11 @@
 
 ### Added
 
+- Хуки (ADR 0035): `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`,
+  `PreCompact`, `SessionStart` — команды из `settings.hooks` и
+  `.mai-code/hooks.json` (доверенная папка); код 2 блокирует, JSON на stdout —
+  решение и контекст. `/hooks` — список.
+
 - Чаты текущего проекта в списке с переключателем «все проекты», поиск по
   заголовку и тексту, `/resume [поиск]`.
 - ✎ у своего сообщения: изменить и отправить заново.

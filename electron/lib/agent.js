@@ -102,7 +102,7 @@ export function toApiMessage(message) {
       content: `[Ответ рантайма ${message.name || message.runtimeId || 'CLI'}${code}]\n${message.content || ''}`,
     };
   }
-  if (message.role === 'review') {
+  if (message.role === 'review' || message.role === 'hook') {
     return { role: 'user', content: String(message.content || '') };
   }
   const out = { role: API_ROLES.has(message.role) ? message.role : 'user' };
@@ -241,6 +241,7 @@ export async function runAgent({
   ask = null,
   pullQueued = null,
   checkpoint = null,
+  hooks = null,
   onHistory = null,
   clientFactory = null,
   contextWindow = DEFAULT_CONTEXT,
@@ -311,6 +312,7 @@ export async function runAgent({
   const maxIterations = settings.maxIterations || 30;
   const maxReviewRounds = Number(reviewer?.maxRounds ?? 2);
   let reviewRound = 0;
+  let stopRounds = 0;
   // Вложенные AGENTS.md, уже показанные агенту в этом прогоне (CC4.1).
   const loadedInstructions = new Set();
   const snapshot = () => {
@@ -350,7 +352,9 @@ export async function runAgent({
     if (settings.autoCompact !== false && needsCompaction(history, { window: contextWindow, system, tools: tools.map((t) => t.schema) })) {
       emit({ type: 'compact:start', auto: true });
       try {
-        const marker = await compactHistory({ client, model, history, signal, keepTokens: Math.round(contextWindow * 0.25), auto: true });
+        // Хук PreCompact может подсказать, что обязательно сохранить в сводке.
+        const pre = hooks?.has('PreCompact') ? await hooks.run('PreCompact', { trigger: 'auto' }) : null;
+        const marker = await compactHistory({ client, model, history, signal, keepTokens: Math.round(contextWindow * 0.25), auto: true, instructions: pre?.context?.join('\n') || '' });
         if (marker) {
           emit({ type: 'compaction', marker });
           snapshot();
@@ -505,6 +509,20 @@ export async function runAgent({
     if (!validCalls.length) {
       // Пользователь дописал что-то, пока агент отвечал: продолжаем с новым сообщением.
       if (takeQueued()) continue;
+      // Хук Stop (ADR 0035): может не дать закончить, пока условие не выполнено. Не больше 3 раз.
+      if (hooks?.has('Stop') && stopRounds < 3) {
+        const stop = await hooks.run('Stop', { last_assistant_message: String(content || '').slice(0, 20000), stop_hook_round: stopRounds + 1 });
+        if (stop.decision === 'block') {
+          stopRounds += 1;
+          history.push({
+            role: 'hook',
+            event: 'Stop',
+            content: `[Хук Stop, раунд ${stopRounds}] Работа не принята: ${stop.reason || 'условие не выполнено'}${stop.context.length ? `\n${stop.context.join('\n')}` : ''}`,
+          });
+          snapshot();
+          continue;
+        }
+      }
       // Ревизор проверяет финальный ответ. При revise причина добавляется
       // в историю как сообщение пользователя, и цикл продолжается.
       if (reviewerClient && reviewRound < maxReviewRounds) {
@@ -585,7 +603,7 @@ export async function runAgent({
               }
             },
           };
-          outcome = await runToolCall({ entry, args, ctx: callCtx, policy: policyCtx, approve, audit });
+          outcome = await runToolCall({ entry, args, ctx: callCtx, policy: policyCtx, approve, audit, hooks });
         }
       }
       // Вложенный AGENTS.md папки, которую агент тронул впервые (CC4.1) — к результату.

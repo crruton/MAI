@@ -11,6 +11,7 @@ import path from 'node:path';
 import { runAgent, trimMessages, toApiMessage, compactSession } from '../electron/lib/agent.js';
 import { loadPlugins } from '../electron/lib/plugins.js';
 import { createRecorder, rewindFiles, rewindPlan } from '../electron/lib/checkpoints.js';
+import { createHookRunner, normalizeHooks } from '../electron/lib/hooks.js';
 import { disposePluginHosts } from '../electron/lib/plugin-host.js';
 
 let pass = 0;
@@ -622,6 +623,32 @@ console.log('\n[15] AGENTS.local.md, импорты и вложенные AGENTS
   check('второй раз не повторяется', !/ПРАВИЛО-SVC/.test(trusted.tools[1]));
   const untrusted = await run(false);
   check('без доверия — ни импортов, ни вложенных правил', !untrusted.system.includes('ИМПОРТ-ПРАВИЛО') && !untrusted.tools.some((t) => /ПРАВИЛО-SVC/.test(t)));
+}
+
+console.log('\n[16] Хук Stop не даёт закончить, пока условие не выполнено (ADR 0035)');
+{
+  const flag = path.join(project, 'stop-once.flag');
+  const hookFile = path.join(project, 'stop-hook.cjs');
+  fs.writeFileSync(
+    hookFile,
+    `const fs = require('fs'); if (!fs.existsSync(${JSON.stringify(flag)})) { fs.writeFileSync(${JSON.stringify(flag)}, '1'); process.stderr.write('тесты не запускались'); process.exit(2); }`,
+    'utf8',
+  );
+  const hooks = createHookRunner({ hooks: normalizeHooks({ Stop: [{ hooks: [{ command: `"${process.execPath}" "${hookFile}"` }] }] }), projectDir: project });
+  const bodies = [];
+  const history = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'сделай' }],
+      mcp: fakeMcp(),
+      hooks,
+      clientFactory: fakeClient([{ text: 'готово' }, { text: 'запустил тесты, всё зелёное' }], bodies),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const hookMsg = history.find((m) => m.role === 'hook');
+  check('Stop заблокировал первый финал', /тесты не запускались/.test(hookMsg?.content || ''), JSON.stringify(hookMsg));
+  check('агент продолжил и закончил со второго раза', bodies.length === 2 && history.at(-1).content === 'запустил тесты, всё зелёное');
+  check('замечание хука ушло модели как сообщение пользователя', bodies[1].messages.some((m) => m.role === 'user' && /тесты не запускались/.test(m.content)));
 }
 
 fs.rmSync(project, { recursive: true, force: true });

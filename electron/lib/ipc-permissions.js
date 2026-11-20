@@ -94,6 +94,7 @@ export const IPC_PERMISSIONS = {
   'chat:queue': ANY,
   'chat:unqueue': ANY,
   'chat:compact': ANY,
+  'hooks:list': ANY,
   'context:stats': ANY,
   // Откат возвращает только файлы, которые правил агент в этом чате.
   'checkpoints:turns': ANY,

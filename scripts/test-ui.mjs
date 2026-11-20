@@ -113,6 +113,11 @@ ipcMain.handle('memory:append', (_e, payload) => {
   memoryAppends.push(payload);
   return { ok: true, changed: true, scope: payload.scope };
 });
+ipcMain.handle('hooks:list', () => ({
+  rows: [{ event: 'PreToolUse', matcher: 'write_file', command: 'node check.js', timeout: 30, source: 'project' }],
+  trusted: true,
+  projectFile: '/p/.mai-code/hooks.json',
+}));
 const answers = [];
 ipcMain.handle('chat:answer', (_e, payload) => {
   answers.push(payload);
@@ -1119,6 +1124,17 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`document.querySelector('.remember-modal .recommended').click()`);
     await new Promise((r) => setTimeout(r, 300));
     check('строка ушла в память, а не агенту', memoryAppends.some((m) => m.text === 'тесты запускать через npm.cmd' && m.scope === 'project') && !chatStarts.some((c) => /npm\.cmd/.test(c.text)), JSON.stringify(memoryAppends));
+
+    console.log('\n[23] Хуки: /hooks и карточка Stop (ADR 0035)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/hooks'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const hookRows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.hook-row')].map((r) => r.textContent)`);
+    check('/hooks показывает хуки с источником', hookRows.some((t) => t.includes('PreToolUse · write_file') && t.includes('node check.js') && t.includes('проект')), JSON.stringify(hookRows));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+    win.webContents.send('chat:event', { type: 'done', messages: [{ role: 'user', content: 'сделай' }, { role: 'hook', event: 'Stop', content: '[Хук Stop, раунд 1] Работа не принята: тесты не запускались' }] });
+    await new Promise((r) => setTimeout(r, 300));
+    const hookCard = await win.webContents.executeJavaScript(`document.querySelector('.hook-card')?.textContent || ''`);
+    check('замечание хука — отдельной карточкой, не репликой пользователя', /Хук Stop/.test(hookCard) && /тесты не запускались/.test(hookCard), hookCard);
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

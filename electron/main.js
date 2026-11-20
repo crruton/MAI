@@ -13,6 +13,7 @@ import { createSession, deleteSession, getSession, listSessions, saveSession, se
 import { runAgent, compactSession, describeContext } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
+import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -1005,6 +1006,20 @@ ipcMain.handle('chat:start', async (event, payload) => {
       reviewer = null;
     }
   }
+  // UserPromptSubmit и SessionStart (ADR 0035): до записи сообщения в чат.
+  const hooks = hookRunnerFor(window, { projectDir, sessionId: payload.sessionId || '', trusted });
+  if (payload.text && hooks.has('UserPromptSubmit')) {
+    const hook = await hooks.run('UserPromptSubmit', { prompt: String(payload.displayText || payload.text) });
+    if (hook.decision === 'block' || hook.decision === 'deny') {
+      lock.release();
+      return { ok: false, error: `Хук UserPromptSubmit не пропустил запрос: ${hook.reason || 'без причины'}` };
+    }
+    if (hook.context.length) payload.text = `${payload.text}\n\n[Контекст от хука]\n${hook.context.join('\n')}`;
+  }
+  if (!payload.sessionId && payload.text && hooks.has('SessionStart')) {
+    const start = await hooks.run('SessionStart', { source: 'new' });
+    if (start.context.length) payload.text = `${payload.text}\n\n[Контекст начала сессии]\n${start.context.join('\n')}`;
+  }
   let session = payload.sessionId ? getSession(payload.sessionId) : null;
   if (!session) {
     // Режим из интерфейса переносим в новую сессию: пользователь выбрал его
@@ -1078,6 +1093,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
         // Чекпоинты правок для отката (CC6.1).
         checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
+        hooks,
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -1148,6 +1164,23 @@ function policyFor(sessionId, projectDir = '') {
       return mergeRules(settings.permissions, session?.permissionRules);
     },
   };
+}
+
+/**
+ * Хуки прогона (ADR 0035): глобальные и проекта (только доверенная папка).
+ * Каждое срабатывание пишется в журнал решений и показывается в окне.
+ */
+function hookRunnerFor(window, { projectDir, sessionId, trusted }) {
+  const settings = loadSettings();
+  return createHookRunner({
+    hooks: collectHooks({ settingsHooks: settings.hooks, projectDir, trusted }),
+    projectDir,
+    sessionId,
+    onRun: (record) => {
+      audit({ at: new Date().toISOString(), tool: `hook:${record.event}`, source: record.source, cls: 'hook', subject: record.command.slice(0, 300), decision: record.decision || (record.code === 0 ? 'ok' : 'error'), code: record.code, ms: record.ms, error: record.error });
+      send(window, { type: 'hook', ...record });
+    },
+  });
 }
 
 /**
@@ -1287,6 +1320,20 @@ ipcMain.handle('checkpoints:rewind', (event, payload = {}) => {
   } finally {
     lock.release();
   }
+});
+
+/** Хуки для `/hooks`: события, matcher, команда, источник (CC3.3). */
+ipcMain.handle('hooks:list', (_e, projectDir) => {
+  const dir = projectDir || loadSettings().projectDir;
+  const trusted = isTrusted(dir);
+  const config = collectHooks({ settingsHooks: loadSettings().hooks, projectDir: dir, trusted });
+  const rows = [];
+  for (const event of HOOK_EVENTS) {
+    for (const group of config[event] || []) {
+      for (const hook of group.hooks) rows.push({ event, matcher: group.matcher || '*', command: hook.command, timeout: hook.timeout, source: hook.source });
+    }
+  }
+  return { rows, trusted, projectFile: path.join(dir || '', '.mai-code', 'hooks.json') };
 });
 
 /** Ручная компакция (`/compact [что учесть]`, CC5.3). Только когда агент не работает. */

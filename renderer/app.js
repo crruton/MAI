@@ -949,6 +949,14 @@ function messageNode(message, index = -1) {
       ]),
     ]);
   }
+  if (message.role === 'hook') {
+    return el('div', { class: 'msg msg-review' }, [
+      el('div', { class: 'review-card hook-card' }, [
+        el('div', { class: 'review-head', text: `Хук ${message.event || ''} · работа не принята` }),
+        el('div', { class: 'md', html: renderMarkdown(String(message.content || '').replace(/^\[Хук [^\]]+\]\s*/, '')) }),
+      ]),
+    ]);
+  }
   if (message.role === 'review') {
     // Замечание ревизора — не реплика пользователя (ADR 0027, A3.4).
     return el('div', { class: 'msg msg-review' }, [
@@ -1583,6 +1591,11 @@ async function runSlash(text) {
       clear();
       $('#export-chat')?.click();
       return;
+    case 'hook':
+      // Тихо, если хук просто отработал; заметно — если заблокировал или упал.
+      if (event.decision === 'deny' || event.decision === 'block') toast(`Хук ${event.event}: заблокировано`, 'err');
+      else if (event.error) toast(`Хук ${event.event} завершился с ошибкой: ${event.error}`, 'err');
+      break;
     case 'context':
       clear();
       await openContext();
@@ -1595,6 +1608,10 @@ async function runSlash(text) {
       clear();
       openCost();
       return;
+    case 'hooks':
+      clear();
+      await openHooks();
+      return;
     default: {
       const result = await api.commands.expand(state.projectDir, name, args);
       if (!result?.ok) {
@@ -1605,6 +1622,36 @@ async function runSlash(text) {
       await send({ text: result.prompt, display: text });
     }
   }
+}
+
+/* ---------- хуки (ADR 0035) ---------- */
+
+async function openHooks() {
+  const info = await api.chat.hooks(state.projectDir);
+  const rows = info.rows || [];
+  openModal({
+    title: 'Хуки',
+    body: [
+      rows.length
+        ? el(
+            'div',
+            { class: 'help-table' },
+            rows.map((r) =>
+              el('div', { class: 'help-row hook-row' }, [
+                el('code', { text: `${r.event}${r.matcher && r.matcher !== '*' ? ` · ${r.matcher}` : ''}` }),
+                el('span', { class: 'suggest-path', text: r.command }),
+                el('span', { class: 'hint-text', text: `${r.source === 'project' ? 'проект' : 'глобальный'} · ${r.timeout} с` }),
+              ]),
+            ),
+          )
+        : el('p', { text: 'Хуков нет.' }),
+      info.trusted ? null : el('p', { class: 'hint-text', text: 'Папка не доверена: хуки проекта не загружены.' }),
+      el('p', {
+        class: 'hint-text',
+        text: `Хуки проекта — ${info.projectFile}; глобальные — поле hooks в settings.json. Команда получает JSON на stdin; код 2 блокирует действие (причина — stderr), JSON { "decision", "reason", "additionalContext" } на stdout — решение и контекст.`,
+      }),
+    ],
+  });
 }
 
 /* ---------- быстрая запись в память (CC4.3) ---------- */

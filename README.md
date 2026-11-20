@@ -335,6 +335,29 @@ git-хуки: MAI Code подключает MCP сам. Хуки при необ
 Установка и индексация также доступны на доске «Хранилище → Repowise». Подробности и
 ограничения: [docs/REPOWISE.md](docs/REPOWISE.md).
 
+## Хуки
+
+Команда на событие агента (ADR 0035). Пример `.mai-code/hooks.json`: не давать
+агенту трогать `.env.prod` и не принимать работу без тестов.
+
+```json
+{
+  "PreToolUse": [
+    { "matcher": "write_file|edit_file", "hooks": [{ "type": "command", "command": "node .mai-code/hooks/guard.js" }] }
+  ],
+  "Stop": [
+    { "hooks": [{ "type": "command", "command": "npm.cmd test --silent", "timeout": 300 }] }
+  ]
+}
+```
+
+Команда получает JSON на stdin (`tool_name`, `tool_input` и т. д.). Код 2 —
+блокировка, причина берётся из stderr. JSON
+`{ "decision": "deny" | "ask" | "allow", "reason": "...", "additionalContext": "..." }`
+на stdout — решение и контекст. Хук не может разрешить то, что запретили
+guardrails, правила `deny` или режим «План». Хуки проекта загружаются только для
+доверенной папки. `/hooks` показывает, что настроено.
+
 ## Плагин: пример
 
 ```js
