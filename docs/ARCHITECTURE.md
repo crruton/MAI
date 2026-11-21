@@ -173,6 +173,11 @@ ADR 0017). Инструменты сами `approve` не вызывают: ци
 | `dontAsk` | да | запрет | запрет | запрет | запрет |
 | `bypass` | да | да | да | да | да |
 
+Prompt injection (ADR 0053): `toApiMessage` оборачивает результаты
+`isDataTool` в `wrapData`; после такого шага `detectInjection` ставит `taint`
+прогона (`policyCtx.getTaint`), и `runToolCall` превращает `allow` классификатора
+в `ask` с `source: 'injection'` для всех классов, кроме `read`.
+
 Класс `send` (ADR 0048) — MCP-инструмент с глаголом отправки в имени
 (`isSendTool`) или плагин с `kind: 'send'`: спросить во всех режимах, включая
 `bypass`; `dontAsk` и `plan` — запрет; без вопроса — только явное `allow`.
