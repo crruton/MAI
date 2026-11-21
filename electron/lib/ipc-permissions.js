@@ -14,6 +14,8 @@
  * становится только при входе через Keycloak.
  */
 
+import { validateIpc } from './ipc-schemas.js';
+
 const ANY = 'any';
 const ADMIN = 'admin';
 const SELF = 'self';
@@ -266,12 +268,18 @@ export function permissionOf(channel) {
  * @param requireAdmin функция, которая бросает ошибку, если роль не admin
  * @param onUnknown вызывается для канала без записи в матрице
  */
-export function guardIpc(ipcMain, requireAdmin, { onUnknown } = {}) {
+export function guardIpc(ipcMain, requireAdmin, { onUnknown, onInvalid } = {}) {
   const original = ipcMain.handle.bind(ipcMain);
   ipcMain.handle = (channel, handler) => {
     if (!Object.hasOwn(IPC_PERMISSIONS, channel)) onUnknown?.(channel);
     const permission = permissionOf(channel);
-    return original(channel, (...args) => {
+    return original(channel, (event, ...args) => {
+      // Схема данных (Q7, ADR 0060): окно может прислать что угодно — проверяем до обработчика.
+      const invalid = validateIpc(channel, args);
+      if (invalid) {
+        onInvalid?.(channel, invalid);
+        return { ok: false, invalid: true, error: `Неверные данные для ${channel}: ${invalid}` };
+      }
       if (permission === ADMIN) {
         try {
           requireAdmin();
@@ -281,7 +289,7 @@ export function guardIpc(ipcMain, requireAdmin, { onUnknown } = {}) {
           return { ok: false, forbidden: true, error: err?.message || 'Недостаточно прав' };
         }
       }
-      return handler(...args);
+      return handler(event, ...args);
     });
   };
   return ipcMain;

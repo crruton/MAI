@@ -462,6 +462,12 @@ ADR 0038. `electron/lib/settings-levels.js`: `readManaged()` (файл орга�
 решение `evaluate` и уровни найденного правила. Ответ на запрос
 `remember: 'local'` пишет правило в `settings.local.json` (admin, доверенная папка).
 
+## Проверка данных IPC
+
+ADR 0060. `guardIpc` перед матрицей прав вызывает `validateIpc(channel, args)`
+из `ipc-schemas.js`: `checkShape` (размеры, глубина, циклы, опасные ключи) и
+типы по `IPC_SCHEMAS[channel]`. Отказ — `{ ok: false, invalid: true, error }`.
+
 ## Доверие к папке и матрица прав IPC
 
 Доверие (ADR 0028, `electron/lib/trust.js`): `trusted`, `restricted` или
