@@ -650,6 +650,46 @@ async function renderWorkDirs(force = false) {
   bar.hidden = false;
 }
 
+/* ---------- прерванная работа (CW5.2, ADR 0051) ---------- */
+
+const CONTINUE_PROMPT =
+  'Работа прервалась: приложение закрылось, пока ты выполнял задачу. Продолжи с того места, где остановился. ' +
+  'Сначала проверь, что уже сделано: список задач (todo_write), файлы и результаты команд выше, — и не повторяй выполненные шаги.';
+
+function renderRunBanner() {
+  const banner = $('#run-banner');
+  if (!banner) return;
+  if (state.run?.status !== 'interrupted' || state.running) {
+    banner.hidden = true;
+    return;
+  }
+  const done = (state.todos || []).filter((t) => t.status === 'completed').length;
+  const total = (state.todos || []).length;
+  banner.replaceChildren(
+    el('span', { text: `⏸ Работа прервалась${state.run.endedAt ? ` (${new Date(state.run.endedAt).toLocaleString()})` : ''}: приложение закрылось во время ответа агента${total ? `, сделано ${done} из ${total} задач` : ''}.` }),
+    el('button', {
+      class: 'btn primary small run-continue',
+      type: 'button',
+      text: 'Продолжить',
+      onclick: () => {
+        state.run = null;
+        renderRunBanner();
+        send({ text: CONTINUE_PROMPT, display: 'Продолжить прерванную работу' });
+      },
+    }),
+    el('button', {
+      class: 'btn ghost small',
+      type: 'button',
+      text: 'Скрыть',
+      onclick: () => {
+        state.run = null;
+        renderRunBanner();
+      },
+    }),
+  );
+  banner.hidden = false;
+}
+
 /* ---------- «Код / Задача» (CW1.1, ADR 0046) ---------- */
 
 let kindFor = undefined;
@@ -1296,7 +1336,7 @@ function renderSessions() {
       type: 'button',
       onclick: () => loadSession(session.id),
     }, [
-      el('span', { class: 'session-title', text: session.title || 'Без названия' }),
+      el('span', { class: 'session-title', text: `${session.run === 'interrupted' ? '⏸ ' : ''}${session.title || 'Без названия'}`, title: session.run === 'interrupted' ? 'Работа прервалась — откройте чат, чтобы продолжить' : '' }),
       el('span', {
         class: 'session-meta',
         text: `${modelLabel(session.model)} · ${fmtDate(session.updatedAt)}${state.sessionsAll && session.projectDir ? ` · ${shortPath(session.projectDir)}` : ''}`,
@@ -1421,6 +1461,8 @@ async function loadSession(id) {
   state.toolResults = {};
   state.liveOutput = {};
   state.todos = todosFromHistory(state.messages);
+  state.run = session.run || null;
+  renderRunBanner();
   renderTodos();
   refreshContext();
   await refreshCheckpoints();
@@ -1451,6 +1493,8 @@ function newChat() {
   state.toolResults = {};
   state.liveOutput = {};
   state.todos = [];
+  state.run = null;
+  renderRunBanner();
   renderTodos();
   state.context = null;
   renderContextMeter();
@@ -2870,6 +2914,7 @@ function renderTodos() {
     return;
   }
   const done = todos.filter((t) => t.status === 'completed').length;
+  const current = todos.find((t) => t.status === 'in_progress');
   const icon = { pending: '☐', in_progress: '◐', completed: '☑' };
   box.replaceChildren(
     el(
@@ -2882,7 +2927,12 @@ function renderTodos() {
           renderTodos();
         },
       },
-      [el('span', { text: `Задачи агента: ${done} из ${todos.length}` }), el('span', { class: 'hint-text', text: state.todosCollapsed ? '▸' : '▾' })],
+      [
+        el('span', { text: `Задачи агента: ${done} из ${todos.length}` }),
+        // Текущий шаг виден и в свёрнутом списке (CW5.3).
+        current ? el('span', { class: 'todos-current hint-text', text: `сейчас: ${current.activeForm || current.content}` }) : null,
+        el('span', { class: 'hint-text', text: state.todosCollapsed ? '▸' : '▾' }),
+      ],
     ),
     state.todosCollapsed
       ? null

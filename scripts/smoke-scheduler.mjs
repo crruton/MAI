@@ -14,6 +14,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { setTrust } from '../electron/lib/trust.js';
 import electronPath from 'electron';
+import { createSessionStore } from '../electron/lib/session-store.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 let pass = 0;
@@ -84,6 +85,10 @@ fs.writeFileSync(
   JSON.stringify({ tasks: [{ id: 'smoke', title: 'Сводка', prompt: 'Сделай сводку', projectDir: project, kind: 'task', model: 'fake/m', enabled: true, schedule: { type: 'interval', everyMinutes: 15 }, createdAt: created }] }),
 );
 
+// Чат, прогон которого «шёл», когда приложение закрыли (CW5.2).
+const stuck = createSessionStore(data).createSession({ title: 'Прерванный', projectDir: project });
+createSessionStore(data).setSessionRun(stuck.id, { status: 'running', startedAt: new Date().toISOString() });
+
 // Из Node пакет electron отдаёт путь к исполняемому файлу — без .cmd и оболочки.
 const child = spawn(electronPath, ['--no-sandbox', `--user-data-dir=${data}`, root], {
   env: { ...process.env, ELECTRON_DISABLE_SANDBOX: '1', MAI_SCHEDULER_DELAY_MS: '2000' },
@@ -113,6 +118,8 @@ check('отметка последнего запуска', tasks[0].lastStatus 
 const sessionFile = fs.readdirSync(path.join(data, 'sessions')).find((f) => f.includes(tasks[0].lastSessionId));
 const session = sessionFile ? JSON.parse(fs.readFileSync(path.join(data, 'sessions', sessionFile), 'utf8')) : null;
 check('чат «⏰ Сводка — …» с ответом', /^⏰ Сводка — /.test(session?.title || '') && session.messages.some((m) => m.role === 'assistant' && /Сводка готова/.test(m.content || '')), session?.title);
+check('прогон, шедший при закрытии, отмечен «прерван»', createSessionStore(data).getSession(stuck.id)?.run?.status === 'interrupted');
+check('завершённый плановый прогон — done', session?.run?.status === 'done', JSON.stringify(session?.run));
 
 try {
   fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });

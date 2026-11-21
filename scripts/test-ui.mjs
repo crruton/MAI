@@ -285,7 +285,7 @@ ipcMain.handle('schedule:runs', (_e, id) => [{ at: '2026-11-21T06:00:00.000Z', t
 const savedSettings = [];
 ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
-  return { projectDir: root, activeModel: 'test-model', permissionMode: 'manual', providers: {}, models: [], ...patch };
+  return { projectDir: root, activeModel: 'test-model', permissionMode: 'manual', providers: { 'test-model': { name: 'Test', apiKeySet: true, models: [] } }, models: [], ...patch };
 });
 ipcMain.handle('auth:status', () => ({ authenticated: false, role: 'admin', mode: 'local' }));
 ipcMain.handle('models:list', () => []);
@@ -310,7 +310,19 @@ ipcMain.handle('chat:start', (_e, payload) => {
   chatStarts.push(payload);
   return { ok: false, error: 'тест: без прогона' };
 });
-ipcMain.handle('sessions:get', (_e, id) => (id === TEST_SESSION.id ? TEST_SESSION : null));
+// Прерванная работа (раздел [36]).
+const INTERRUPTED = {
+  id: 's-int',
+  title: 'Сводка за неделю',
+  model: 'test-model',
+  run: { status: 'interrupted', startedAt: '2026-11-21T08:00:00.000Z', endedAt: '2026-11-21T08:05:00.000Z' },
+  messages: [
+    { role: 'user', content: 'Сделай сводку', display: 'Сделай сводку' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'td1', type: 'function', function: { name: 'todo_write', arguments: JSON.stringify({ todos: [{ content: 'Прочитать', status: 'completed' }, { content: 'Свести', status: 'in_progress' }, { content: 'Сохранить', status: 'pending' }] }) } }] },
+    { role: 'tool', tool_call_id: 'td1', content: 'ok' },
+  ],
+};
+ipcMain.handle('sessions:get', (_e, id) => (id === TEST_SESSION.id ? TEST_SESSION : id === INTERRUPTED.id ? INTERRUPTED : null));
 
 // Экспорт: записываем вызовы, файл не пишем.
 const exportCalls = [];
@@ -1558,6 +1570,25 @@ app.whenReady().then(async () => {
     const added = schedCalls.find((c) => c.type === 'save' && c.title === 'Почта');
     check('новая задача: каждый день в 07:30, вид «Задача»', added?.schedule?.type === 'daily' && added.schedule.time === '07:30' && added.schedule.days.length === 7 && added.kind === 'task' && added.prompt === 'Разбери входящие', JSON.stringify(added));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[36] Прерванная работа: «Продолжить» (ADR 0051)');
+    await win.webContents.executeJavaScript(`loadSession('s-int')`).catch(() => null);
+    await new Promise((r) => setTimeout(r, 500));
+    let banner = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector('#run-banner'); return { hidden: b.hidden, text: b.textContent }; })()`);
+    if (banner.hidden) {
+      // loadSession не в глобальной области — открываем через событие уведомления.
+      win.webContents.send('chat:event', { type: 'scheduled:open', sessionId: 's-int' });
+      await new Promise((r) => setTimeout(r, 500));
+      banner = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector('#run-banner'); return { hidden: b.hidden, text: b.textContent }; })()`);
+    }
+    check('плашка «Работа прервалась» с прогрессом задач', banner.hidden === false && /Работа прервалась/.test(banner.text) && /сделано 1 из 3 задач/.test(banner.text), JSON.stringify(banner));
+    const startsBefore = chatStarts.length;
+    await win.webContents.executeJavaScript(`document.querySelector('.run-continue').click()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const cont = chatStarts.slice(startsBefore)[0];
+    check('«Продолжить» отправляет агенту просьбу продолжить без повторов', cont && /Продолжи с того места/.test(cont.text) && /не повторяй выполненные шаги/.test(cont.text) && cont.displayText === 'Продолжить прерванную работу' && cont.sessionId === 's-int', JSON.stringify(cont));
+    check('текущий шаг в заголовке задач', /сейчас: Свести/.test(await win.webContents.executeJavaScript(`document.querySelector('.todos-head')?.textContent || ''`)));
+    check('плашка скрыта после продолжения', await win.webContents.executeJavaScript(`document.querySelector('#run-banner').hidden`));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

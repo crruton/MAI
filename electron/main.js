@@ -10,7 +10,7 @@ import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
-import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, addSessionRules, removeSessionRules } from './lib/sessions.js';
+import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, setSessionRun, markInterrupted, addSessionRules, removeSessionRules } from './lib/sessions.js';
 import { runAgent, compactSession, describeContext } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
@@ -384,6 +384,13 @@ app.whenReady().then(async () => {
   const settings = loadSettings();
   emitLog('MAI Code запущен', { attributes: { platform: process.platform, version: app.getVersion() } });
   mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
+  // Прогоны, прерванные закрытием приложения (CW5.2), — отметить, чтобы их можно было продолжить.
+  try {
+    const interrupted = markInterrupted();
+    if (interrupted.length) emitLog(`Прерванных прогонов: ${interrupted.length}`);
+  } catch (err) {
+    console.error('[sessions] не удалось отметить прерванные прогоны:', err?.message || err);
+  }
   startScheduler();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -1205,6 +1212,9 @@ ipcMain.handle('chat:start', async (event, payload) => {
     }
   }
   saveSession(session);
+  // Прогон идёт (CW5.2): если приложение закроют посреди работы, чат это покажет.
+  setSessionRun(session.id, { status: 'running', startedAt: new Date().toISOString() });
+  let runStatus = 'done';
 
   const controller = new AbortController();
   state.controller = controller;
@@ -1265,6 +1275,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
       send(window, { type: 'saved', sessionId: session.id, title: session.title, plugins: loaded });
     } catch (err) {
       const aborted = controller.signal.aborted;
+      runStatus = aborted ? 'stopped' : 'error';
       const message = aborted ? 'Остановлено пользователем' : err?.message || String(err);
       if (!aborted) logError({ source: 'agent', model, message, cause: err?.cause?.message || '' });
       send(window, {
@@ -1281,6 +1292,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
       // Не взятые агентом сообщения возвращаем в поле ввода, чтобы они не пропали.
       const leftover = state.queue.splice(0);
       if (leftover.length) send(window, { type: 'queued:returned', items: leftover });
+      setSessionRun(session.id, { status: runStatus, endedAt: new Date().toISOString() });
       lock.release();
     }
   })();
@@ -1332,6 +1344,7 @@ async function runScheduled(task, { reason = 'schedule' } = {}) {
   session.messages.push({ role: 'user', content: task.prompt, display: task.prompt });
   session.scheduledTaskId = task.id;
   saveSession(session);
+  setSessionRun(session.id, { status: 'running', startedAt: new Date().toISOString(), scheduled: true });
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30 * 60_000);
   try {
@@ -1370,9 +1383,11 @@ async function runScheduled(task, { reason = 'schedule' } = {}) {
     if (controller.signal.aborted) throw new Error('превышено время выполнения (30 мин)');
     const answer = [...history].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
     notifyScheduled(task, answer.slice(0, 200) || 'готово', session.id);
+    setSessionRun(session.id, { status: 'done', endedAt: new Date().toISOString(), scheduled: true });
     return finish('ok', { sessionId: session.id, summary: answer.slice(0, 500) });
   } catch (err) {
     saveSession(session);
+    setSessionRun(session.id, { status: 'error', endedAt: new Date().toISOString(), scheduled: true });
     notifyScheduled(task, `Ошибка: ${err?.message || err}`, session.id);
     return finish('error', { sessionId: session.id, error: err?.message || String(err) });
   } finally {

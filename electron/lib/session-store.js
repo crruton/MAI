@@ -19,7 +19,7 @@ import crypto from 'node:crypto';
  * addSessionRules). Прогон агента держит копию сессии со старыми значениями,
  * и без этого финальный saveSession откатил бы режим, выбранный посреди прогона.
  */
-const OWNED_FIELDS = ['permissionMode', 'permissionRules', 'extraDirs', 'kind'];
+const OWNED_FIELDS = ['permissionMode', 'permissionRules', 'extraDirs', 'kind', 'run'];
 
 function writeJson(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -50,6 +50,8 @@ function metaOf(session) {
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     count: Array.isArray(session.messages) ? session.messages.filter((m) => m.role === 'user').length : 0,
+    // Состояние прогона (CW5.2): running | done | error | stopped | interrupted.
+    run: session.run?.status || '',
   };
 }
 
@@ -156,6 +158,30 @@ export function createSessionStore(root) {
       session.permissionMode = mode || '';
       session.updatedAt = new Date().toISOString();
       return write(session);
+    },
+
+    /** Состояние прогона чата (CW5.2, ADR 0051). */
+    setSessionRun(id, run) {
+      const session = getSession(id);
+      if (!session) return null;
+      session.run = run ? { ...run } : null;
+      return write(session);
+    },
+
+    /**
+     * После запуска приложения: прогоны со статусом running не могли пережить
+     * закрытие — помечаются interrupted. Возвращает их id.
+     */
+    markInterrupted() {
+      const ids = readIndex().filter((m) => m.run === 'running').map((m) => m.id);
+      for (const id of ids) {
+        const session = getSession(id);
+        if (session?.run?.status === 'running') {
+          session.run = { ...session.run, status: 'interrupted', endedAt: new Date().toISOString() };
+          write(session);
+        }
+      }
+      return ids;
     },
 
     /** Вид чата: code | task (CW1.1, ADR 0046). */

@@ -66,3 +66,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0048](0048-otpravka-cherez-konnektory.md) | Отправка через коннекторы | accepted | 2026-11-21 |
 | [0049](0049-dokumenty-docx-xlsx.md) | Документы: создание и чтение DOCX и XLSX | accepted | 2026-11-21 |
 | [0050](0050-planovye-zadachi.md) | Плановые задачи | accepted | 2026-11-21 |
+| [0051](0051-dlinnye-zadachi.md) | Длинные задачи и прогресс | accepted | 2026-11-21 |

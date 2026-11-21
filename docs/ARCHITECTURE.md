@@ -306,6 +306,14 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
 
+### Длинные задачи
+
+ADR 0051. `session.run` (`setSessionRun`, защищённое поле, в индексе — `run`):
+`running` в `chat:start` и `runScheduled`, итог в `finally`. При старте
+`markInterrupted()` переводит `running` → `interrupted`. Окно: `renderRunBanner`
+(«Продолжить» — `send({ text: CONTINUE_PROMPT })`), «⏸» в списке чатов, текущий
+шаг в `renderTodos`.
+
 ### Плановые задачи
 
 ADR 0050. `electron/lib/scheduler.js`: `normalizeSchedule`, `nextRunAt`,
