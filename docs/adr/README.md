@@ -58,3 +58,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0040](0040-pesochnica-dlya-komand.md) | Песочница для команд агента | accepted | 2026-11-20 |
 | [0041](0041-oauth-dlya-mcp.md) | OAuth для удалённых MCP-серверов | accepted | 2026-11-20 |
 | [0042](0042-marketpleys-paketov.md) | Маркетплейс пакетов | accepted | 2026-11-21 |
+| [0043](0043-navyki-fajly-i-razresheniya.md) | Навыки: файлы и allowed-tools | accepted | 2026-11-21 |

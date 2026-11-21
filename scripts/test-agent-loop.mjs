@@ -768,6 +768,60 @@ console.log('\n[18] Навыки пакета в промпте и в load_skill
   check('load_skill находит навык пакета', /ТЕЛО-НАВЫКА-ПАКЕТА/.test(history.find((m) => m.role === 'tool')?.content || ''));
 }
 
+console.log('\n[19] Навык: файлы и allowed-tools (CC10.4)');
+{
+  const dir = path.join(project, 'skill-pkg');
+  const skill = path.join(dir, 'deploy');
+  fs.mkdirSync(path.join(skill, 'scripts'), { recursive: true });
+  fs.writeFileSync(
+    path.join(skill, 'SKILL.md'),
+    '---\nname: deploy\ndescription: выкладка\nallowed-tools: run_shell(echo skill-ok*), run_shell, write_file(*)\n---\nСначала прочитай reference.md',
+    'utf8',
+  );
+  fs.writeFileSync(path.join(skill, 'reference.md'), 'СПРАВКА-НАВЫКА', 'utf8');
+  fs.writeFileSync(path.join(skill, 'scripts', 'run.sh'), 'echo run', 'utf8');
+  fs.writeFileSync(path.join(dir, 'secret.txt'), 'СЕКРЕТ', 'utf8');
+  const approvals = [];
+  const events = [];
+  const auditLog = [];
+  const history = await runAgent(
+    base({
+      settings: { maxIterations: 8, permissions: {} },
+      messages: [{ role: 'user', content: 'x' }],
+      mcp: fakeMcp(),
+      skillDirs: [{ source: 'package:kit', dir }],
+      emit: (e) => events.push(e),
+      audit: (r) => auditLog.push(r),
+      approve: async (req) => {
+        approvals.push(req.summary);
+        return { allow: false };
+      },
+      clientFactory: fakeClient(
+        [
+          { calls: [{ name: 'run_shell', args: { command: 'echo skill-ok before' } }] },
+          { calls: [{ name: 'load_skill', args: { name: 'deploy' } }] },
+          { calls: [{ name: 'load_skill', args: { name: 'deploy', file: 'reference.md' } }, { name: 'load_skill', args: { name: 'deploy', file: '../secret.txt' } }] },
+          { calls: [{ name: 'run_shell', args: { command: 'echo skill-ok after' } }] },
+          { calls: [{ name: 'run_shell', args: { command: 'echo other' } }] },
+          { text: 'ок' },
+        ],
+        [],
+      ),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const tools = history.filter((m) => m.role === 'tool').map((m) => m.content);
+  check('до загрузки навыка команда спрашивается', approvals[0] === 'echo skill-ok before', JSON.stringify(approvals));
+  check('load_skill: тело и список файлов', /Сначала прочитай/.test(tools[1]) && /- reference\.md/.test(tools[1]) && /- scripts\/run\.sh/.test(tools[1]), tools[1]);
+  check('выдано только узкое правило', /Разрешено навыком на этот прогон: run_shell\(echo skill-ok\*\)/.test(tools[1]) && /Не выданы \(слишком широкие\): run_shell, write_file\(\*\)/.test(tools[1]), tools[1]);
+  check('файл навыка читается', /СПРАВКА-НАВЫКА/.test(tools[2]), tools[2]);
+  check('выход из папки навыка — отказ', /вне папки навыка/.test(tools[3]) && !/СЕКРЕТ/.test(tools[3]), tools[3]);
+  check('после загрузки команда по правилу — без вопроса', /skill-ok after/.test(tools[4]) && !approvals.includes('echo skill-ok after'), JSON.stringify(approvals));
+  check('другая команда — по-прежнему с вопросом', approvals.includes('echo other'), JSON.stringify(approvals));
+  check('пользователь видит выданное разрешение', events.some((e) => e.type === 'notice' && /Навык «deploy» разрешил/.test(e.text)));
+  check('выдача записана в журнал', auditLog.some((r) => r.decision === 'grant' && r.subject === 'deploy'));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

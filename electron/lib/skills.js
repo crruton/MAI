@@ -39,6 +39,11 @@ export function listSkills(projectDir, { includeProject = true, extraDirs = [] }
       skills.push({
         name: meta.name || entry.name,
         description: meta.description || '',
+        // allowed-tools (CC10.4): правила allow на время прогона после загрузки навыка.
+        allowedTools: String(meta['allowed-tools'] || meta.allowedTools || '')
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean),
         body,
         file,
         scope,
@@ -47,6 +52,41 @@ export function listSkills(projectDir, { includeProject = true, extraDirs = [] }
     }
   }
   return skills;
+}
+
+/** Файлы навыка кроме SKILL.md — третий уровень загрузки (CC10.4). Пути относительно папки навыка. */
+export function skillFiles(skill, { limit = 200 } = {}) {
+  const root = path.dirname(skill.file);
+  const out = [];
+  const walk = (dir) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (out.length >= limit) return;
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && full !== skill.file) out.push(path.relative(root, full).split(path.sep).join('/'));
+    }
+  };
+  walk(root);
+  return out.sort();
+}
+
+/** Читает файл навыка; путь не выходит из папки навыка. */
+export function readSkillFile(skill, relative, { maxBytes = 100_000 } = {}) {
+  const root = path.dirname(skill.file);
+  const full = path.resolve(root, String(relative || ''));
+  const rel = path.relative(root, full);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('Файл вне папки навыка');
+  const stat = fs.statSync(full);
+  if (!stat.isFile()) throw new Error('Это не файл');
+  const text = fs.readFileSync(full, 'utf8');
+  return stat.size > maxBytes ? `${text.slice(0, maxBytes)}\n… обрезано (${stat.size} байт)` : text;
 }
 
 /**

@@ -294,6 +294,15 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
 
+### Навыки
+
+ADR 0043. `listSkills` читает `allowed-tools`; `skillFiles(skill)` и
+`readSkillFile(skill, rel)` (без выхода из папки) — в `skills.js`.
+`load_skill({ name, file? })` (`tools/skills.js`) возвращает тело и список файлов
+или файл; `grantableRules` отбрасывает широкие правила, `ctx.grantRules(rules, skill)`
+(только встроенным инструментам) кладёт их в `skillGrants` прогона, которые
+`policyCtx.getRules` в `runAgent` сливает с обычными правилами.
+
 ### Маркетплейс пакетов
 
 ADR 0042. `electron/lib/marketplace.js`: `normalizeMarketplace`,

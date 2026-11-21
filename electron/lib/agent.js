@@ -278,11 +278,13 @@ export async function runAgent({
   // Режим и правила читаются на каждый вызов: переключение в интерфейсе
   // действует сразу, в том числе на список инструментов следующей итерации.
   const role = policy?.role || 'admin';
+  const skillGrants = [];
   const currentMode = () => effectiveMode(policy?.getMode ? policy.getMode() : permissionMode || settings.permissionMode, role);
   const policyCtx = {
     role,
     getMode: currentMode,
-    getRules: () => (policy?.getRules ? policy.getRules() : mergeRules(settings.permissions)),
+    // Правила навыков (allowed-tools, CC10.4) — только на этот прогон, поверх обычных.
+    getRules: () => mergeRules(policy?.getRules ? policy.getRules() : mergeRules(settings.permissions), { allow: skillGrants }),
   };
 
   const builtin = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
@@ -665,6 +667,13 @@ export async function runAgent({
             signal,
             progress: (text) => emit({ type: 'tool_progress', id: call.id, text: String(text).slice(0, 8000) }),
             todos: (todos) => emit({ type: 'todos', todos }),
+            grantRules: (rules, skill) => {
+              const fresh = rules.filter((r) => !skillGrants.includes(r));
+              if (!fresh.length) return;
+              skillGrants.push(...fresh);
+              emit({ type: 'notice', level: 'info', text: `Навык «${skill}» разрешил на этот прогон: ${fresh.join(', ')}` });
+              audit?.({ at: new Date().toISOString(), tool: 'load_skill', source: 'skill', cls: 'read', subject: skill, decision: 'grant', rules: fresh });
+            },
             // Чекпоинт правки — к последнему сообщению пользователя (CC6.1).
             beforeWrite: (file) => {
               try {

@@ -196,6 +196,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
         signal: builtin ? ctx.signal : undefined,
         todos: builtin ? ctx.todos : undefined,
         beforeWrite: builtin ? ctx.beforeWrite : undefined,
+        grantRules: builtin ? ctx.grantRules : undefined,
       },
       args,
     );
