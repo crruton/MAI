@@ -13,6 +13,7 @@ import crypto from 'node:crypto';
  */
 import { classifyTool, evaluate, subjectOf, summarize, suggestRules } from './policy.js';
 import { effectiveCommand } from './tools/shell.js';
+import { pushViolation, currentBranch, DEFAULT_PROTECTED } from './git-guard.js';
 import { unifiedDiff } from './diff.js';
 
 const ARGS_PREVIEW = 2000;
@@ -164,6 +165,11 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
     guardrails: ctx.guardrails,
     role: policy.role || 'admin',
   });
+  // Защита веток (CC11.6): пуш в main/master запрещён в любом режиме, как guardrails.
+  if (entry.cls === 'exec' && decision.action !== 'deny') {
+    const why = pushViolation(command ?? subject, { protectedBranches: ctx.protectedBranches ?? DEFAULT_PROTECTED, branchOf: () => currentBranch(ctx.projectDir) });
+    if (why) decision = { ...decision, action: 'deny', source: 'protected-branch', reason: `Запрещено: ${why}. Защищённые ветки — «Настройки» → «Защищённые ветки».` };
+  }
   // В прочитанном нашлись внушённые указания (CC2.10): «Авто» больше не решает молча.
   const taint = policy.getTaint ? policy.getTaint() : null;
   if (taint && decision.action === 'allow' && decision.source === 'classifier' && entry.cls !== 'read') {

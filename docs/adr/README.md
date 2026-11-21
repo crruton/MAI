@@ -74,3 +74,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0056](0056-web-fetch-web-search.md) | web_fetch и web_search | accepted | 2026-11-21 |
 | [0057](0057-povtory-i-zapasnaya-model.md) | Повторы и запасная модель | accepted | 2026-11-21 |
 | [0058](0058-vozmozhnosti-modeli.md) | Возможности модели и глубина рассуждений | accepted | 2026-11-21 |
+| [0059](0059-git-potok.md) | Git-поток: защита веток, /commit, /review | accepted | 2026-11-21 |

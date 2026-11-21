@@ -344,6 +344,15 @@ ADR 0054. `tools/fs.js`: `glob` (`globToRegExp`), `edit_file` через
 `spillOutput` в `tool-runner.js` (`MAX_TOOL_OUTPUT`, папка `ctx.outputDir`,
 подключена в `roots` как `@вывод`).
 
+### Git-поток
+
+ADR 0059. `pushViolation(command, { protectedBranches, branchOf })` в
+`git-guard.js`; `runToolCall` превращает решение в `deny` (`source:
+'protected-branch'`) для класса `exec`. `ctx.protectedBranches` — из
+`settings.protectedBranches` (по умолчанию `DEFAULT_PROTECTED`). `/commit` и
+`/review` — шаблоны `commitPrompt`/`reviewPrompt` в renderer; `overridable` в
+`BUILTIN_COMMANDS` уступает своей команде с тем же именем.
+
 ### Возможности модели
 
 ADR 0058. `modelCapabilities(model, provider)` в `capabilities.js` — флаги

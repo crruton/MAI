@@ -1745,6 +1745,42 @@ const INIT_PROMPT = [
   'Если AGENTS.md уже есть — сохрани действующие правила и дополни.',
 ].join(' ');
 
+/* ---------- git: /commit и /review (CC11.1, CC11.3, ADR 0059) ---------- */
+
+/** Коммит по просьбе: агент смотрит изменения, пишет сообщение, коммитит после подтверждения команды. */
+function commitPrompt(args = '') {
+  const attribution = String(state.settings?.gitAttribution || '').trim();
+  return [
+    'Сделай коммит текущих изменений.',
+    '1. Посмотри `git status` и `git diff` (и `git diff --staged`), `git log -5 --oneline` — чтобы следовать стилю сообщений проекта.',
+    '2. Не добавляй в коммит файлы с секретами (.env, ключи, токены) и случайный мусор (сборки, логи) — если такие есть, скажи о них.',
+    '3. Составь сообщение: короткая первая строка о сути изменения, затем, если нужно, — почему. Покажи его мне в ответе.',
+    attribution ? `4. В конце сообщения добавь строки подписи (каждая — отдельной строкой):\n${attribution}` : '4. Подпись агента в сообщение не добавляй.',
+    '5. Выполни `git add` нужных файлов и `git commit` одной командой run_shell (сообщение — через -m или файл); я подтвержу команду.',
+    'Не делай `git push`, не меняй историю (amend, rebase, reset) и не трогай ветки, если я не прошу.',
+    args ? `Уточнение от меня: ${args}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** Ревью: текущий diff или PR. Только чтение — находки со ссылками на строки. */
+function reviewPrompt(args = '') {
+  const pr = /^\s*#?(\d+)\s*$/.exec(args)?.[1];
+  const target = pr
+    ? `pull request #${pr}: получи его изменения командой \`gh pr diff ${pr}\` (если gh нет — \`git fetch origin pull/${pr}/head\` и diff с основной веткой)`
+    : args
+      ? `изменения: ${args}`
+      : 'текущие изменения: `git diff HEAD` и новые файлы из `git status`';
+  return [
+    `Сделай ревью кода — ${target}.`,
+    'Только читай: файлы не меняй и ничего не коммить. Чтобы понять контекст, открывай соседний код (read_file, grep).',
+    'Ищи по существу: ошибки логики, падения на краевых случаях, гонки, утечки ресурсов, уязвимости (инъекции, секреты, права), нарушения правил проекта из AGENTS.md, отсутствие тестов для нового поведения.',
+    'Ответ — список находок по убыванию важности: **важно / стоит поправить / мелочь**, `файл:строка`, что не так, чем грозит (конкретный сценарий) и как исправить.',
+    'Не выдумывай проблем ради списка: если серьёзного нет — так и скажи. В конце — одна строка общего вывода.',
+  ].join('\n');
+}
+
 async function loadCommands() {
   try {
     state.commands = await api.commands.list(state.projectDir);
@@ -1784,7 +1820,9 @@ async function runSlash(text) {
     input.value = '';
     autosize();
   };
-  switch (name) {
+  // Своя команда с именем commit/review сильнее встроенной (ADR 0059).
+  const overridden = ['commit', 'review'].includes(name) && (state.commands || []).some((c) => c.name.toLowerCase() === name && c.source !== 'builtin');
+  switch (overridden ? '' : name) {
     case 'help':
       clear();
       await loadCommands();
@@ -1827,6 +1865,14 @@ async function runSlash(text) {
     case 'init':
       clear();
       await send({ text: INIT_PROMPT, display: '/init' });
+      return;
+    case 'commit':
+      clear();
+      await send({ text: commitPrompt(args), display: `/commit${args ? ` ${args}` : ''}` });
+      return;
+    case 'review':
+      clear();
+      await send({ text: reviewPrompt(args), display: `/review${args ? ` ${args}` : ''}` });
       return;
     case 'memory':
       clear();
@@ -3446,6 +3492,10 @@ async function openSettings() {
   const temperature = el('input', { type: 'number', step: '0.1', min: '0', max: '2', value: settings.temperature });
   const maxIterations = el('input', { type: 'number', min: '1', max: '100', value: settings.maxIterations });
   // Запасная модель (ADR 0057): на неё агент переходит, если основная недоступна.
+  // Git (ADR 0059): защищённые ветки и подпись коммитов.
+  const protectedBranches = el('input', { class: 'protected-branches', placeholder: 'main, master (пусто — без защиты)', value: (settings.protectedBranches ?? ['main', 'master']).join(', ') });
+  const gitAttribution = el('textarea', { class: 'git-attribution', rows: '2', placeholder: 'Подпись в коммитах агента, например: Co-Authored-By: MAI Code <ai@example.com>' });
+  gitAttribution.value = settings.gitAttribution || '';
   const fallbackModel = el('input', { class: 'fallback-model', placeholder: 'провайдер/модель, например openai/gpt-5-mini', value: settings.fallbackModel || '' });
   const outside = el('input', { type: 'checkbox' });
   outside.checked = Boolean(settings.allowOutsideProject);
@@ -3577,6 +3627,8 @@ async function openSettings() {
         field('Температура', temperature),
         field('Максимум шагов агента', maxIterations),
         field('Запасная модель', fallbackModel),
+        field('Защищённые ветки (пуш запрещён)', protectedBranches),
+        field('Подпись в коммитах (/commit)', gitAttribution),
       ]),
       el('label', { class: 'field' }, [
         el('span', { text: 'Доступ к файлам вне проекта' }),
@@ -3676,6 +3728,8 @@ async function openSettings() {
             temperature: Number(temperature.value),
             maxIterations: Number(maxIterations.value),
             fallbackModel: fallbackModel.value.trim(),
+            protectedBranches: protectedBranches.value.split(',').map((b) => b.trim()).filter(Boolean),
+            gitAttribution: gitAttribution.value.trim(),
             allowOutsideProject: outside.checked,
             reviewer: {
               enabled: reviewerEnabled.checked,

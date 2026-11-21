@@ -27,6 +27,9 @@ export const BUILTIN_COMMANDS = [
   { name: 'hooks', description: 'Хуки на события агента' },
   { name: 'permissions', description: 'Правила разрешений по уровням и проверка вызова' },
   { name: 'trash', description: 'Корзина: удалённые агентом файлы, восстановление' },
+  // overridable: своя команда проекта или пакета с тем же именем сильнее встроенной.
+  { name: 'commit', description: 'Закоммитить изменения: агент пишет сообщение, вы подтверждаете', argumentHint: '[уточнение]', overridable: true },
+  { name: 'review', description: 'Ревью текущих изменений или PR', argumentHint: '[номер PR]', overridable: true },
   { name: 'connectors', description: 'Каталог коннекторов: Linear, Notion, GitHub и другие в два клика' },
   { name: 'schedule', description: 'Плановые задачи: по расписанию, без вопросов, только по правилам' },
   { name: 'agents', description: 'Типы субагентов' },
@@ -70,7 +73,7 @@ export function listCustomCommands(projectDir, dataDir, options = {}) {
       if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
       const name = entry.name.slice(0, -3);
       if (!NAME_RE.test(name) || seen.has(name.toLowerCase())) continue;
-      if (BUILTIN_COMMANDS.some((c) => c.name === name.toLowerCase())) continue; // встроенные не переопределяются
+      if (BUILTIN_COMMANDS.some((c) => c.name === name.toLowerCase() && !c.overridable)) continue; // встроенные не переопределяются (кроме overridable)
       const file = path.join(dir, entry.name);
       try {
         const { meta, body } = parseFrontmatter(fs.readFileSync(file, 'utf8'));

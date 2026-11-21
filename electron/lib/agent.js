@@ -760,6 +760,8 @@ export async function runAgent({
       repowise: settings.repowise,
       shellSandbox: settings.shellSandbox,
       trashDir: settings.trashDir,
+      // Защищённые ветки (CC11.6): по умолчанию main и master.
+      protectedBranches: Array.isArray(settings.protectedBranches) ? settings.protectedBranches : undefined,
       // Поиск: провайдер и ключ из настроек (ADR 0056).
       webConfig: settings.webSearch || {},
       dockerAvailable: settings.dockerAvailable,

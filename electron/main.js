@@ -488,7 +488,7 @@ ipcMain.handle('ocr:recognize', async (_e, payload) => {
 
 ipcMain.handle('settings:save', async (_e, patch) => {
   // Настройки, которые расширяют права агента или меняют изоляцию, — только admin.
-  if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth || patch.guardrails || patch.telemetry || patch.marketplaces || patch.webSearch) {
+  if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth || patch.guardrails || patch.telemetry || patch.marketplaces || patch.webSearch || 'protectedBranches' in (patch || {})) {
     requireAdmin();
   }
   const current = loadSettings();
@@ -859,7 +859,10 @@ ipcMain.handle('commands:list', (_e, projectDir) => {
   const skills = listSkills(dir, { includeProject: trusted, extraDirs: packageDirs(packagesFor(dir), 'skills') })
     .filter((skill) => /^[a-z0-9][a-z0-9_-]*$/i.test(skill.name) && !taken.has(skill.name.toLowerCase()))
     .map((skill) => ({ name: skill.name, description: skill.description || 'навык', argumentHint: '<задача>', source: 'skill' }));
-  return [...BUILTIN_COMMANDS.map((c) => ({ ...c, source: 'builtin' })), ...custom, ...skills];
+  const customNames = new Set(custom.map((c) => c.name.toLowerCase()));
+  // /commit и /review можно заменить своей командой (ADR 0059).
+  const builtins = BUILTIN_COMMANDS.filter((c) => !(c.overridable && customNames.has(c.name)));
+  return [...builtins.map((c) => ({ ...c, source: 'builtin' })), ...custom, ...skills];
 });
 
 /** Своя команда или навык → текст запроса агенту. */

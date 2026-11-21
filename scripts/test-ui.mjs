@@ -1638,6 +1638,19 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('#effort-select'); s.value = 'high'; s.dispatchEvent(new Event('change')); const i = document.querySelector('#input'); i.value = 'подумай глубоко'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
     await new Promise((r) => setTimeout(r, 500));
     check('глубина уходит с запросом', chatStarts.at(-1)?.effort === 'high', JSON.stringify(chatStarts.at(-1)));
+
+    console.log('\n[39] /commit и /review (ADR 0059)');
+    const slash = async (text) => {
+      await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+      await new Promise((r) => setTimeout(r, 400));
+      return chatStarts.at(-1);
+    };
+    const commit = await slash('/commit только тесты');
+    check('/commit: смотреть diff, без push и секретов, подтверждение', /git diff/.test(commit?.text) && /Не делай `git push`/.test(commit?.text) && /секретами/.test(commit?.text) && /только тесты/.test(commit?.text) && commit?.displayText === '/commit только тесты', JSON.stringify(commit)?.slice(0, 300));
+    const review = await slash('/review 42');
+    check('/review 42: gh pr diff 42, только чтение, файл:строка', /gh pr diff 42/.test(review?.text) && /файлы не меняй/.test(review?.text) && /`файл:строка`/.test(review?.text));
+    const local = await slash('/review');
+    check('/review без номера — git diff HEAD', /git diff HEAD/.test(local?.text));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);
