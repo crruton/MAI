@@ -65,6 +65,7 @@ export const shellTools = [
           properties: {
             command: { type: 'string', description: 'Команда целиком' },
             cwd: { type: 'string', description: 'Рабочая папка относительно проекта' },
+            background: { type: 'boolean', description: 'Запустить в фоне (сервер, долгая сборка) и сразу вернуть id; вывод — shell_output, остановка — shell_kill' },
           },
           required: ['command'],
         },
@@ -100,6 +101,8 @@ export const shellTools = [
                 }),
             }
           : null;
+      // Фоновая команда (CC1.4): сервер, долгая сборка — результат через shell_output.
+      if (args.background) return startBackground(command, cwd, { container, projectDir: ctx.projectDir || '' });
       return await execute(command, cwd, { onData: ctx.progress, signal: ctx.signal, container });
     },
   },
@@ -123,6 +126,138 @@ function killTree(child) {
   }
 }
 
+/** Запуск процесса: на хосте — оболочка, в песочнице — `docker run`. kill() останавливает вместе с потомками. */
+function spawnCommand(command, cwd, container) {
+  // В контейнере — `docker run` без оболочки хоста; остановка — `docker kill`.
+  const child = container
+    ? spawn('docker', container.build(container.name), { cwd, windowsHide: true, env: { ...process.env, FORCE_COLOR: '0' } })
+    : spawn(withUtf8Console(command), {
+        cwd,
+        shell: true,
+        windowsHide: true,
+        detached: process.platform !== 'win32',
+        env: { ...process.env, FORCE_COLOR: '0' },
+      });
+  if (container) child.stdin?.end();
+  const kill = () => {
+    if (container) {
+      try {
+        spawn('docker', ['kill', container.name], { windowsHide: true }).on('error', () => {});
+      } catch {
+        /* контейнер уже завершён */
+      }
+    }
+    killTree(child);
+  };
+  return { child, kill };
+}
+
+/* ---------- фоновые команды (CC1.4, ADR 0055) ---------- */
+
+export const MAX_BACKGROUND = 5;
+const BG_BUFFER = 1_000_000;
+const background = new Map(); // id → { command, cwd, child, kill, out, read, code, started, ended, projectDir }
+let bgCounter = 0;
+
+function startBackground(command, cwd, { container = null, projectDir = '' } = {}) {
+  const running = [...background.values()].filter((b) => b.code === null);
+  if (running.length >= MAX_BACKGROUND) {
+    return `Уже запущено ${running.length} фоновых команд — остановите лишние shell_kill: ${running.map((b) => b.id).join(', ')}`;
+  }
+  bgCounter += 1;
+  const id = `bg${bgCounter}`;
+  const decode = createOutputDecoder();
+  const { child, kill } = spawnCommand(command, cwd, container);
+  const entry = { id, command, cwd, child, kill, out: '', read: 0, dropped: 0, code: null, started: Date.now(), ended: null, projectDir };
+  const push = (d) => {
+    entry.out += decode(d);
+    // Кольцевой буфер: старое выбрасываем, номер позиции чтения сдвигаем.
+    if (entry.out.length > BG_BUFFER) {
+      const cut = entry.out.length - BG_BUFFER;
+      entry.out = entry.out.slice(cut);
+      entry.dropped += cut;
+      entry.read = Math.max(0, entry.read - cut);
+    }
+  };
+  child.stdout?.on('data', push);
+  child.stderr?.on('data', push);
+  child.on('close', (code) => {
+    entry.code = code ?? -1;
+    entry.ended = Date.now();
+  });
+  child.on('error', (err) => {
+    entry.out += `\nОшибка запуска: ${err.message}`;
+    entry.code = -1;
+    entry.ended = Date.now();
+  });
+  background.set(id, entry);
+  return `Запущено в фоне: ${id}\n$ ${command}\nВывод — shell_output("${id}"), остановить — shell_kill("${id}").`;
+}
+
+function status(entry) {
+  const seconds = Math.round(((entry.ended || Date.now()) - entry.started) / 1000);
+  return entry.code === null ? `работает ${seconds} с` : `завершена с кодом ${entry.code} через ${seconds} с`;
+}
+
+export function listBackground() {
+  return [...background.values()].map((b) => ({ id: b.id, command: b.command, running: b.code === null, code: b.code, started: b.started, projectDir: b.projectDir }));
+}
+
+/** Остановить все фоновые команды (выход из приложения). */
+export function disposeBackground() {
+  for (const entry of background.values()) if (entry.code === null) entry.kill();
+}
+
+export const backgroundTools = [
+  {
+    schema: {
+      type: 'function',
+      function: {
+        name: 'shell_output',
+        description: 'Новый вывод фоновой команды (run_shell с background: true) и её состояние. Без id — список фоновых команд.',
+        parameters: { type: 'object', properties: { id: { type: 'string' }, all: { type: 'boolean', description: 'Весь буфер, а не только новое' } } },
+      },
+    },
+    async run(ctx, args) {
+      if (!args?.id) {
+        const list = listBackground();
+        return list.length ? list.map((b) => `${b.id}: ${b.running ? 'работает' : `код ${b.code}`} — ${b.command}`).join('\n') : 'Фоновых команд нет';
+      }
+      const entry = background.get(String(args.id));
+      if (!entry) return `Нет фоновой команды ${args.id}`;
+      const from = args.all ? 0 : entry.read;
+      const chunk = entry.out.slice(from);
+      entry.read = entry.out.length;
+      const lost = args.all && entry.dropped ? `[начало вывода (${entry.dropped} символов) не сохранено]\n` : '';
+      return `${entry.id}: ${status(entry)}\n$ ${entry.command}\n\n${lost}${chunk || '(нового вывода нет)'}`;
+    },
+  },
+  {
+    schema: {
+      type: 'function',
+      function: {
+        name: 'shell_kill',
+        description: 'Остановить фоновую команду вместе с дочерними процессами.',
+        parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      },
+    },
+    async run(ctx, args) {
+      const entry = background.get(String(args.id));
+      if (!entry) return `Нет фоновой команды ${args.id}`;
+      if (entry.code !== null) return `${entry.id} уже ${status(entry)}`;
+      entry.kill();
+      await new Promise((r) => {
+        const t = setTimeout(r, 3000);
+        entry.child.once('close', () => {
+          clearTimeout(t);
+          r();
+        });
+      });
+      return `${entry.id} остановлена (${status(entry)})`;
+    },
+  },
+];
+
 /**
  * Выполняет команду оболочки.
  * @param {object} [options]
@@ -138,30 +273,13 @@ export function execute(command, cwd, { onData, signal, container = null } = {})
     }
     // На Windows консоль переводится в UTF-8, а вывод в кодировке консоли перекодируется.
     const decode = createOutputDecoder();
-    // В контейнере — `docker run` без оболочки хоста; остановка — `docker kill`.
-    const child = container
-      ? spawn('docker', container.build(container.name), { cwd, windowsHide: true, env: { ...process.env, FORCE_COLOR: '0' } })
-      : spawn(withUtf8Console(command), {
-          cwd,
-          shell: true,
-          windowsHide: true,
-          detached: process.platform !== 'win32',
-          env: { ...process.env, FORCE_COLOR: '0' },
-        });
-    if (container) child.stdin?.end();
+    const { child, kill } = spawnCommand(command, cwd, container);
     let out = '';
     let stopped = '';
     const stop = (reason) => {
       if (stopped) return;
       stopped = reason;
-      if (container) {
-        try {
-          spawn('docker', ['kill', container.name], { windowsHide: true }).on('error', () => {});
-        } catch {
-          /* контейнер уже завершён */
-        }
-      }
-      killTree(child);
+      kill();
     };
     const timer = setTimeout(() => stop(`таймаут ${TIMEOUT_MS / 1000} с — процесс остановлен`), TIMEOUT_MS);
     const onAbort = () => stop('остановлено пользователем');

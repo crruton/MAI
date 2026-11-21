@@ -344,6 +344,13 @@ ADR 0054. `tools/fs.js`: `glob` (`globToRegExp`), `edit_file` через
 `spillOutput` в `tool-runner.js` (`MAX_TOOL_OUTPUT`, папка `ctx.outputDir`,
 подключена в `roots` как `@вывод`).
 
+### Фоновые команды
+
+ADR 0055. `tools/shell.js`: `spawnCommand` (хост или `docker run`, `kill`),
+`startBackground` — реестр `background` (кольцевой буфер, позиция чтения,
+код), `backgroundTools` (`shell_output`, `shell_kill`), `disposeBackground` —
+в `before-quit` main.
+
 ### Документы
 
 ADR 0049. `electron/lib/documents.js`: `buildDocx`, `buildXlsx` (`sheetsToXlsx` в

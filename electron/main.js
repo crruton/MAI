@@ -19,6 +19,7 @@ import { listAgentDefs } from './lib/agent-defs.js';
 import { normalizeShellSandbox } from './lib/shell-sandbox.js';
 import { createOAuthStore } from './lib/mcp-oauth.js';
 import { listTrash, restoreFromTrash, purgeTrash } from './lib/trash.js';
+import { disposeBackground } from './lib/tools/shell.js';
 import { normalizeRoots } from './lib/workroots.js';
 import { listConnectors, connectorServerConfig } from './lib/connectors.js';
 import { sessionResults, previewResult, resultFile } from './lib/results.js';
@@ -408,6 +409,8 @@ app.on('window-all-closed', () => {
 // внешние рантаймы и MCP-сервер repowise.
 app.on('before-quit', () => {
   disposePluginHosts();
+  // Фоновые команды агента (CC1.4) не переживают приложение.
+  disposeBackground();
   for (const state of runs.values()) {
     try {
       state.stage?.kill();

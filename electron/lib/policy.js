@@ -33,6 +33,9 @@ const BUILTIN = {
   // Удаление — отдельный класс (CW1.4, ADR 0044): спрашивается во всех режимах, кроме «Без вопросов».
   delete_file: 'delete',
   run_shell: 'exec',
+  // Фоновые команды (CC1.4): запуск — run_shell; чтение вывода и остановка своей команды ничего не меняют.
+  shell_output: 'read',
+  shell_kill: 'read',
   memory_append: 'memory',
   // Диалоговые инструменты ничего не меняют сами: решение принимает пользователь.
   ask_user: 'read',
@@ -371,7 +374,7 @@ export function summarize({ tool, cls, args = {}, subject }) {
     case 'delete_file':
       return `Удалить ${subject} (в корзину)`;
     case 'run_shell':
-      return String(subject || '');
+      return `${String(subject || '')}${args.background ? '   (в фоне)' : ''}`;
     case 'memory_append':
       return `Дописать в память (${subject}): ${String(args.text ?? '').slice(0, 160)}`;
     default: {

@@ -10,7 +10,7 @@ import {
   supportsTemperature,
 } from './responses.js';
 import { fsTools } from './tools/fs.js';
-import { shellTools } from './tools/shell.js';
+import { shellTools, backgroundTools } from './tools/shell.js';
 import { skillTools } from './tools/skills.js';
 import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
@@ -321,7 +321,7 @@ export async function runAgent({
     getTaint: () => taint,
   };
 
-  const builtin = [...fsTools, ...documentTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
+  const builtin = [...fsTools, ...documentTools, ...shellTools, ...backgroundTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
     toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview }),
   );
   const builtinNames = new Set(builtin.map((t) => t.name));
