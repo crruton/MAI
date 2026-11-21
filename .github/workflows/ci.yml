@@ -36,6 +36,11 @@ jobs:
           MAI_DOCKER_TEST: '1'
         run: node scripts/test-shell-sandbox.mjs
 
+      - name: Веб-инструменты на настоящем интернете
+        env:
+          MAI_LIVE_WEB: '1'
+        run: node scripts/test-web.mjs
+
       - name: Проверки транспорта Responses API
         run: npm run test:responses
 

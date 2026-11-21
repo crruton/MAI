@@ -33,6 +33,9 @@ const BUILTIN = {
   // Удаление — отдельный класс (CW1.4, ADR 0044): спрашивается во всех режимах, кроме «Без вопросов».
   delete_file: 'delete',
   run_shell: 'exec',
+  // Веб (CC1.6, ADR 0056): чтение чужих серверов — сеть.
+  web_fetch: 'network',
+  web_search: 'network',
   // Фоновые команды (CC1.4): запуск — run_shell; чтение вывода и остановка своей команды ничего не меняют.
   shell_output: 'read',
   shell_kill: 'read',
@@ -361,6 +364,15 @@ export function subjectOf({ tool, cls, args = {}, projectDir, command, roots = n
     return relativeSubject(projectDir, args.path);
   }
   if (cls === 'memory') return String(args.scope || 'project');
+  // Правила для веба — по домену и по запросу: web_fetch(docs.python.org), web_search(*).
+  if (tool === 'web_fetch') {
+    try {
+      return new URL(String(args.url)).hostname;
+    } catch {
+      return String(args.url || '');
+    }
+  }
+  if (tool === 'web_search') return String(args.query || '');
   if (tool) return null;
   return null;
 }
@@ -373,6 +385,10 @@ export function summarize({ tool, cls, args = {}, subject }) {
       return `Изменить файл ${subject}`;
     case 'delete_file':
       return `Удалить ${subject} (в корзину)`;
+    case 'web_fetch':
+      return `Открыть ${String(args.url || '')}`;
+    case 'web_search':
+      return `Поиск в интернете: ${String(args.query || '')}`;
     case 'run_shell':
       return `${String(subject || '')}${args.background ? '   (в фоне)' : ''}`;
     case 'memory_append':
@@ -408,6 +424,8 @@ export function suggestRules({ tool, cls, subject }) {
     const dir = path.posix.dirname(String(subject || '.'));
     return dir === '.' || dir === '' ? [] : [`delete_file(${dir}/**)`];
   }
+  if (tool === 'web_fetch' && subject) return [`web_fetch(${subject})`];
+  if (tool === 'web_search') return ['web_search'];
   // Отправку не предлагаем запомнить (CW3.2): каждое письмо — своё решение.
   if (cls === 'send') return [];
   if (cls === 'external' || cls === 'network') return [tool];

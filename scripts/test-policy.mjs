@@ -44,7 +44,7 @@ check('MCP destructiveHint:false без readOnly → external', classifyTool('mc
 check('плагин без kind → external', classifyTool('my_tool', { source: 'plugin' }) === 'external');
 check('плагин kind:write → write', classifyTool('my_tool', { source: 'plugin', kind: 'write' }) === 'write');
 check('плагин не меняет класс встроенного имени', classifyTool('run_shell', { source: 'plugin', kind: 'read' }) === 'exec');
-check('web_fetch больше не «чтение по умолчанию»', classifyTool('web_fetch', { source: 'plugin' }) === 'external');
+check('web_fetch — встроенный, класс network, плагин не делает его чтением', classifyTool('web_fetch', { source: 'plugin', kind: 'read' }) === 'network');
 
 console.log('\n[2] Разбор правил');
 check('имя без маски', parseRule('run_shell')?.spec === null);

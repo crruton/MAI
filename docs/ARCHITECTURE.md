@@ -344,6 +344,14 @@ ADR 0054. `tools/fs.js`: `glob` (`globToRegExp`), `edit_file` через
 `spillOutput` в `tool-runner.js` (`MAX_TOOL_OUTPUT`, папка `ctx.outputDir`,
 подключена в `roots` как `@вывод`).
 
+### Веб
+
+ADR 0056. `electron/lib/web.js`: `isPrivateAddress`, `fetchPage` (проверка
+адреса до запроса и на каждом перенаправлении, лимит, `htmlToText`),
+`webSearch` (duckduckgo → `parseDuckDuckGo`, searxng, brave). Инструменты —
+`tools/web.js`, конфигурация — `ctx.webConfig` из `settings.webSearch`.
+Предмет `web_fetch` в `subjectOf` — домен.
+
 ### Фоновые команды
 
 ADR 0055. `tools/shell.js`: `spawnCommand` (хост или `docker run`, `kill`),

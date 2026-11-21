@@ -71,3 +71,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0053](0053-zashchita-ot-prompt-injection.md) | Защита от prompt injection | accepted | 2026-11-21 |
 | [0054](0054-glob-edit-file-limit-vyvoda.md) | glob, правка файлов и лимит вывода | accepted | 2026-11-21 |
 | [0055](0055-fonovye-komandy.md) | Фоновые команды | accepted | 2026-11-21 |
+| [0056](0056-web-fetch-web-search.md) | web_fetch и web_search | accepted | 2026-11-21 |

@@ -338,6 +338,12 @@ export function saveSettings(patch) {
     );
   }
 
+  if (patch.webSearch) {
+    const provider = ['duckduckgo', 'searxng', 'brave'].includes(patch.webSearch.provider) ? patch.webSearch.provider : current.webSearch?.provider || 'duckduckgo';
+    const apiKey = patch.webSearch.apiKey === '***' || patch.webSearch.apiKey === undefined ? current.webSearch?.apiKey || '' : String(patch.webSearch.apiKey);
+    next.webSearch = { provider, url: String(patch.webSearch.url ?? current.webSearch?.url ?? ''), apiKey, allowPrivate: patch.webSearch.allowPrivate === true };
+  }
+
   if (patch.repowise) {
     next.repowise = { ...(current.repowise || {}), ...patch.repowise };
   }
@@ -398,6 +404,7 @@ export function publicSettings() {
     token: s.mas?.token ? '***' : '',
     tokenSet: Boolean(s.mas?.token),
   };
+  safe.webSearch = { ...(s.webSearch || {}), apiKey: s.webSearch?.apiKey ? '***' : '', apiKeySet: Boolean(s.webSearch?.apiKey) };
   // Заголовки и env MCP-серверов — наружу только факт наличия (ADR 0052).
   safe.mcpServers = Object.fromEntries(
     Object.entries(s.mcpServers || {}).map(([name, server]) => [

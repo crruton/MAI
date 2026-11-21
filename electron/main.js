@@ -487,7 +487,7 @@ ipcMain.handle('ocr:recognize', async (_e, payload) => {
 
 ipcMain.handle('settings:save', async (_e, patch) => {
   // Настройки, которые расширяют права агента или меняют изоляцию, — только admin.
-  if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth || patch.guardrails || patch.telemetry || patch.marketplaces) {
+  if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth || patch.guardrails || patch.telemetry || patch.marketplaces || patch.webSearch) {
     requireAdmin();
   }
   const current = loadSettings();

@@ -3454,6 +3454,18 @@ async function openSettings() {
   ]);
   shellNetwork.value = shellBox.network === 'bridge' ? 'bridge' : 'none';
   const shellHost = el('textarea', { rows: '2', class: 'shell-sandbox-host', placeholder: 'Команды на хосте, по маске в строке: git *' });
+  // Поиск в интернете (ADR 0056).
+  const web = settings.webSearch || {};
+  const webProvider = el('select', { class: 'web-provider' }, [
+    el('option', { value: 'duckduckgo', text: 'DuckDuckGo (без ключа)' }),
+    el('option', { value: 'searxng', text: 'SearXNG (свой адрес)' }),
+    el('option', { value: 'brave', text: 'Brave Search (ключ)' }),
+  ]);
+  webProvider.value = web.provider || 'duckduckgo';
+  const webUrl = el('input', { class: 'web-url', placeholder: 'https://searx.example.org', value: web.url || '' });
+  const webKey = el('input', { class: 'web-key', type: 'password', placeholder: web.apiKeySet ? 'ключ сохранён' : 'ключ Brave Search', value: web.apiKeySet ? '***' : '' });
+  const webPrivate = el('input', { type: 'checkbox', class: 'web-private' });
+  webPrivate.checked = Boolean(web.allowPrivate);
   shellHost.value = (shellBox.hostCommands || []).join('\n');
   const telemetry = settings.telemetry || {};
   const telemetryEnabled = el('input', { type: 'checkbox' });
@@ -3578,6 +3590,9 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Команда в контейнере — Linux (sh), даже на Windows. Если Docker не запущен, команда не выполнится на хосте молча — агент получит ошибку. Правки файлов проекта из контейнера видны сразу.',
       }),
+      el('div', { class: 'docs-group-title', text: 'Поиск в интернете' }),
+      el('div', { class: 'row' }, [field('Поисковик', webProvider), field('Адрес SearXNG', webUrl), field('Ключ', webKey)]),
+      el('label', { class: 'hint-text' }, [webPrivate, ' разрешить web_fetch адреса локальной сети (localhost, 192.168.*) — осторожно']),
       el('div', { class: 'docs-group-title', text: 'OpenTelemetry' }),
       el('label', { class: 'hint-text' }, [telemetryEnabled, ' отправлять логи и трейсы в OTLP-коллектор']),
       field('OTLP HTTP endpoint', telemetryEndpoint),
@@ -3635,6 +3650,7 @@ async function openSettings() {
               maxCommandLength: Math.max(100, Math.min(20000, Number(guardMaxLength.value || 4000))),
               extraDeny: guardExtra.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
             },
+            webSearch: { provider: webProvider.value, url: webUrl.value.trim(), apiKey: webKey.value, allowPrivate: webPrivate.checked },
             shellSandbox: {
               mode: shellDocker.checked ? 'docker' : 'off',
               image: shellImage.value.trim(),

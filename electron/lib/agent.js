@@ -15,6 +15,7 @@ import { skillTools } from './tools/skills.js';
 import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
 import { documentTools } from './tools/documents.js';
+import { webTools } from './tools/web.js';
 import { interactiveTools } from './tools/interactive.js';
 import { todoTools } from './tools/todo.js';
 import { nestedInstructions, projectInstructions } from './instructions.js';
@@ -321,7 +322,7 @@ export async function runAgent({
     getTaint: () => taint,
   };
 
-  const builtin = [...fsTools, ...documentTools, ...shellTools, ...backgroundTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
+  const builtin = [...fsTools, ...documentTools, ...shellTools, ...backgroundTools, ...(settings.webTools === false ? [] : webTools), ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
     toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview }),
   );
   const builtinNames = new Set(builtin.map((t) => t.name));
@@ -692,6 +693,8 @@ export async function runAgent({
       repowise: settings.repowise,
       shellSandbox: settings.shellSandbox,
       trashDir: settings.trashDir,
+      // Поиск: провайдер и ключ из настроек (ADR 0056).
+      webConfig: settings.webSearch || {},
       dockerAvailable: settings.dockerAvailable,
       trusted,
       ask,

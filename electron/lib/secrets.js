@@ -20,6 +20,7 @@ export const SECRET_PATHS = [
   // Токены MCP-серверов: заголовки (Authorization) и переменные окружения (ADR 0052).
   ['mcpServers', '*', 'headers', '*'],
   ['mcpServers', '*', 'env', '*'],
+  ['webSearch', 'apiKey'],
 ];
 
 export function isSealed(value) {

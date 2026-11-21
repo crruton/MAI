@@ -56,7 +56,8 @@
   правилам (ADR 0050).
   Инструменты файлов: `glob`, `edit_file` с несколькими правками и
   `replace_all`; правка только после чтения; длинный вывод — в файл (ADR 0054);
-  фоновые команды — `run_shell` с `background`, `shell_output`, `shell_kill` (ADR 0055).
+  фоновые команды — `run_shell` с `background`, `shell_output`, `shell_kill` (ADR 0055);
+  веб — `web_fetch`, `web_search` с правилами по домену и защитой от SSRF (ADR 0056).
   Агент создаёт и читает Word и Excel: `create_document` (DOCX из Markdown, XLSX
   с формулами), `read_document` (ADR 0049).
   «📄 Результаты» — файлы, которые агент создал и изменил в чате (ADR 0047).
