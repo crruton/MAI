@@ -68,3 +68,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0050](0050-planovye-zadachi.md) | Плановые задачи | accepted | 2026-11-21 |
 | [0051](0051-dlinnye-zadachi.md) | Длинные задачи и прогресс | accepted | 2026-11-21 |
 | [0052](0052-katalog-konnektorov.md) | Каталог коннекторов и токены MCP | accepted | 2026-11-21 |
+| [0053](0053-zashchita-ot-prompt-injection.md) | Защита от prompt injection | accepted | 2026-11-21 |

@@ -24,6 +24,7 @@ import { reviewAnswer } from './reviewer.js';
 import { modePrompt } from './permissions.js';
 import { effectiveMode, mergeRules } from './policy.js';
 import { normalizeRoots, describeRoots } from './workroots.js';
+import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
 import { runToolCall, toolEntry } from './tool-runner.js';
 import { attachImages, isImageRejected, supportsVision } from './vision.js';
 import { addUsage, isStreamOptionsRejected, normalizeUsage } from './usage.js';
@@ -68,6 +69,7 @@ export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = tr
   const roots = describeRoots(normalizeRoots(projectDir, extraDirs));
   if (roots) parts.push(roots);
   parts.push(`\n${modePrompt(mode)}`);
+  parts.push(DATA_RULE);
   if (!trusted) {
     // ADR 0028: инструкции из недоверенной папки — данные, а не указания агенту.
     parts.push(
@@ -131,6 +133,8 @@ export function toApiMessage(message) {
   }
   const out = { role: API_ROLES.has(message.role) ? message.role : 'user' };
   if (message.content !== undefined) out.content = message.content;
+  // Чужой текст — в рамке «данные» (CC2.10, ADR 0053).
+  if (message.role === 'tool' && isDataTool(message.name) && typeof message.content === 'string') out.content = wrapData(message.name, message.content);
   if (message.name && out.role === 'tool') out.name = message.name;
   if (message.tool_call_id) out.tool_call_id = message.tool_call_id;
   if (message.tool_calls) out.tool_calls = message.tool_calls;
@@ -304,12 +308,15 @@ export async function runAgent({
   // действует сразу, в том числе на список инструментов следующей итерации.
   const role = policy?.role || 'admin';
   const skillGrants = [];
+  // Признаки prompt injection в прочитанном (CC2.10): до конца прогона «Авто» спрашивает про действия.
+  let taint = null;
   const currentMode = () => effectiveMode(policy?.getMode ? policy.getMode() : permissionMode || settings.permissionMode, role);
   const policyCtx = {
     role,
     getMode: currentMode,
     // Правила навыков (allowed-tools, CC10.4) — только на этот прогон, поверх обычных.
     getRules: () => mergeRules(policy?.getRules ? policy.getRules() : mergeRules(settings.permissions), { allow: skillGrants }),
+    getTaint: () => taint,
   };
 
   const builtin = [...fsTools, ...documentTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
@@ -746,6 +753,14 @@ export async function runAgent({
           }
         } catch {
           /* инструкции не должны ломать шаг */
+        }
+      }
+      if (!taint && isDataTool(call.function.name)) {
+        const hit = detectInjection(outcome.content);
+        if (hit) {
+          taint = { ...hit, source: call.function.name, path: args?.path || args?.query || '' };
+          emit({ type: 'notice', level: 'warn', text: `В прочитанном (${call.function.name}${taint.path ? ` ${taint.path}` : ''}) похоже на внушённые указания: ${hit.why}. До конца ответа действия агента — только с вашего подтверждения.` });
+          audit?.({ at: new Date().toISOString(), tool: call.function.name, source: 'injection', cls: 'read', subject: String(taint.path).slice(0, 300), decision: 'taint', reason: hit.why, snippet: hit.snippet });
         }
       }
       emit({ type: 'tool_result', id: call.id, name: call.function.name, content: outcome.content, ok: outcome.ok, diff: outcome.diff || null });

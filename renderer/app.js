@@ -3160,7 +3160,7 @@ function handleEvent(event) {
       toast('Подтверждение истекло — действие отменено', 'err');
       break;
     case 'notice':
-      toast(event.text || '', 'ok');
+      toast(event.text || '', event.level === 'warn' ? 'err' : 'ok');
       break;
     case 'review:start':
       toast(`Ревизор ${event.model || ''} проверяет ответ…`);
@@ -3360,7 +3360,12 @@ function approvalCard() {
     ]),
     el('div', { class: 'approve-args', text: a.summary || '' }),
     diffView(a.diff),
-    a.why ? el('p', { class: 'hint-text approve-why', text: `${a.decisionSource === 'classifier' ? 'Авто спрашивает' : 'Почему спрашиваем'}: ${a.why}.` }) : null,
+    a.why
+      ? el('p', {
+          class: `hint-text approve-why${a.decisionSource === 'injection' ? ' approve-injection' : ''}`,
+          text: `${a.decisionSource === 'injection' ? '⚠ Возможна атака через данные' : a.decisionSource === 'classifier' ? 'Авто спрашивает' : 'Почему спрашиваем'}: ${a.why}.`,
+        })
+      : null,
     a.rule ? el('p', { class: 'hint-text', text: `Сработало правило ask: ${a.rule}` }) : null,
     // Отправка (CW3.2): что уйдёт — сразу видно, не под спойлером.
     a.args && a.cls === 'send' ? el('div', { class: 'approve-send' }, [el('div', { class: 'approve-send-title', text: 'Будет отправлено:' }), el('pre', { class: 'approve-send-body', text: prettyArgs(a.args) })]) : null,

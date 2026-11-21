@@ -126,6 +126,18 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
     guardrails: ctx.guardrails,
     role: policy.role || 'admin',
   });
+  // В прочитанном нашлись внушённые указания (CC2.10): «Авто» больше не решает молча.
+  const taint = policy.getTaint ? policy.getTaint() : null;
+  if (taint && decision.action === 'allow' && decision.source === 'classifier' && entry.cls !== 'read') {
+    decision = {
+      ...decision,
+      action: 'ask',
+      source: 'injection',
+      risk: 'high',
+      recommended: 'deny',
+      why: `в прочитанном (${taint.source}${taint.path ? ` ${taint.path}` : ''}) найдено похожее на внушённые указания — ${taint.why}: «${taint.snippet}». Проверьте, что действие нужно вам`,
+    };
+  }
 
   // PreToolUse (ADR 0035): хук не может разрешить то, что запретили guardrails,
   // правило deny или «План», но может запретить, потребовать вопрос или снять его.
