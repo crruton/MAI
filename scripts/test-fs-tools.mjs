@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fsTools, globToRegExp } from '../electron/lib/tools/fs.js';
 import { toolEntry, runToolCall, spillOutput, MAX_TOOL_OUTPUT } from '../electron/lib/tool-runner.js';
 import { normalizeRoots } from '../electron/lib/workroots.js';
@@ -99,6 +100,24 @@ fs.utimesSync(old, new Date(2020, 0, 1), new Date(2020, 0, 1));
 spillOutput({ outputDir }, 'x', long);
 check('файлы старше 7 дней удаляются', !fs.existsSync(old));
 check('без папки — обрезка', /обрезано/.test(spillOutput({}, 'x', long)));
+
+console.log('[5] read_file: картинки, PDF, документы, двоичные (CC1.3)');
+const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
+fs.writeFileSync(path.join(project, 'pic.png'), png);
+check('картинка — модели со зрением', /^Изображение .*pic\.png .*показано модели/.test(await call({ projectDir: project, vision: () => true }, 'read_file', { path: 'pic.png' })));
+check('картинка — модель без зрения: подсказка про OCR', /не принимает изображения.*OCR/.test(await call({ projectDir: project, vision: () => false }, 'read_file', { path: 'pic.png' })));
+const stream = zlib.deflateSync(Buffer.from('BT /F1 12 Tf 72 712 Td (Hello PDF text) Tj ET', 'latin1'));
+const pdf = Buffer.concat([Buffer.from('%PDF-1.4\n1 0 obj << /Length ' + stream.length + ' /Filter /FlateDecode >>\nstream\n', 'latin1'), stream, Buffer.from('\nendstream\nendobj\ntrailer << >>\n%%EOF\n', 'latin1')]);
+fs.writeFileSync(path.join(project, 'doc.pdf'), pdf);
+out = await call({ projectDir: project }, 'read_file', { path: 'doc.pdf' });
+check('PDF — извлечённый текст с номерами строк', /\[Текст из PDF/.test(out) && /1 \| Hello PDF text/.test(out), out);
+fs.writeFileSync(path.join(project, 'scan.pdf'), '%PDF-1.4\n%%EOF');
+check('PDF-скан — подсказка про OCR', /не извлечён.*OCR/.test(await call({ projectDir: project }, 'read_file', { path: 'scan.pdf' })));
+fs.writeFileSync(path.join(project, 'a.docx'), 'x');
+check('docx — подсказка read_document', /read_document/.test(await call({ projectDir: project }, 'read_file', { path: 'a.docx' })));
+fs.writeFileSync(path.join(project, 'bin.dat'), Buffer.from([1, 2, 0, 3, 4]));
+check('двоичный — понятный отказ', /Двоичный файл/.test(await call({ projectDir: project }, 'read_file', { path: 'bin.dat' })));
+check('папка — подсказка list_files', /Это папка/.test(await call({ projectDir: project }, 'read_file', { path: 'src' })));
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);

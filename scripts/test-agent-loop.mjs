@@ -892,6 +892,27 @@ console.log('\n[21] Prompt injection: рамка данных и «Авто» п
   check('история хранит исходный текст без рамки', stored && !stored.content.startsWith('<данные'));
 }
 
+console.log('\n[22] read_file картинки: изображение уходит модели после шага (CC1.3)');
+{
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
+  fs.writeFileSync(path.join(project, 'shot.png'), png);
+  const bodies = [];
+  const history = await runAgent(
+    base({
+      model: 'gpt-5-test',
+      messages: [{ role: 'user', content: 'что на скриншоте?' }],
+      mcp: fakeMcp(),
+      clientFactory: fakeClient([{ calls: [{ name: 'read_file', args: { path: 'shot.png' } }] }, { text: 'Там картинка' }], bodies),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const second = bodies[1]?.messages || [];
+  const toolIndex = second.findIndex((m) => m.role === 'tool');
+  const next = second[toolIndex + 1];
+  check('после результата инструмента — сообщение с картинкой', next?.role === 'user' && Array.isArray(next.content) && next.content.some((p) => p.type === 'image_url' && p.image_url.url.startsWith('data:image/png;base64,')), JSON.stringify(next)?.slice(0, 200));
+  check('в истории чата лишнего сообщения нет, путь — у результата', history.filter((m) => m.role === 'user').length === 1 && history.find((m) => m.role === 'tool')?.images?.[0]?.endsWith('shot.png'));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

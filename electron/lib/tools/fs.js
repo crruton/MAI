@@ -3,6 +3,10 @@ import path from 'node:path';
 import { isSecretPath } from '../guardrails.js';
 import { moveToTrash } from '../trash.js';
 import { normalizeRoots, resolveIn } from '../workroots.js';
+import { IMAGE_LIMITS } from '../vision.js';
+import { extractPdf } from '../attachments.js';
+
+const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 
 const MAX_READ_BYTES = 400_000;
 const MAX_OUTPUT = 20_000;
@@ -147,8 +151,28 @@ export const fsTools = [
       const file = resolveInside(ctx, args.path);
       assertNotSecret(ctx, file, 'чтение');
       const stat = fs.statSync(file);
-      if (stat.size > MAX_READ_BYTES) throw new Error(`Файл слишком большой: ${stat.size} байт`);
-      const text = fs.readFileSync(file, 'utf8');
+      if (stat.isDirectory()) return `Это папка: ${file} — используй list_files или glob`;
+      const ext = path.extname(file).toLowerCase();
+      // Картинка (CC1.3): модель со зрением получит её следующим сообщением.
+      if (IMAGE_EXT.has(ext)) {
+        if (stat.size > IMAGE_LIMITS.perImageBytes) return `Изображение слишком большое для модели: ${file} (${stat.size} байт, предел ${IMAGE_LIMITS.perImageBytes})`;
+        if (typeof ctx.vision === 'function' && !ctx.vision()) return `Текущая модель не принимает изображения: ${file}. Текст на картинке можно распознать OCR или выбрать модель со зрением.`;
+        return `Изображение ${file} (${stat.size} байт) — показано модели следующим сообщением.`;
+      }
+      if (ext === '.docx' || ext === '.xlsx') return `Документ ${path.basename(file)} читай инструментом read_document — он покажет текст и таблицы.`;
+      if (ext === '.pdf') {
+        if (stat.size > 50 * 1024 * 1024) throw new Error(`PDF слишком большой: ${stat.size} байт`);
+        const text = extractPdf(fs.readFileSync(file));
+        if (!text.trim()) return `PDF ${file}: текст не извлечён — похоже на скан. Распознать можно OCR.`;
+        const lines = text.split(/\r?\n/);
+        const start = Math.max(0, (args.offset || 1) - 1);
+        const end = args.limit ? start + args.limit : lines.length;
+        return truncate(`[Текст из PDF, строк: ${lines.length}]\n${lineNumbers(lines.slice(start, end).join('\n'), start + 1)}`);
+      }
+      if (stat.size > MAX_READ_BYTES) throw new Error(`Файл слишком большой: ${stat.size} байт — читай частями (offset, limit) или ищи grep`);
+      const raw = fs.readFileSync(file);
+      if (raw.subarray(0, 8000).includes(0)) return `Двоичный файл: ${file} (${stat.size} байт) — текстом не читается.`;
+      const text = raw.toString('utf8');
       markRead(ctx, file);
       const lines = text.split(/\r?\n/);
       const start = Math.max(0, (args.offset || 1) - 1);

@@ -23,10 +23,10 @@ import { listSkills, readAgents, readMemory } from './skills.js';
 import { reviewAnswer } from './reviewer.js';
 import { modePrompt } from './permissions.js';
 import { effectiveMode, mergeRules } from './policy.js';
-import { normalizeRoots, describeRoots } from './workroots.js';
+import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
 import { runToolCall, toolEntry } from './tool-runner.js';
-import { attachImages, isImageRejected, supportsVision } from './vision.js';
+import { attachImages, attachToolImages, isImageRejected, supportsVision, isImageFile } from './vision.js';
 import { addUsage, isStreamOptionsRejected, normalizeUsage } from './usage.js';
 import { activeHistory, compactionCut, compactionPrompt, contextBreakdown, DEFAULT_CONTEXT, needsCompaction } from './context.js';
 
@@ -500,6 +500,8 @@ export async function runAgent({
       if (withImages) {
         const attached = attachImages(api, trimmed, projectDir);
         api = attached.messages;
+        // Картинки из read_file (CC1.3) — после результатов шага; индексы ещё совпадают.
+        api = attachToolImages(api, trimmed).messages;
         if (attached.skipped && !imageNoticeShown) {
           imageNoticeShown = true;
           emit({ type: 'notice', text: `Изображений не передано: ${attached.skipped} (тип, размер или лимит запроса).` });
@@ -683,6 +685,8 @@ export async function runAgent({
       outputDir: settings.outputDir || null,
       // Какие файлы агент прочитал в этом прогоне — правка вслепую запрещена (CC1.2).
       readFiles,
+      // Видит ли модель картинки — read_file отвечает по-разному (CC1.3).
+      vision: () => useImages,
       allowOutsideProject: settings.allowOutsideProject,
       guardrails: settings.guardrails,
       repowise: settings.repowise,
@@ -770,12 +774,22 @@ export async function runAgent({
         }
       }
       emit({ type: 'tool_result', id: call.id, name: call.function.name, content: outcome.content, ok: outcome.ok, diff: outcome.diff || null });
+      // read_file картинки (CC1.3): путь — в результат, сама картинка уйдёт в запрос.
+      let images = null;
+      if (call.function.name === 'read_file' && outcome.ok !== false && isImageFile(args?.path) && /^Изображение /.test(String(outcome.content))) {
+        try {
+          images = [resolveIn(toolCtx.roots, args.path, { allowOutside: Boolean(settings.allowOutsideProject) })];
+        } catch {
+          images = null;
+        }
+      }
       history.push({
         role: 'tool',
         tool_call_id: call.id,
         name: call.function.name,
         content: outcome.content,
         ...(outcome.diff ? { diff: outcome.diff } : {}),
+        ...(images ? { images } : {}),
       });
       snapshot();
     };
