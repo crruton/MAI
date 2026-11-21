@@ -19,7 +19,7 @@ import crypto from 'node:crypto';
  * addSessionRules). Прогон агента держит копию сессии со старыми значениями,
  * и без этого финальный saveSession откатил бы режим, выбранный посреди прогона.
  */
-const OWNED_FIELDS = ['permissionMode', 'permissionRules'];
+const OWNED_FIELDS = ['permissionMode', 'permissionRules', 'extraDirs'];
 
 function writeJson(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -153,6 +153,15 @@ export function createSessionStore(root) {
       const session = getSession(id);
       if (!session) return null;
       session.permissionMode = mode || '';
+      session.updatedAt = new Date().toISOString();
+      return write(session);
+    },
+
+    /** Дополнительные рабочие папки чата (CW1.2, ADR 0045). */
+    setSessionDirs(id, dirs) {
+      const session = getSession(id);
+      if (!session) return null;
+      session.extraDirs = [...new Set((dirs || []).map(String).filter(Boolean))].slice(0, 20);
       session.updatedAt = new Date().toISOString();
       return write(session);
     },

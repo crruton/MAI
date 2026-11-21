@@ -87,7 +87,7 @@ check('файл записан в чекпоинт', checkpoints.includes(path.j
 out = await run({ path: 'nope.js' }, 'bypass');
 check('несуществующий — ошибка без вопроса', /Не найдено/.test(out.content) && asked.length === 2);
 out = await run({ path: '.' }, 'bypass');
-check('всю папку проекта — нельзя', /всю папку проекта/.test(out.content));
+check('всю папку проекта — нельзя', /рабочую папку целиком/.test(out.content), out.content);
 out = await run({ path: '../outside.txt' }, 'bypass');
 check('вне проекта — нельзя', /вне проекта/.test(out.content));
 write('.env', 'SECRET=1');

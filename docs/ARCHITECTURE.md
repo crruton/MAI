@@ -300,6 +300,17 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
 
+### Рабочие папки чата
+
+ADR 0045. `electron/lib/workroots.js`: `normalizeRoots(projectDir, extraDirs)`,
+`resolveIn(roots, target, { allowOutside })` (`@имя/путь`, относительный — от
+проекта), `subjectIn` (предмет для правил), `describeRoots` (промпт).
+`runAgent({ extraDirs })` кладёт `roots` в контекст инструментов; `resolveInside`
+в `tools/fs.js`, `resolveCwd` в `tools/shell.js`, `subjectOf({ roots })` и
+`dockerRunArgs({ roots })` работают от них. Папки — `session.extraDirs`
+(`setSessionDirs`, поле защищено от перезаписи прогоном); IPC `session:dirs`,
+`session:addDir` (системный диалог, admin), `session:removeDir`.
+
 ### Навыки
 
 ADR 0043. `listSkills` читает `allowed-tools`; `skillFiles(skill)` и

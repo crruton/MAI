@@ -15,6 +15,7 @@ export const listSessions = (options) => current().listSessions(options);
 export const getSession = (id) => current().getSession(id);
 export const createSession = (data) => current().createSession(data);
 export const setSessionMode = (id, mode) => current().setSessionMode(id, mode);
+export const setSessionDirs = (id, dirs) => current().setSessionDirs(id, dirs);
 export const saveSession = (session) => current().saveSession(session);
 export const addSessionRules = (id, kind, rules) => current().addSessionRules(id, kind, rules);
 export const removeSessionRules = (id, rules) => current().removeSessionRules(id, rules);

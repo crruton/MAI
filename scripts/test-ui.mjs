@@ -218,6 +218,23 @@ ipcMain.handle('trash:restore', (_e, payload) => {
   trashItems = trashItems.filter((i) => i.id !== payload.id);
   return { ok: true };
 });
+// Рабочие папки чата (раздел [31]).
+const dirCalls = [];
+let extraDirs = [{ name: 'Документы', dir: '/home/u/Документы', primary: false }];
+ipcMain.handle('session:dirs', (_e, sessionId) => {
+  dirCalls.push({ type: 'dirs', sessionId });
+  return { ok: true, roots: [{ name: 'proj', dir: '/p/proj', primary: true }, ...extraDirs], missing: ['/gone/old'] };
+});
+ipcMain.handle('session:addDir', (_e, sessionId) => {
+  dirCalls.push({ type: 'add', sessionId });
+  extraDirs = [...extraDirs, { name: 'Финансы', dir: '/home/u/Финансы', primary: false }];
+  return { ok: true };
+});
+ipcMain.handle('session:removeDir', (_e, payload) => {
+  dirCalls.push({ type: 'remove', ...payload });
+  extraDirs = extraDirs.filter((d) => d.dir !== payload.dir);
+  return { ok: true };
+});
 const savedSettings = [];
 ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
@@ -1398,6 +1415,22 @@ app.whenReady().then(async () => {
     check('«Восстановить» уходит в main', trashCalls.some((c) => c.type === 'restore' && c.id === '1700000000000-aaaaaaaa' && c.overwrite === false), JSON.stringify(trashCalls));
     check('список обновился', (await win.webContents.executeJavaScript(`document.querySelectorAll('.trash-row').length`)) === 1);
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[31] Рабочие папки чата (ADR 0045)');
+    win.webContents.send('chat:event', { type: 'saved', sessionId: 's-dirs' });
+    win.webContents.send('chat:event', { type: 'done', sessionId: 's-dirs', messages: [] });
+    await new Promise((r) => setTimeout(r, 500));
+    const bar = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector('#work-dirs'); return { hidden: b.hidden, text: b.textContent, chips: [...b.querySelectorAll('.work-dir')].map((c) => c.textContent) }; })()`);
+    check('строка папок видна у чата', bar.hidden === false && dirCalls.some((c) => c.type === 'dirs' && c.sessionId === 's-dirs'), JSON.stringify(bar));
+    check('проект, @Документы и пропавшая папка', bar.chips[0] === 'proj' && bar.chips.some((c) => c.startsWith('@Документы')) && bar.chips.some((c) => /old \(нет на диске\)/.test(c)), JSON.stringify(bar.chips));
+    await win.webContents.executeJavaScript(`document.querySelector('.work-dir-add').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const afterAdd = await win.webContents.executeJavaScript(`[...document.querySelectorAll('#work-dirs .work-dir')].map((c) => c.textContent)`);
+    check('«＋ папка» — выбор в main и обновление', dirCalls.some((c) => c.type === 'add' && c.sessionId === 's-dirs') && afterAdd.some((c) => c.startsWith('@Финансы')), JSON.stringify(afterAdd));
+    await win.webContents.executeJavaScript(`document.querySelector('.work-dir[data-dir="/home/u/Документы"] .work-dir-remove').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const afterRemove = await win.webContents.executeJavaScript(`[...document.querySelectorAll('#work-dirs .work-dir')].map((c) => c.textContent)`);
+    check('× убирает доступ', dirCalls.some((c) => c.type === 'remove' && c.dir === '/home/u/Документы') && !afterRemove.some((c) => c.startsWith('@Документы')), JSON.stringify(afterRemove));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

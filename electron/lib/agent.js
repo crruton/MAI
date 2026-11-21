@@ -22,6 +22,7 @@ import { listSkills, readAgents, readMemory } from './skills.js';
 import { reviewAnswer } from './reviewer.js';
 import { modePrompt } from './permissions.js';
 import { effectiveMode, mergeRules } from './policy.js';
+import { normalizeRoots, describeRoots } from './workroots.js';
 import { runToolCall, toolEntry } from './tool-runner.js';
 import { attachImages, isImageRejected, supportsVision } from './vision.js';
 import { addUsage, isStreamOptionsRejected, normalizeUsage } from './usage.js';
@@ -40,10 +41,12 @@ const BASE_PROMPT = `Ты — MAI Code, агент для программиро
 - После изменений проверяй результат (тесты, сборка, линтер), если это возможно.
 - Не коммить в git и не удалять данные без явной просьбы.`;
 
-export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true }) {
+export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true, extraDirs = [] }) {
   const agents = readAgents(projectDir);
   const memory = readMemory(projectDir);
   const parts = [BASE_PROMPT, `\nРабочая папка проекта: ${projectDir}`];
+  const roots = describeRoots(normalizeRoots(projectDir, extraDirs));
+  if (roots) parts.push(roots);
   parts.push(`\n${modePrompt(mode)}`);
   if (!trusted) {
     // ADR 0028: инструкции из недоверенной папки — данные, а не указания агенту.
@@ -245,6 +248,7 @@ export async function runAgent({
   hooks = null,
   agentDefs = null,
   skillDirs = [],
+  extraDirs = [],
   subagent = null,
   onHistory = null,
   clientFactory = null,
@@ -342,6 +346,7 @@ export async function runAgent({
       clientFactory,
       contextWindow,
       skillDirs,
+      extraDirs,
       subagent: { def },
     });
     const final = [...subHistory].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '(субагент не вернул текст)';
@@ -420,7 +425,7 @@ export async function runAgent({
     const mode = currentMode();
     const tools = buildTools(mode);
     const system =
-      systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted }) +
+      systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs }) +
       (subagent
         ? `\n\n# Ты — субагент «${subagent.def.name}»\n${subagent.def.prompt || ''}\nПользователь этот диалог не видит: родительский агент получит только твой последний ответ. ` +
           'Заверши работу одним итоговым сообщением: что найдено или сделано, пути файлов, что не удалось.'
@@ -640,6 +645,7 @@ export async function runAgent({
 
     const toolCtx = {
       projectDir,
+      roots: normalizeRoots(projectDir, extraDirs),
       allowOutsideProject: settings.allowOutsideProject,
       guardrails: settings.guardrails,
       repowise: settings.repowise,

@@ -751,3 +751,10 @@ button { cursor: pointer; }
 .market-url { flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; }
 .trash-row { grid-template-columns: 160px 1fr auto; align-items: center; }
 .trash-actions { display: flex; gap: 6px; }
+
+/* рабочие папки чата (ADR 0045) */
+.work-dirs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 8px; font-size: 12px; }
+.work-dir { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); }
+.work-dir.primary { opacity: 0.8; }
+.work-dir.missing { color: var(--text-faint); border-style: dashed; }
+.work-dir-remove { background: none; border: 0; color: var(--text-faint); cursor: pointer; padding: 0 2px; font-size: 13px; }

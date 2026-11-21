@@ -9,6 +9,7 @@
 import path from 'node:path';
 import { checkCommand } from './guardrails.js';
 import { normalizeMode } from './permissions.js';
+import { resolveIn, subjectIn } from './workroots.js';
 
 export const ACTION_CLASSES = ['read', 'write', 'delete', 'exec', 'memory', 'network', 'external'];
 
@@ -319,9 +320,20 @@ export function relativeSubject(projectDir, target) {
   return (rel || '.').split(path.sep).join('/');
 }
 
-export function subjectOf({ tool, cls, args = {}, projectDir, command }) {
+export function subjectOf({ tool, cls, args = {}, projectDir, command, roots = null }) {
   if (cls === 'exec') return String(command ?? args.command ?? '');
-  if (cls === 'write' || cls === 'read' || cls === 'delete') return args.path ? relativeSubject(projectDir, args.path) : null;
+  if (cls === 'write' || cls === 'read' || cls === 'delete') {
+    if (!args.path) return null;
+    // Дополнительные папки чата (ADR 0045): предмет — `@имя/путь`.
+    if (roots?.length > 1) {
+      try {
+        return subjectIn(roots, resolveIn(roots, args.path, { allowOutside: true }));
+      } catch {
+        return String(args.path);
+      }
+    }
+    return relativeSubject(projectDir, args.path);
+  }
   if (cls === 'memory') return String(args.scope || 'project');
   if (tool) return null;
   return null;

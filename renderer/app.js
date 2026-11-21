@@ -594,7 +594,64 @@ function isNearBottom() {
   return box.scrollHeight - box.scrollTop - box.clientHeight < 120;
 }
 
+/* ---------- рабочие папки чата (CW1.2, ADR 0045) ---------- */
+
+let workDirsFor = undefined;
+async function renderWorkDirs(force = false) {
+  const bar = $('#work-dirs');
+  if (!bar || (!force && workDirsFor === state.sessionId)) return;
+  workDirsFor = state.sessionId;
+  if (!state.sessionId) {
+    bar.hidden = true;
+    return;
+  }
+  let info;
+  try {
+    info = await api.chat.dirs(state.sessionId);
+  } catch {
+    bar.hidden = true;
+    return;
+  }
+  const extra = (info.roots || []).filter((r) => !r.primary);
+  const admin = state.auth?.role !== 'guest';
+  bar.replaceChildren(
+    el('span', { class: 'hint-text', text: 'Папки:' }),
+    el('span', { class: 'work-dir primary', title: info.roots?.[0]?.dir || '', text: info.roots?.[0]?.name || 'проект' }),
+    ...extra.map((r) =>
+      el('span', { class: 'work-dir', title: r.dir, 'data-dir': r.dir }, [
+        `@${r.name}`,
+        el('button', {
+          class: 'work-dir-remove',
+          type: 'button',
+          title: 'Убрать доступ',
+          text: '×',
+          onclick: async () => {
+            await api.chat.removeDir(state.sessionId, r.dir);
+            renderWorkDirs(true);
+          },
+        }),
+      ]),
+    ),
+    ...(info.missing || []).map((d) => el('span', { class: 'work-dir missing', title: d, text: `${d.split(/[\\/]/).pop()} (нет на диске)` })),
+    admin
+      ? el('button', {
+          class: 'btn ghost small work-dir-add',
+          type: 'button',
+          text: '＋ папка',
+          title: 'Дать агенту доступ к ещё одной папке в этом чате',
+          onclick: async () => {
+            const r = await api.chat.addDir(state.sessionId);
+            if (r?.ok === false && !r.cancelled) toast(r.error, 'err');
+            renderWorkDirs(true);
+          },
+        })
+      : null,
+  );
+  bar.hidden = false;
+}
+
 function renderAll() {
+  renderWorkDirs();
   const box = $('#messages');
   const stick = isNearBottom();
   box.replaceChildren();

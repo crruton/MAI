@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isSecretPath } from '../guardrails.js';
 import { moveToTrash } from '../trash.js';
+import { normalizeRoots, resolveIn } from '../workroots.js';
 
 const MAX_READ_BYTES = 400_000;
 const MAX_OUTPUT = 20_000;
@@ -19,18 +20,15 @@ function assertNotSecret(ctx, file, action = 'чтение') {
 
 const PREVIEW_BYTES = 1024 * 1024;
 
+/** Путь внутри рабочих папок чата (ADR 0045): папка проекта и добавленные `@имя`. */
 function resolveInside(ctx, target) {
-  const base = ctx.projectDir || process.cwd();
-  const resolved = path.resolve(base, target || '.');
-  if (!ctx.allowOutsideProject) {
-    const relative = path.relative(base, resolved);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
-      throw new Error(
-        `Путь вне проекта запрещён: ${resolved}. Включите «Разрешить файлы вне проекта» в настройках.`,
-      );
-    }
-  }
-  return resolved;
+  const roots = ctx.roots || normalizeRoots(ctx.projectDir || process.cwd());
+  return resolveIn(roots, target || '.', { allowOutside: Boolean(ctx.allowOutsideProject) });
+}
+
+function isRootDir(ctx, file) {
+  const roots = ctx.roots || normalizeRoots(ctx.projectDir || process.cwd());
+  return roots.some((r) => path.resolve(r.dir) === path.resolve(file));
 }
 
 function lineNumbers(text, offset = 1) {
@@ -292,7 +290,7 @@ export const fsTools = [
       const file = resolveInside(ctx, args.path);
       assertNotSecret(ctx, file, 'удаление');
       if (!fs.existsSync(file)) return `Не найдено: ${file}`;
-      if (path.resolve(file) === path.resolve(ctx.projectDir || process.cwd())) return 'Нельзя удалить всю папку проекта';
+      if (isRootDir(ctx, file)) return 'Нельзя удалить рабочую папку целиком';
       if (!ctx.trashDir) return 'Корзина недоступна — удаление отключено';
       return null;
     },
@@ -300,7 +298,7 @@ export const fsTools = [
       const file = resolveInside(ctx, args.path);
       assertNotSecret(ctx, file, 'удаление');
       if (!ctx.trashDir) return 'Ошибка: корзина недоступна — удаление отключено';
-      if (path.resolve(file) === path.resolve(ctx.projectDir || process.cwd())) return 'Ошибка: нельзя удалить всю папку проекта';
+      if (isRootDir(ctx, file)) return 'Ошибка: нельзя удалить рабочую папку целиком';
       // Файл — ещё и в чекпоинт: «откат к сообщению» вернёт его (CC6.1).
       if (fs.existsSync(file) && fs.statSync(file).isFile()) ctx.beforeWrite?.(file);
       const meta = moveToTrash(file, ctx.trashDir, { projectDir: ctx.projectDir || '' });

@@ -73,7 +73,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
   const mode = policy.getMode ? policy.getMode() : 'manual';
   const rules = policy.getRules ? policy.getRules() : {};
   const command = entry.cls === 'exec' ? effectiveCommand(ctx, args) : undefined;
-  const subject = subjectOf({ tool: entry.name, cls: entry.cls, args, projectDir: ctx.projectDir, command });
+  const subject = subjectOf({ tool: entry.name, cls: entry.cls, args, projectDir: ctx.projectDir, command, roots: ctx.roots });
 
   const record = (extra) => {
     try {

@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { checkCommand } from '../guardrails.js';
 import { createOutputDecoder, withUtf8Console } from '../encoding.js';
 import { sandboxPlan, dockerRunArgs } from '../shell-sandbox.js';
+import { normalizeRoots, resolveIn } from '../workroots.js';
 
 const MAX_OUTPUT = 24_000;
 const TIMEOUT_MS = 180_000;
@@ -42,15 +43,13 @@ export function effectiveCommand(ctx, args) {
 
 /** Рабочая папка команды: всегда внутри проекта, если не включён доступ вне проекта. */
 export function resolveCwd(ctx, cwd) {
-  const base = ctx?.projectDir || process.cwd();
-  const resolved = path.resolve(base, cwd || '.');
-  if (!ctx?.allowOutsideProject) {
-    const relative = path.relative(base, resolved);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
-      throw new Error(`Рабочая папка вне проекта запрещена: ${resolved}`);
-    }
+  // Рабочая папка — в проекте или в добавленной папке чата (`@имя/…`, ADR 0045).
+  const roots = ctx?.roots || normalizeRoots(ctx?.projectDir || process.cwd());
+  try {
+    return resolveIn(roots, cwd || '.', { allowOutside: Boolean(ctx?.allowOutsideProject) });
+  } catch (err) {
+    throw new Error(`Рабочая папка: ${err.message}`);
   }
-  return resolved;
 }
 
 export const shellTools = [
@@ -94,6 +93,7 @@ export const shellTools = [
                   projectDir: ctx.projectDir || cwd,
                   cwd,
                   config: ctx.shellSandbox,
+                  roots: ctx.roots,
                   name,
                   uid: typeof process.getuid === 'function' ? process.getuid() : undefined,
                   gid: typeof process.getgid === 'function' ? process.getgid() : undefined,

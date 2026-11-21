@@ -46,7 +46,8 @@ export function moveToTrash(target, trashDir, { projectDir = '' } = {}) {
     fs.cpSync(source, stored, { recursive: true });
     fs.rmSync(source, { recursive: true, force: true });
   }
-  const meta = { id, original: source, name: path.basename(source), projectDir, deletedAt: new Date().toISOString(), bytes, files, dir: fs.statSync(stored).isDirectory() };
+  // order — для порядка удалений в одну миллисекунду.
+  const meta = { id, original: source, name: path.basename(source), projectDir, deletedAt: new Date().toISOString(), order: Number(process.hrtime.bigint() % 1_000_000_000_000n), bytes, files, dir: fs.statSync(stored).isDirectory() };
   fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
   purgeTrash(trashDir);
   return meta;
@@ -68,7 +69,7 @@ export function listTrash(trashDir) {
       /* битая запись — пропускаем */
     }
   }
-  return items.sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+  return items.sort((a, b) => b.deletedAt.localeCompare(a.deletedAt) || (b.order || 0) - (a.order || 0));
 }
 
 /** Возвращает на место. Если там уже что-то есть — только с `overwrite`. */

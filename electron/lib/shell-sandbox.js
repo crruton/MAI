@@ -85,12 +85,17 @@ function mountSource(projectDir) {
  * Аргументы `docker run` для одной команды. Без оболочки на хосте: команда
  * уходит в `sh -lc` внутри контейнера отдельным аргументом.
  */
-export function dockerRunArgs({ command, projectDir, cwd, config, name, uid, gid }) {
+export function dockerRunArgs({ command, projectDir, cwd, config, name, uid, gid, roots = [] }) {
   const cfg = normalizeShellSandbox(config);
-  const relative = path.relative(path.resolve(projectDir), path.resolve(cwd || projectDir));
-  const workdir = relative && !relative.startsWith('..') && !path.isAbsolute(relative)
-    ? `/workspace/${relative.split(path.sep).join('/')}`
-    : '/workspace';
+  // Дополнительные папки чата (ADR 0045) — в /mnt/<имя>.
+  const mounts = [{ dir: path.resolve(projectDir), at: '/workspace' }, ...roots.filter((r) => !r.primary).map((r) => ({ dir: path.resolve(r.dir), at: `/mnt/${r.name}` }))];
+  const target = path.resolve(cwd || projectDir);
+  const mount = [...mounts].sort((a, b) => b.dir.length - a.dir.length).find((m) => {
+    const rel = path.relative(m.dir, target);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  });
+  const relative = mount ? path.relative(mount.dir, target) : '';
+  const workdir = mount ? (relative ? `${mount.at}/${relative.split(path.sep).join('/')}` : mount.at) : '/workspace';
   const args = [
     'run', '--rm', '-i',
     '--name', name,
@@ -106,7 +111,7 @@ export function dockerRunArgs({ command, projectDir, cwd, config, name, uid, gid
     '--cpus', cfg.cpus,
     '-e', 'HOME=/tmp',
     '-e', 'FORCE_COLOR=0',
-    '-v', `${mountSource(projectDir)}:/workspace`,
+    ...mounts.flatMap((m) => ['-v', `${m.at === '/workspace' ? mountSource(m.dir) : m.dir}:${m.at}`]),
     '-w', workdir,
   ];
   // На Linux файлы, созданные в контейнере, остаются вашими, а не root.

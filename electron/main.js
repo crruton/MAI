@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, clipboard } from 'electron';
 import path from 'node:path';
+import os from 'node:os';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -9,7 +10,7 @@ import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
-import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, addSessionRules, removeSessionRules } from './lib/sessions.js';
+import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, addSessionRules, removeSessionRules } from './lib/sessions.js';
 import { runAgent, compactSession, describeContext } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
@@ -18,6 +19,7 @@ import { listAgentDefs } from './lib/agent-defs.js';
 import { normalizeShellSandbox } from './lib/shell-sandbox.js';
 import { createOAuthStore } from './lib/mcp-oauth.js';
 import { listTrash, restoreFromTrash, purgeTrash } from './lib/trash.js';
+import { normalizeRoots } from './lib/workroots.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
@@ -1237,6 +1239,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
         // Типы субагентов: встроенные и свои (проекта — только доверенная папка, ADR 0036).
         agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(projectDir), 'agents') }),
         skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
+        extraDirs: (getSession(session.id)?.extraDirs || []).filter((d) => fs.existsSync(d)),
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -1513,6 +1516,42 @@ ipcMain.handle('packages:toggle', async (_e, payload = {}) => {
   retirePluginHosts();
   await mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
   return { ok: true };
+});
+
+/* ---------- рабочие папки чата (CW1.2, ADR 0045) ---------- */
+
+function sessionDirsView(sessionId) {
+  const session = sessionId ? getSession(sessionId) : null;
+  const projectDir = session?.projectDir || loadSettings().projectDir;
+  return {
+    ok: true,
+    roots: normalizeRoots(projectDir, (session?.extraDirs || []).filter((d) => fs.existsSync(d))),
+    missing: (session?.extraDirs || []).filter((d) => !fs.existsSync(d)),
+  };
+}
+
+ipcMain.handle('session:dirs', (_e, sessionId) => sessionDirsView(sessionId));
+
+/** Добавить папку к чату: выбор в системном диалоге — путь из окна не принимается. Расширяет доступ агента — admin. */
+ipcMain.handle('session:addDir', async (event, sessionId) => {
+  const session = sessionId ? getSession(sessionId) : null;
+  if (!session) return { ok: false, error: 'Сначала начните чат' };
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const picked = await dialog.showOpenDialog(window, { title: 'Папка для этого чата', properties: ['openDirectory', 'multiSelections'] });
+  if (picked.canceled || !picked.filePaths.length) return { ok: false, cancelled: true };
+  const home = os.homedir();
+  const bad = picked.filePaths.find((d) => path.resolve(d) === path.parse(path.resolve(d)).root || path.resolve(d) === home);
+  if (bad) return { ok: false, error: `Нельзя дать доступ ко всему диску или домашней папке: ${bad}` };
+  setSessionDirs(session.id, [...(session.extraDirs || []), ...picked.filePaths]);
+  audit({ at: new Date().toISOString(), tool: 'session:addDir', source: 'user', cls: 'read', subject: picked.filePaths.join(', '), decision: 'allow' });
+  return sessionDirsView(session.id);
+});
+
+ipcMain.handle('session:removeDir', (_e, payload = {}) => {
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  if (!session) return { ok: false, error: 'Нет чата' };
+  setSessionDirs(session.id, (session.extraDirs || []).filter((d) => path.resolve(d) !== path.resolve(String(payload.dir || ''))));
+  return sessionDirsView(session.id);
 });
 
 /* ---------- корзина (CW1.4, ADR 0044) ---------- */
@@ -2248,6 +2287,7 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
         // Чекпоинты правок для отката (CC6.1).
         checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
+        extraDirs: (getSession(session.id)?.extraDirs || []).filter((d) => fs.existsSync(d)),
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
