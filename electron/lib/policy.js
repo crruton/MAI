@@ -26,6 +26,9 @@ const BUILTIN = {
   repowise_search: 'read',
   write_file: 'write',
   edit_file: 'write',
+  // Документы (CW2.1, CW2.2, ADR 0049).
+  create_document: 'write',
+  read_document: 'read',
   // Удаление — отдельный класс (CW1.4, ADR 0044): спрашивается во всех режимах, кроме «Без вопросов».
   delete_file: 'delete',
   run_shell: 'exec',
@@ -392,6 +395,7 @@ export function suggestRules({ tool, cls, subject }) {
   if (cls === 'write') {
     const dir = path.posix.dirname(String(subject || '.'));
     const spec = dir === '.' || dir === '' ? '**' : `${dir}/**`;
+    if (tool === 'create_document') return [`create_document(${spec})`];
     return [`write_file(${spec})`, `edit_file(${spec})`];
   }
   if (cls === 'memory') return [`memory_append(${subject || 'project'})`];

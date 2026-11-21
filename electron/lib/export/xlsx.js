@@ -105,6 +105,11 @@ function markdownToXlsx(markdown, options = {}) {
     sheets.push({ name: sheetName(options.title || 'Ответ', 0), xml: textSheet(lines.length ? lines : ['']) });
   }
 
+  return buildWorkbook(sheets);
+}
+
+/** Книга из готовых листов { name, xml }. */
+function buildWorkbook(sheets) {
   // Имена листов должны быть уникальны, иначе Excel ругается.
   const seen = new Map();
   for (const sheet of sheets) {
@@ -120,6 +125,7 @@ function markdownToXlsx(markdown, options = {}) {
   const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
 <sheets>${workbookSheets}</sheets>
+<calcPr calcId="0" fullCalcOnLoad="1"/>
 </workbook>`;
 
   const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -176,4 +182,50 @@ ${sheets
   return createZip(entries);
 }
 
-export { markdownToXlsx };
+/**
+ * Ячейка с типом (CW2.2, ADR 0049): число — числом, `=…` — формулой,
+ * true/false — логическим, остальное — текстом.
+ */
+function typedCell(value, ref, bold) {
+  const style = bold ? ' s="1"' : '';
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'number' && Number.isFinite(value)) return `<c r="${ref}"${style}><v>${value}</v></c>`;
+  if (typeof value === 'boolean') return `<c r="${ref}" t="b"${style}><v>${value ? 1 : 0}</v></c>`;
+  const text = String(value);
+  if (text.startsWith('=') && text.length > 1) return `<c r="${ref}"${style}><f>${esc(text.slice(1))}</f></c>`;
+  if (/^-?\d+(?:\.\d+)?$/.test(text) && text.length < 16 && !/^0\d/.test(text)) return `<c r="${ref}"${style}><v>${text}</v></c>`;
+  return `<c r="${ref}" t="inlineStr"${style}><is><t xml:space="preserve">${esc(text)}</t></is></c>`;
+}
+
+/**
+ * XLSX из листов: [{ name, rows: [[…], …], header?: true, widths?: [число] }].
+ * Строки — массивы значений; первая строка жирная, если header не false.
+ */
+function sheetsToXlsx(sheets) {
+  const list = (Array.isArray(sheets) && sheets.length ? sheets : [{ name: 'Лист1', rows: [] }]).slice(0, 50);
+  const built = list.map((sheet, index) => {
+    const rows = (Array.isArray(sheet?.rows) ? sheet.rows : []).slice(0, 100_000);
+    const width = Math.max(1, ...rows.map((r) => (Array.isArray(r) ? r.length : 1)));
+    const widths = Array.from({ length: Math.min(width, 16_384) }, (_, i) => {
+      const given = Number(sheet?.widths?.[i]);
+      if (Number.isFinite(given) && given > 0) return Math.min(given, 255);
+      const longest = Math.max(8, ...rows.map((r) => String((Array.isArray(r) ? r[i] : r) ?? '').length));
+      return Math.min(longest + 2, 60);
+    });
+    const cols = widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('');
+    const body = rows
+      .map((row, r) => {
+        const cells = (Array.isArray(row) ? row : [row]).map((value, c) => typedCell(value, `${columnLetter(c + 1)}${r + 1}`, r === 0 && sheet?.header !== false)).join('');
+        return `<row r="${r + 1}">${cells}</row>`;
+      })
+      .join('');
+    const freeze = sheet?.header !== false && rows.length > 1 ? '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' : '';
+    return {
+      name: sheetName(sheet?.name, index),
+      xml: `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${freeze}<cols>${cols}</cols><sheetData>${body}</sheetData></worksheet>`,
+    };
+  });
+  return buildWorkbook(built);
+}
+
+export { markdownToXlsx, sheetsToXlsx };

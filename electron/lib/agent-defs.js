@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const READ_TOOLS = ['read_file', 'list_files', 'grep', 'load_skill', 'memory_read', 'repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search'];
+const READ_TOOLS = ['read_file', 'read_document', 'list_files', 'grep', 'load_skill', 'memory_read', 'repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search'];
 
 /** Инструменты, которых у субагента нет никогда: диалог с пользователем и вложенные субагенты. */
 export const NEVER_FOR_SUBAGENT = new Set(['agent', 'ask_user', 'exit_plan', 'todo_write']);

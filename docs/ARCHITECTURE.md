@@ -306,6 +306,15 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
 
+### Документы
+
+ADR 0049. `electron/lib/documents.js`: `buildDocx`, `buildXlsx` (`sheetsToXlsx` в
+`export/xlsx.js` — типы ячеек, формулы, закрепление; общая `buildWorkbook`),
+`docxToMarkdown`, `readXlsx`, `sheetsToText`; ZIP читается `export/unzip.js`
+(лимиты записей и размера). Инструменты — `tools/documents.js`:
+`create_document` (write, precheck формата, preview текста), `read_document`
+(read; есть в наборе субагентов explore/plan).
+
 ### Результаты задачи
 
 ADR 0047. `touchedFiles(dataDir, sessionId)` (checkpoints.js) →

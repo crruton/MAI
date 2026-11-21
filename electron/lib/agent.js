@@ -14,6 +14,7 @@ import { shellTools } from './tools/shell.js';
 import { skillTools } from './tools/skills.js';
 import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
+import { documentTools } from './tools/documents.js';
 import { interactiveTools } from './tools/interactive.js';
 import { todoTools } from './tools/todo.js';
 import { nestedInstructions, projectInstructions } from './instructions.js';
@@ -48,6 +49,7 @@ const TASK_PROMPT = `Ты — MAI, помощник для рабочих зад
 - Отвечай по-русски, ясно и без жаргона программистов: пользователь может не быть разработчиком.
 - Сначала пойми задачу. Если не хватает важного (для кого документ, формат, срок, какие файлы брать), спроси через ask_user с вариантами.
 - Перед работой посмотри файлы в рабочих папках инструментами list_files и read_file. Не выдумывай содержимое файлов.
+- Документы Word и таблицы Excel создавай инструментом create_document (.docx из Markdown, .xlsx из листов с формулами), читай — read_document.
 - Результат сохраняй файлом в рабочей папке и назови путь. Не перезаписывай файлы пользователя: создавай новый файл рядом (например, «отчёт (итог).md»), если тебя явно не попросили изменить исходный.
 - Удаляй только инструментом delete_file и только когда об этом попросили.
 - Для задачи из трёх шагов и больше веди список задач инструментом todo_write.
@@ -310,7 +312,7 @@ export async function runAgent({
     getRules: () => mergeRules(policy?.getRules ? policy.getRules() : mergeRules(settings.permissions), { allow: skillGrants }),
   };
 
-  const builtin = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
+  const builtin = [...fsTools, ...documentTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
     toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview }),
   );
   const builtinNames = new Set(builtin.map((t) => t.name));

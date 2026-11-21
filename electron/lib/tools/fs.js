@@ -7,7 +7,7 @@ import { normalizeRoots, resolveIn } from '../workroots.js';
 const MAX_READ_BYTES = 400_000;
 const MAX_OUTPUT = 20_000;
 
-function assertNotSecret(ctx, file, action = 'чтение') {
+export function assertNotSecret(ctx, file, action = 'чтение') {
   const guardrails = ctx.guardrails || {};
   if (guardrails.protectSecrets === false || guardrails.allowSecrets) return;
   if (isSecretPath(file)) {
@@ -21,7 +21,7 @@ function assertNotSecret(ctx, file, action = 'чтение') {
 const PREVIEW_BYTES = 1024 * 1024;
 
 /** Путь внутри рабочих папок чата (ADR 0045): папка проекта и добавленные `@имя`. */
-function resolveInside(ctx, target) {
+export function resolveInside(ctx, target) {
   const roots = ctx.roots || normalizeRoots(ctx.projectDir || process.cwd());
   return resolveIn(roots, target || '.', { allowOutside: Boolean(ctx.allowOutsideProject) });
 }
