@@ -11,7 +11,7 @@ import { checkCommand } from './guardrails.js';
 import { normalizeMode } from './permissions.js';
 import { resolveIn, subjectIn } from './workroots.js';
 
-export const ACTION_CLASSES = ['read', 'write', 'delete', 'exec', 'memory', 'network', 'external'];
+export const ACTION_CLASSES = ['read', 'write', 'delete', 'exec', 'memory', 'network', 'send', 'external'];
 
 /** Встроенные инструменты и их классы. Имя встроенного инструмента нельзя переопределить плагином. */
 const BUILTIN = {
@@ -38,6 +38,15 @@ const BUILTIN = {
   agent: 'read',
 };
 
+/** Имя инструмента, который что-то отправляет людям или публикует: send_email, post_message, create_event, reply… */
+const SEND_NAME = /(^|[_\W])(send|reply|forward|post|publish|tweet|notify|invite|share|comment|create_?event|schedule_?meeting|message_user|dm)([_\W]|$)/i;
+
+export function isSendTool(name, annotations = {}) {
+  const tool = String(name || '').replace(/^mcp__.+?__/, '').replace(/([a-z0-9])([A-Z])/g, '$1_$2');
+  if (annotations?.readOnlyHint === true) return false;
+  return SEND_NAME.test(tool) || (annotations?.openWorldHint === true && annotations?.destructiveHint !== false && SEND_NAME.test(String(annotations?.title || '')));
+}
+
 export function isBuiltinTool(name) {
   return Object.hasOwn(BUILTIN, String(name || ''));
 }
@@ -52,7 +61,10 @@ export function classifyTool(name, meta = {}) {
   const key = String(name || '');
   if (isBuiltinTool(key)) return BUILTIN[key];
   if (meta.source === 'mcp' || key.startsWith('mcp__')) {
-    return meta.annotations?.readOnlyHint === true ? 'read' : 'external';
+    if (meta.annotations?.readOnlyHint === true) return 'read';
+    // Отправка наружу (CW3.2, ADR 0048): письмо, сообщение, событие, публикация.
+    if (isSendTool(key, meta.annotations)) return 'send';
+    return 'external';
   }
   if (ACTION_CLASSES.includes(meta.kind)) return meta.kind;
   return 'external';
@@ -191,6 +203,7 @@ export function assessRisk(cls, subject = '') {
     return { risk: 'medium', why: 'запускает процесс в папке проекта' };
   }
   if (cls === 'network') return { risk: 'medium', why: 'обращается к сети' };
+  if (cls === 'send') return { risk: 'high', why: 'отправляет от вашего имени — письмо, сообщение, событие или публикацию; отменить нельзя' };
   return { risk: 'medium', why: 'внешний инструмент: MCP или плагин, действие заранее неизвестно' };
 }
 
@@ -293,6 +306,12 @@ export function evaluate({ tool, cls, subject = null, mode, rules = {}, guardrai
   const allow = matchList(rules.allow, call, { every: true });
   if (allow) return result('allow', { source: 'rule', rule: allow.text });
 
+  // Отправка наружу (CW3.2): спросить в любом режиме, даже «Без вопросов»; без вопроса — только явное allow.
+  if (call.cls === 'send') {
+    if (current === 'dontAsk') return result('deny', { source: 'mode', reason: DONT_ASK_REASON });
+    return result('ask', { source: 'send', why: 'отправка от вашего имени спрашивается всегда — проверьте получателя и текст' });
+  }
+
   switch (current) {
     case 'smart': {
       const verdict = classifyAuto({ cls: call.cls, subject });
@@ -353,7 +372,7 @@ export function summarize({ tool, cls, args = {}, subject }) {
       return `Дописать в память (${subject}): ${String(args.text ?? '').slice(0, 160)}`;
     default: {
       const json = JSON.stringify(args ?? {});
-      const label = cls === 'external' ? 'Внешний инструмент' : 'Инструмент';
+      const label = cls === 'send' ? 'Отправка через' : cls === 'external' ? 'Внешний инструмент' : 'Инструмент';
       return `${label} ${tool}: ${json.length > 400 ? `${json.slice(0, 400)}…` : json}`;
     }
   }
@@ -381,6 +400,8 @@ export function suggestRules({ tool, cls, subject }) {
     const dir = path.posix.dirname(String(subject || '.'));
     return dir === '.' || dir === '' ? [] : [`delete_file(${dir}/**)`];
   }
+  // Отправку не предлагаем запомнить (CW3.2): каждое письмо — своё решение.
+  if (cls === 'send') return [];
   if (cls === 'external' || cls === 'network') return [tool];
   return [];
 }

@@ -12,6 +12,7 @@ import {
   effectiveMode,
   relativeSubject,
   classifyAuto,
+  isSendTool,
 } from '../electron/lib/policy.js';
 import { PERMISSION_MODES, MODE_INFO, normalizeMode } from '../electron/lib/permissions.js';
 import { permissionPlan, RUNTIME_PRESETS } from '../electron/lib/runtimes.js';
@@ -150,6 +151,22 @@ check('гостю «Авто» доступен', smartCall('write_file', 'write
 const cc = permissionPlan(RUNTIME_PRESETS.claude, 'smart');
 check('внешний CLI в «Авто» = «Принимать правки»', cc.ok && cc.args.join(' ') === '--permission-mode acceptEdits', JSON.stringify(cc));
 check('docker в «Авто» — запись разрешена', permissionPlan({ mode: 'docker' }, 'smart').readOnly === false);
+
+console.log('[Отправка] коннекторы (CW3.2, ADR 0048)');
+const mcpCls = (name, annotations = {}) => classifyTool(name, { source: 'mcp', annotations });
+check('send_email, post_message, create_event, reply, add_comment — отправка', ['mcp__gmail__send_email', 'mcp__slack__post_message', 'mcp__cal__create_event', 'mcp__x__reply_to_thread', 'mcp__gh__add_comment'].every((n) => mcpCls(n) === 'send'));
+check('camelCase: sendMessage, chat_postMessage', mcpCls('mcp__tg__sendMessage') === 'send' && mcpCls('mcp__slack__chat_postMessage') === 'send');
+check('чтение почты и списки — не отправка', ['mcp__mail__read_email', 'mcp__gmail__search_emails', 'mcp__gmail__list_messages', 'mcp__srv__get_posts'].every((n) => mcpCls(n) !== 'send'));
+check('readOnlyHint сильнее имени', mcpCls('mcp__gmail__send_email', { readOnlyHint: true }) === 'read' && !isSendTool('send_x', { readOnlyHint: true }));
+check('плагин может объявить kind: send', classifyTool('my_send', { source: 'plugin', kind: 'send' }) === 'send');
+const sendCall = (mode, rules = {}) => evaluate({ tool: 'mcp__gmail__send_email', cls: 'send', subject: null, mode, rules, role: 'admin' });
+check('«Без вопросов» — всё равно спросить', sendCall('bypass').action === 'ask' && sendCall('bypass').source === 'send');
+check('«Авто», «Принимать правки», «Вручную» — спросить', ['smart', 'acceptEdits', 'manual'].every((m) => sendCall(m).action === 'ask'));
+check('«Только разрешённое» — запрет', sendCall('dontAsk').action === 'deny');
+check('«План» — запрет', sendCall('plan').action === 'deny');
+check('явное allow — без вопроса', sendCall('bypass', { allow: ['mcp__gmail__send_email'] }).action === 'allow');
+check('высокий риск — рекомендуется «Нет»', sendCall('manual').risk === 'high' && sendCall('manual').recommended === 'deny');
+check('правило запомнить не предлагается', suggestRules({ tool: 'mcp__gmail__send_email', cls: 'send' }).length === 0);
 
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

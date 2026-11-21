@@ -2987,6 +2987,19 @@ function handleEvent(event) {
 }
 
 const RISK_LABEL = { low: 'Низкий риск', medium: 'Средний риск', high: 'Высокий риск' };
+/** Аргументы инструмента по строкам: «поле: значение» — для превью отправки. */
+function prettyArgs(raw) {
+  try {
+    const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!data || typeof data !== 'object') return String(raw);
+    return Object.entries(data)
+      .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value, null, 2)}`)
+      .join('\n');
+  } catch {
+    return String(raw);
+  }
+}
+
 const CLASS_LABEL = {
   read: 'чтение',
   write: 'правка файла',
@@ -2994,6 +3007,7 @@ const CLASS_LABEL = {
   exec: 'команда',
   memory: 'память',
   network: 'сеть',
+  send: 'отправка от вашего имени',
   external: 'внешний инструмент',
 };
 
@@ -3090,6 +3104,8 @@ function approvalCard() {
     diffView(a.diff),
     a.why ? el('p', { class: 'hint-text approve-why', text: `${a.decisionSource === 'classifier' ? 'Авто спрашивает' : 'Почему спрашиваем'}: ${a.why}.` }) : null,
     a.rule ? el('p', { class: 'hint-text', text: `Сработало правило ask: ${a.rule}` }) : null,
+    // Отправка (CW3.2): что уйдёт — сразу видно, не под спойлером.
+    a.args && a.cls === 'send' ? el('div', { class: 'approve-send' }, [el('div', { class: 'approve-send-title', text: 'Будет отправлено:' }), el('pre', { class: 'approve-send-body', text: prettyArgs(a.args) })]) : null,
     a.args && a.cls === 'external'
       ? el('details', { class: 'approve-details' }, [el('summary', { text: 'Аргументы' }), el('pre', { text: a.args })])
       : null,

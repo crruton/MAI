@@ -1494,6 +1494,29 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 300));
     check('«Открыть» и «В папке» уходят в main с чатом и путём', resultCalls.some((c) => c.type === 'open' && c.file === '/p/отчёт.md' && c.sessionId === 's-dirs') && resultCalls.some((c) => c.type === 'show' && c.file === '/p/run.bat'), JSON.stringify(resultCalls));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[34] Отправка через коннектор: превью (ADR 0048)');
+    win.webContents.send('chat:event', {
+      type: 'approval',
+      id: 'appr-send',
+      tool: 'mcp__gmail__send_email',
+      name: 'mcp__gmail__send_email',
+      cls: 'send',
+      summary: 'Отправка через mcp__gmail__send_email',
+      args: JSON.stringify({ to: 'boss@example.com', subject: 'Отчёт', body: 'Добрый день!\nОтчёт во вложении.' }, null, 2),
+      risk: 'high',
+      why: 'отправка от вашего имени спрашивается всегда',
+      recommended: 'deny',
+      suggestions: [],
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const sendCard = await win.webContents.executeJavaScript(`(() => { const c = document.querySelector('.approval-card'); return { body: c?.querySelector('.approve-send-body')?.textContent || '', options: c ? c.querySelectorAll('.approve-option').length : 0, rec: c?.querySelector('.approve-option.recommended')?.textContent || '', cls: c?.querySelector('.approve-class')?.textContent || '' }; })()`);
+    check('что уйдёт — открыто, по полям', /to: boss@example\.com/.test(sendCard.body) && /subject: Отчёт/.test(sendCard.body) && /Отчёт во вложении/.test(sendCard.body), JSON.stringify(sendCard));
+    check('«Да, и не спрашивать» нет; рекомендуется «Нет»', sendCard.options === 2 && /Нет/.test(sendCard.rec), JSON.stringify(sendCard));
+    check('класс — отправка от вашего имени', sendCard.cls === 'отправка от вашего имени', sendCard.cls);
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('Esc — отказ', approvals.some((a) => a.id === 'appr-send' && a.allow === false), JSON.stringify(approvals.filter((a) => a.id === 'appr-send')));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);
