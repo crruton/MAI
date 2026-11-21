@@ -156,6 +156,24 @@ ipcMain.handle('settings:get', () => ({
   models: [],
 }));
 ipcMain.handle('runtimes:list', () => ({}));
+// MCP с OAuth (раздел [28]).
+const mcpCalls = [];
+let mcpLogged = false;
+ipcMain.handle('mcp:status', () => [
+  { name: 'remote', status: mcpLogged ? 'ready' : 'needs_auth', error: '', tools: mcpLogged ? ['whoami'] : [], loggedIn: mcpLogged },
+  { name: 'local', status: 'ready', error: '', tools: ['ls'], loggedIn: false },
+]);
+ipcMain.handle('mcp:configs', () => ({ remote: { url: 'https://mcp.example.com/mcp' }, local: { command: 'node' } }));
+ipcMain.handle('mcp:login', (_e, name) => {
+  mcpCalls.push({ type: 'login', name });
+  mcpLogged = true;
+  return { ok: true, tools: ['whoami'] };
+});
+ipcMain.handle('mcp:logout', (_e, name) => {
+  mcpCalls.push({ type: 'logout', name });
+  mcpLogged = false;
+  return { ok: true };
+});
 const savedSettings = [];
 ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
@@ -1266,6 +1284,25 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 400));
     const sb = savedSettings.at(-1)?.shellSandbox;
     check('сохраняется mode/image/network/hostCommands', sb?.mode === 'docker' && sb?.image === 'python:3.12-slim' && sb?.network === 'bridge' && sb?.hostCommands?.join('|') === 'git *|gh *', JSON.stringify(sb));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[28] MCP: вход OAuth (ADR 0041)');
+    await new Promise((r) => setTimeout(r, 200));
+    await win.webContents.executeJavaScript(`document.querySelector('[data-panel=mcp]').click()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const mcpView = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.modal .list-item')].map((i) => ({ title: i.querySelector('.title').textContent, login: i.querySelector('.mcp-login')?.textContent || '', primary: Boolean(i.querySelector('.mcp-login.primary')) }))`);
+    const remoteRow = mcpView.find((r) => r.title.startsWith('remote'));
+    const localRow = mcpView.find((r) => r.title.startsWith('local'));
+    check('HTTP-сервер: «нужен вход» и выделенная кнопка «Войти»', /нужен вход/.test(remoteRow?.title || '') && remoteRow?.login === 'Войти' && remoteRow?.primary, JSON.stringify(mcpView));
+    check('stdio-серверу кнопки входа нет', localRow && localRow.login === '', JSON.stringify(mcpView));
+    await win.webContents.executeJavaScript(`document.querySelector('.mcp-login').click()`);
+    await new Promise((r) => setTimeout(r, 600));
+    check('«Войти» уходит в main', mcpCalls.some((c) => c.type === 'login' && c.name === 'remote'), JSON.stringify(mcpCalls));
+    const afterLogin = await win.webContents.executeJavaScript(`document.querySelector('.mcp-login')?.textContent || ''`);
+    check('после входа — «Выйти»', afterLogin === 'Выйти', afterLogin);
+    await win.webContents.executeJavaScript(`document.querySelector('.mcp-login').click()`);
+    await new Promise((r) => setTimeout(r, 500));
+    check('«Выйти» уходит в main', mcpCalls.some((c) => c.type === 'logout' && c.name === 'remote'), JSON.stringify(mcpCalls));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;

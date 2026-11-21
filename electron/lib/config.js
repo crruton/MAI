@@ -396,4 +396,4 @@ export function publicSettings() {
   return safe;
 }
 
-export { dataDir, STATIC_MODELS };
+export { dataDir, STATIC_MODELS, secretBox };

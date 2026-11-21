@@ -156,6 +156,8 @@ contextBridge.exposeInMainWorld('mai', {
     sync: (projectDir) => invoke('mcp:sync', projectDir),
     connect: (name, projectDir) => invoke('mcp:connect', name, projectDir),
     remove: (name) => invoke('mcp:remove', name),
+    login: (name, projectDir) => invoke('mcp:login', name, projectDir),
+    logout: (name) => invoke('mcp:logout', name),
   },
   mas: {
     status: () => invoke('mas:status'),

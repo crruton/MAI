@@ -185,6 +185,7 @@ AGENTROUTER_API_KEY=sk-...
 | MCP проекта | `<проект>/.mai-code/mcp.json` |
 | Хуки проекта | `<проект>/.mai-code/hooks.json` |
 | Правила разрешений проекта | `<проект>/.mai-code/settings.json` (в git), `settings.local.json` (только у вас) |
+| Входы в MCP-серверы (OAuth) | `%APPDATA%\mai-code\mcp-oauth.json` (зашифровано) |
 | Песочница команд агента | поле `shellSandbox` в `settings.json` (ADR 0040) |
 | Настройки организации | `%ProgramData%\mai-code\managed-settings.json`, `/etc/mai-code/…`, `/Library/Application Support/mai-code/…` (или `MAI_MANAGED_SETTINGS`) |
 | Пакеты плагинов | `%APPDATA%\mai-code\packages\`, `<проект>/.mai-code/packages\` |
@@ -444,6 +445,12 @@ export default {
 ```
 
 Добавляется через панель «MCP» (имя + команда + аргументы) или правится в `settings.json`.
+
+Удалённый сервер — `{ "url": "https://mcp.example.com/mcp" }`. Если он требует
+OAuth, в панели «MCP» появится «нужен вход» и кнопка **Войти**: вход идёт в
+браузере, токены хранятся зашифрованными в `mcp-oauth.json` и обновляются сами
+(ADR 0041). Для сервера с постоянным токеном — `"headers": { "Authorization": "Bearer …" }`
+и `"oauth": false`.
 
 ## Документация
 

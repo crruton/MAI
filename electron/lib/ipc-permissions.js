@@ -147,6 +147,8 @@ export const IPC_PERMISSIONS = {
   'mcp:sync': ADMIN,
   'mcp:connect': ADMIN,
   'mcp:remove': ADMIN,
+  'mcp:login': ADMIN,
+  'mcp:logout': ADMIN,
   'plugins:list': ANY,
   'plugins:openFolder': ANY,
   'plugins:createExample': ADMIN,

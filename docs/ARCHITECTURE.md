@@ -104,6 +104,14 @@ main кладёт резолвер в `state.approvals` и отправляет 
 `mcp__<server>__<tool>`, чтобы не конфликтовать с встроенными. При вызове имя разбирается
 обратно, ищется сервер и оригинальное имя инструмента.
 
+OAuth (ADR 0041): `new McpManager({ oauth: { store, openBrowser, callbackPort } })`.
+`connect()` передаёт HTTP-транспорту `authProvider` без `onAuthorize` — при 401
+статус `needs_auth`, браузер не открывается. `login(name, config)` поднимает
+`startCallbackServer` (127.0.0.1, проверка `state`), провайдер с `onAuthorize`
+открывает браузер, после кода — `transport.finishAuth(code)` и новый `connect()`.
+Хранилище — `createOAuthStore(<данные>/mcp-oauth.json, secretBox)`. IPC:
+`mcp:login`, `mcp:logout` (admin); `mcp:status` отдаёт `loggedIn`.
+
 ## Плагины
 
 Плагины исполняются в отдельном процессе (ADR 0030). `loadPlugins(projectDir)`

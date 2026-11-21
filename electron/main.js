@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets } from './lib/config.js';
+import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets, secretBox } from './lib/config.js';
 import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
@@ -16,6 +16,7 @@ import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpo
 import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
 import { listAgentDefs } from './lib/agent-defs.js';
 import { normalizeShellSandbox } from './lib/shell-sandbox.js';
+import { createOAuthStore } from './lib/mcp-oauth.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
@@ -96,7 +97,16 @@ if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !proc
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const mcp = new McpManager();
+// OAuth удалённых MCP (ADR 0041): токены — в mcp-oauth.json, зашифрованы как ключи провайдеров.
+const mcp = new McpManager({
+  oauth: {
+    store: createOAuthStore(path.join(dataDir(), 'mcp-oauth.json'), secretBox),
+    openBrowser: (url) => shell.openExternal(url),
+    get callbackPort() {
+      return Number(loadSettings().oauth?.callbackPort) || undefined;
+    },
+  },
+});
 const runs = new Map(); // windowId -> { controller, approvals: Map }
 
 /** Сколько ждём ответа на подтверждение, прежде чем отменить действие. */
@@ -1723,6 +1733,14 @@ ipcMain.handle('mcp:connect', async (_e, name, projectDir) => {
   if (!config) return { ok: false, error: 'Сервер не найден в настройках' };
   return mcp.connect(name, config);
 });
+ipcMain.handle('mcp:login', async (_e, name, projectDir) => {
+  const config = mcpConfigs(projectDir)[name];
+  if (!config) return { ok: false, error: 'Сервер не найден в настройках' };
+  const result = await mcp.login(name, config);
+  audit({ at: new Date().toISOString(), type: 'mcp_login', server: name, ok: result.ok });
+  return result;
+});
+ipcMain.handle('mcp:logout', (_e, name) => mcp.logout(name));
 ipcMain.handle('mcp:remove', async (_e, name) => {
   const settings = loadSettings();
   const servers = { ...(settings.mcpServers || {}) };

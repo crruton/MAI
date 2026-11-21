@@ -4042,9 +4042,33 @@ async function openMcp() {
   for (const name of names) {
     const info = status.find((s) => s.name === name);
     const badge = el('span', {
-      class: `badge ${info?.status === 'ready' ? 'ok' : info?.status === 'error' ? 'err' : ''}`,
-      text: info?.status || (servers[name]?.disabled ? 'выключен' : 'не подключён'),
+      class: `badge ${info?.status === 'ready' ? 'ok' : info?.status === 'error' ? 'err' : info?.status === 'needs_auth' ? 'warn' : ''}`,
+      text: info?.status === 'needs_auth' ? 'нужен вход' : info?.status || (servers[name]?.disabled ? 'выключен' : 'не подключён'),
     });
+    // OAuth (ADR 0041): вход в браузере для HTTP-серверов.
+    const remote = Boolean(servers[name]?.url) && servers[name]?.oauth !== false;
+    const loginButton = remote
+      ? el('button', {
+          class: `btn ${info?.status === 'needs_auth' ? 'primary' : 'ghost'} mcp-login`,
+          type: 'button',
+          text: info?.loggedIn ? 'Выйти' : 'Войти',
+          onclick: async (e) => {
+            const button = e.currentTarget;
+            if (info?.loggedIn) {
+              await api.mcp.logout(name);
+              toast(`Выход из ${name}`, 'ok');
+            } else {
+              button.disabled = true;
+              button.textContent = 'Ждём браузер…';
+              const res = await api.mcp.login(name, state.projectDir);
+              if (!res.ok) toast(res.error, 'err');
+              else toast(`Вход выполнен: ${name}`, 'ok');
+            }
+            modal.close();
+            openMcp();
+          },
+        })
+      : null;
     list.append(
       el('div', { class: 'list-item' }, [
         el('div', {}, [
@@ -4055,6 +4079,7 @@ async function openMcp() {
           }),
         ]),
         el('div', { class: 'actions' }, [
+          loginButton,
           el('button', {
             class: 'btn ghost',
             type: 'button',
