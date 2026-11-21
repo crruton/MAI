@@ -822,6 +822,31 @@ console.log('\n[19] Навык: файлы и allowed-tools (CC10.4)');
   check('выдача записана в журнал', auditLog.some((r) => r.decision === 'grant' && r.subject === 'deploy'));
 }
 
+console.log('\n[20] Режим «Задача» (CW1.1)');
+{
+  const run = async (kind) => {
+    const bodies = [];
+    await runAgent(
+      base({
+        settings: { maxIterations: 6, permissions: {}, repowise: { enabled: true } },
+        messages: [{ role: 'user', content: 'x' }],
+        mcp: fakeMcp(),
+        ask: async () => ({}),
+        kind,
+        clientFactory: fakeClient([{ text: 'ок' }], bodies),
+        policy: { getMode: () => 'manual', getRules: () => ({}) },
+      }),
+    );
+    return { system: bodies[0].messages[0].content, tools: (bodies[0].tools || []).map((t) => t.function.name) };
+  };
+  const code = await run('code');
+  const task = await run('task');
+  check('«Код»: промпт программиста и repowise', /агент для программирования/.test(code.system) && code.tools.includes('repowise_search'), code.tools.join(','));
+  check('«Задача»: свой промпт, без git', /помощник для рабочих задач/.test(task.system) && /Не используй git/.test(task.system) && !/агент для программирования/.test(task.system));
+  check('«Задача»: без инструментов кода, файлы и вопросы на месте', !task.tools.some((t) => t.startsWith('repowise_')) && ['read_file', 'write_file', 'delete_file', 'ask_user', 'todo_write'].every((t) => task.tools.includes(t)), task.tools.join(','));
+  check('«Задача»: режим разрешений тот же', /# Режим/.test(task.system));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

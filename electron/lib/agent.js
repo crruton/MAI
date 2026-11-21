@@ -41,10 +41,28 @@ const BASE_PROMPT = `Ты — MAI Code, агент для программиро
 - После изменений проверяй результат (тесты, сборка, линтер), если это возможно.
 - Не коммить в git и не удалять данные без явной просьбы.`;
 
-export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true, extraDirs = [] }) {
+/** Режим «Задача» (CW1.1, ADR 0046): работа с документами и данными, не с кодом. */
+const TASK_PROMPT = `Ты — MAI, помощник для рабочих задач на компьютере пользователя: документы, таблицы, заметки, отчёты, письма, разбор файлов.
+
+Правила:
+- Отвечай по-русски, ясно и без жаргона программистов: пользователь может не быть разработчиком.
+- Сначала пойми задачу. Если не хватает важного (для кого документ, формат, срок, какие файлы брать), спроси через ask_user с вариантами.
+- Перед работой посмотри файлы в рабочих папках инструментами list_files и read_file. Не выдумывай содержимое файлов.
+- Результат сохраняй файлом в рабочей папке и назови путь. Не перезаписывай файлы пользователя: создавай новый файл рядом (например, «отчёт (итог).md»), если тебя явно не попросили изменить исходный.
+- Удаляй только инструментом delete_file и только когда об этом попросили.
+- Для задачи из трёх шагов и больше веди список задач инструментом todo_write.
+- Команды оболочки — только если без них никак, и объясни простыми словами, что команда сделает.
+- Не используй git, не предлагай коммиты и не ищи AGENTS.md: это не программный проект.
+- В конце коротко: что сделано, какие файлы созданы или изменены, что проверить пользователю.`;
+
+/** Инструменты, скрытые в режиме «Задача»: про код и репозиторий. */
+export const CODE_ONLY_TOOLS = new Set(['repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search']);
+
+export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true, extraDirs = [], kind = 'code' }) {
   const agents = readAgents(projectDir);
   const memory = readMemory(projectDir);
-  const parts = [BASE_PROMPT, `\nРабочая папка проекта: ${projectDir}`];
+  const task = kind === 'task';
+  const parts = [task ? TASK_PROMPT : BASE_PROMPT, `\n${task ? 'Основная рабочая папка' : 'Рабочая папка проекта'}: ${projectDir}`];
   const roots = describeRoots(normalizeRoots(projectDir, extraDirs));
   if (roots) parts.push(roots);
   parts.push(`\n${modePrompt(mode)}`);
@@ -207,9 +225,9 @@ export async function compactSession({ provider, model, messages, instructions =
 }
 
 /** Разбор контекста для /context: системный промпт и инструменты как у агента. */
-export function describeContext({ settings, projectDir, mode, trusted = true, mcp, history = [], window = DEFAULT_CONTEXT, skillDirs = [] }) {
+export function describeContext({ settings, projectDir, mode, trusted = true, mcp, history = [], window = DEFAULT_CONTEXT, skillDirs = [], kind = 'code' }) {
   const skills = listSkills(projectDir, { includeProject: trusted, extraDirs: skillDirs });
-  const system = systemPrompt({ projectDir, skills, mcpStatus: mcp?.status?.() || [], mode, trusted });
+  const system = systemPrompt({ projectDir, skills, mcpStatus: mcp?.status?.() || [], mode, trusted, kind });
   const tools = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...interactiveTools, ...todoTools]
     .map((t) => t.schema)
     .concat((mcp?.toolSchemas?.() || []).map((t) => ({ type: 'function', function: t.function })));
@@ -249,6 +267,7 @@ export async function runAgent({
   agentDefs = null,
   skillDirs = [],
   extraDirs = [],
+  kind = 'code',
   subagent = null,
   onHistory = null,
   clientFactory = null,
@@ -347,6 +366,7 @@ export async function runAgent({
       contextWindow,
       skillDirs,
       extraDirs,
+      kind,
       subagent: { def },
     });
     const final = [...subHistory].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '(субагент не вернул текст)';
@@ -374,6 +394,8 @@ export async function runAgent({
     const extra = !subagent && agentEntry ? [agentEntry] : [];
     const all = [...builtin, ...fromPlugins, ...fromMcp, ...extra].filter((t) => {
       if (subagent && !allowedForSub(t)) return false;
+      // «Задача» (CW1.1): инструменты про код и репозиторий не нужны.
+      if (kind === 'task' && CODE_ONLY_TOOLS.has(t.name)) return false;
       // exit_plan нужен только в «Плане»; спросить пользователя в «Только разрешённое» некого.
       if (t.name === 'exit_plan') return mode === 'plan';
       if (t.name === 'ask_user') return mode !== 'dontAsk' && typeof ask === 'function';
@@ -425,7 +447,7 @@ export async function runAgent({
     const mode = currentMode();
     const tools = buildTools(mode);
     const system =
-      systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs }) +
+      systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs, kind }) +
       (subagent
         ? `\n\n# Ты — субагент «${subagent.def.name}»\n${subagent.def.prompt || ''}\nПользователь этот диалог не видит: родительский агент получит только твой последний ответ. ` +
           'Заверши работу одним итоговым сообщением: что найдено или сделано, пути файлов, что не удалось.'

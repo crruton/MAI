@@ -758,3 +758,8 @@ button { cursor: pointer; }
 .work-dir.primary { opacity: 0.8; }
 .work-dir.missing { color: var(--text-faint); border-style: dashed; }
 .work-dir-remove { background: none; border: 0; color: var(--text-faint); cursor: pointer; padding: 0 2px; font-size: 13px; }
+
+/* «Код / Задача» (ADR 0046) */
+.kind-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.kind-btn { background: transparent; color: var(--text-faint); border: 0; padding: 3px 9px; font: inherit; font-size: 12px; cursor: pointer; }
+.kind-btn.active { background: var(--accent-soft, rgba(99, 102, 241, 0.18)); color: var(--text); }

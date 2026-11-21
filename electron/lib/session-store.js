@@ -19,7 +19,7 @@ import crypto from 'node:crypto';
  * addSessionRules). Прогон агента держит копию сессии со старыми значениями,
  * и без этого финальный saveSession откатил бы режим, выбранный посреди прогона.
  */
-const OWNED_FIELDS = ['permissionMode', 'permissionRules', 'extraDirs'];
+const OWNED_FIELDS = ['permissionMode', 'permissionRules', 'extraDirs', 'kind'];
 
 function writeJson(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -133,7 +133,7 @@ export function createSessionStore(root) {
 
     getSession,
 
-    createSession({ title, model, projectDir, permissionMode }) {
+    createSession({ title, model, projectDir, permissionMode, kind }) {
       const now = new Date().toISOString();
       return write({
         id: crypto.randomUUID(),
@@ -143,6 +143,7 @@ export function createSessionStore(root) {
         // Пустой режим — «взять значение по умолчанию из настроек».
         permissionMode: permissionMode || '',
         permissionRules: { allow: [], ask: [], deny: [] },
+        kind: kind === 'task' ? 'task' : 'code',
         createdAt: now,
         updatedAt: now,
         messages: [],
@@ -153,6 +154,15 @@ export function createSessionStore(root) {
       const session = getSession(id);
       if (!session) return null;
       session.permissionMode = mode || '';
+      session.updatedAt = new Date().toISOString();
+      return write(session);
+    },
+
+    /** Вид чата: code | task (CW1.1, ADR 0046). */
+    setSessionKind(id, kind) {
+      const session = getSession(id);
+      if (!session) return null;
+      session.kind = kind === 'task' ? 'task' : 'code';
       session.updatedAt = new Date().toISOString();
       return write(session);
     },

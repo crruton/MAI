@@ -103,6 +103,8 @@ export const IPC_PERMISSIONS = {
   'marketplace:list': ANY,
   'trash:list': ANY,
   'session:dirs': ANY,
+  'session:kind': ANY,
+  'session:setKind': ANY,
   'session:addDir': ADMIN,
   'session:removeDir': ANY,
   'trash:restore': SELF,

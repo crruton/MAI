@@ -300,6 +300,13 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
 
+### Режим «Задача»
+
+ADR 0046. `runAgent({ kind })`: при `task` — `TASK_PROMPT` вместо `BASE_PROMPT`
+(`systemPrompt({ kind })`), инструменты из `CODE_ONLY_TOOLS` скрыты. Вид —
+`session.kind` (`setSessionKind`, защищённое поле) или `settings.defaultKind`
+для нового чата; `chat:start({ kind })`. IPC `session:kind`, `session:setKind`.
+
 ### Рабочие папки чата
 
 ADR 0045. `electron/lib/workroots.js`: `normalizeRoots(projectDir, extraDirs)`,

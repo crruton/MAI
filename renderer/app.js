@@ -650,7 +650,37 @@ async function renderWorkDirs(force = false) {
   bar.hidden = false;
 }
 
+/* ---------- «Код / Задача» (CW1.1, ADR 0046) ---------- */
+
+let kindFor = undefined;
+function paintKind() {
+  for (const button of document.querySelectorAll('#kind-toggle .kind-btn')) {
+    button.classList.toggle('active', button.dataset.kind === (state.kind || 'code'));
+  }
+  const input = $('#input');
+  if (input) input.placeholder = state.kind === 'task'
+    ? 'Опишите задачу: что сделать с документами, какой нужен результат…  Enter — отправить'
+    : 'Опишите задачу…  Enter — отправить, Shift+Enter — новая строка. Файлы можно перетащить сюда';
+}
+async function syncKind(force = false) {
+  if (!force && kindFor === state.sessionId) return;
+  kindFor = state.sessionId;
+  try {
+    state.kind = (await api.chat.kind(state.sessionId || null)).kind;
+  } catch {
+    state.kind = state.kind || 'code';
+  }
+  paintKind();
+}
+async function setKind(kind) {
+  const result = await api.chat.setKind(state.sessionId || null, kind);
+  state.kind = result.kind;
+  paintKind();
+  toast(result.kind === 'task' ? 'Режим «Задача»: документы и данные, без git и инструментов кода' : 'Режим «Код»: программирование', 'ok');
+}
+
 function renderAll() {
+  syncKind();
   renderWorkDirs();
   const box = $('#messages');
   const stick = isNearBottom();
@@ -1451,6 +1481,7 @@ async function send(override = null) {
       model: state.model,
       projectDir: state.projectDir,
       permissionMode: state.permissionMode,
+      kind: state.kind || 'code',
       images,
     }),
   );
@@ -4946,6 +4977,10 @@ $('#export-chat').addEventListener('click', async (event) => {
   $('#project-btn').addEventListener('click', pickProject);
   $('#new-project-btn').addEventListener('click', newProjectModal);
   $('#settings-btn').addEventListener('click', openSettings);
+  for (const button of document.querySelectorAll('#kind-toggle .kind-btn')) {
+    button.addEventListener('click', () => setKind(button.dataset.kind));
+  }
+  syncKind(true);
   $('#mode-select').addEventListener('change', (event) => setPermissionMode(event.target.value));
   $('#send').addEventListener('click', send);
   $('#mic').addEventListener('click', toggleVoice);

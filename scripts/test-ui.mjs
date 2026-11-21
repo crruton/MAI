@@ -235,6 +235,15 @@ ipcMain.handle('session:removeDir', (_e, payload) => {
   extraDirs = extraDirs.filter((d) => d.dir !== payload.dir);
   return { ok: true };
 });
+// «Код / Задача» (раздел [32]).
+const kindCalls = [];
+let kindNow = 'code';
+ipcMain.handle('session:kind', (_e, sessionId) => ({ kind: kindNow, sessionId }));
+ipcMain.handle('session:setKind', (_e, payload) => {
+  kindCalls.push(payload);
+  kindNow = payload.kind;
+  return { ok: true, kind: payload.kind, scope: payload.sessionId ? 'session' : 'default' };
+});
 const savedSettings = [];
 ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
@@ -1431,6 +1440,19 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 400));
     const afterRemove = await win.webContents.executeJavaScript(`[...document.querySelectorAll('#work-dirs .work-dir')].map((c) => c.textContent)`);
     check('× убирает доступ', dirCalls.some((c) => c.type === 'remove' && c.dir === '/home/u/Документы') && !afterRemove.some((c) => c.startsWith('@Документы')), JSON.stringify(afterRemove));
+
+    console.log('\n[32] «Код / Задача» (ADR 0046)');
+    const kindState = () => win.webContents.executeJavaScript(`({ active: document.querySelector('#kind-toggle .kind-btn.active')?.dataset.kind, placeholder: document.querySelector('#input').placeholder })`);
+    let k = await kindState();
+    check('по умолчанию — «Код»', k.active === 'code', JSON.stringify(k));
+    await win.webContents.executeJavaScript(`document.querySelector('#kind-toggle [data-kind=task]').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    k = await kindState();
+    check('«Задача»: кнопка активна, подсказка про документы', k.active === 'task' && /документами/.test(k.placeholder), JSON.stringify(k));
+    check('выбор уходит в main для текущего чата', kindCalls.some((c) => c.kind === 'task' && c.sessionId === 's-dirs'), JSON.stringify(kindCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('#kind-toggle [data-kind=code]').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('обратно в «Код»', (await kindState()).active === 'code');
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

@@ -102,6 +102,8 @@ contextBridge.exposeInMainWorld('mai', {
     marketplaces: () => invoke('marketplace:list'),
     trash: () => invoke('trash:list'),
     dirs: (sessionId) => invoke('session:dirs', sessionId),
+    kind: (sessionId) => invoke('session:kind', sessionId),
+    setKind: (sessionId, kind) => invoke('session:setKind', { sessionId, kind }),
     addDir: (sessionId) => invoke('session:addDir', sessionId),
     removeDir: (sessionId, dir) => invoke('session:removeDir', { sessionId, dir }),
     restoreTrash: (id, overwrite = false) => invoke('trash:restore', { id, overwrite }),

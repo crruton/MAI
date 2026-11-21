@@ -10,7 +10,7 @@ import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
-import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, addSessionRules, removeSessionRules } from './lib/sessions.js';
+import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, addSessionRules, removeSessionRules } from './lib/sessions.js';
 import { runAgent, compactSession, describeContext } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
@@ -1171,6 +1171,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
       model,
       projectDir,
       permissionMode: payload.permissionMode ? normalizeMode(payload.permissionMode) : '',
+      // Вид чата из переключателя «Код / Задача» (CW1.1) — до первого сообщения.
+      kind: payload.kind === 'task' ? 'task' : loadSettings().defaultKind === 'task' ? 'task' : 'code',
     });
   }
   session.model = model;
@@ -1240,6 +1242,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
         agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(projectDir), 'agents') }),
         skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
         extraDirs: (getSession(session.id)?.extraDirs || []).filter((d) => fs.existsSync(d)),
+        kind: getSession(session.id)?.kind || 'code',
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -1532,6 +1535,21 @@ function sessionDirsView(sessionId) {
 
 ipcMain.handle('session:dirs', (_e, sessionId) => sessionDirsView(sessionId));
 
+/** «Код / Задача» (CW1.1, ADR 0046). Без чата — значение по умолчанию для новых. */
+ipcMain.handle('session:setKind', (_e, payload = {}) => {
+  const kind = payload.kind === 'task' ? 'task' : 'code';
+  if (payload.sessionId && getSession(payload.sessionId)) {
+    setSessionKind(payload.sessionId, kind);
+    return { ok: true, kind, scope: 'session' };
+  }
+  saveSettings({ defaultKind: kind });
+  return { ok: true, kind, scope: 'default' };
+});
+ipcMain.handle('session:kind', (_e, sessionId) => {
+  const session = sessionId ? getSession(sessionId) : null;
+  return { kind: session?.kind || (loadSettings().defaultKind === 'task' ? 'task' : 'code'), sessionId: session?.id || null };
+});
+
 /** Добавить папку к чату: выбор в системном диалоге — путь из окна не принимается. Расширяет доступ агента — admin. */
 ipcMain.handle('session:addDir', async (event, sessionId) => {
   const session = sessionId ? getSession(sessionId) : null;
@@ -1707,6 +1725,7 @@ ipcMain.handle('context:stats', (_e, payload = {}) => {
     history: session?.messages || [],
     window,
     skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
+    kind: session?.kind || 'code',
   });
 });
 
@@ -2288,6 +2307,7 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         // Чекпоинты правок для отката (CC6.1).
         checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
         extraDirs: (getSession(session.id)?.extraDirs || []).filter((d) => fs.existsSync(d)),
+        kind: getSession(session.id)?.kind || 'code',
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
