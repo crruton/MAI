@@ -335,6 +335,7 @@ async function pickAttachments() {
 const MODE_FALLBACK = [
   { id: 'manual', label: 'Вручную', description: 'Спрашивать перед каждой правкой, командой и внешним инструментом.' },
   { id: 'acceptEdits', label: 'Принимать правки', description: 'Правки файлов — без вопросов, команды и внешние инструменты — с подтверждением.' },
+  { id: 'smart', label: 'Авто', description: 'Правки проекта и безопасные команды — без вопросов; рискованное — с подтверждением.' },
   { id: 'plan', label: 'План', description: 'Только чтение и план с альтернативами.' },
   { id: 'dontAsk', label: 'Только разрешённое', description: 'Только то, что разрешено правилами; остальное отклоняется.' },
   { id: 'bypass', label: 'Без вопросов', description: 'Всё без подтверждения, кроме guardrails и правил deny.', warning: true, adminOnly: true },
@@ -350,7 +351,7 @@ async function renderModeSelect() {
       el('option', {
         value: mode.id,
         text: mode.warning ? `⚠ ${mode.label}` : mode.label,
-        title: mode.disabled ? `${mode.description} Недоступно для вашей роли.` : mode.description || '',
+        title: mode.disabled ? `${mode.description} Недоступно: ${mode.reason || 'для вашей роли или этой папки'}.` : mode.description || '',
         disabled: mode.disabled ? 'disabled' : null,
       }),
     );
@@ -593,7 +594,243 @@ function isNearBottom() {
   return box.scrollHeight - box.scrollTop - box.clientHeight < 120;
 }
 
+/* ---------- рабочие папки чата (CW1.2, ADR 0045) ---------- */
+
+let workDirsFor = undefined;
+async function renderWorkDirs(force = false) {
+  const bar = $('#work-dirs');
+  if (!bar || (!force && workDirsFor === state.sessionId)) return;
+  workDirsFor = state.sessionId;
+  if (!state.sessionId) {
+    bar.hidden = true;
+    return;
+  }
+  let info;
+  try {
+    info = await api.chat.dirs(state.sessionId);
+  } catch {
+    bar.hidden = true;
+    return;
+  }
+  const extra = (info.roots || []).filter((r) => !r.primary);
+  const admin = state.auth?.role !== 'guest';
+  bar.replaceChildren(
+    el('span', { class: 'hint-text', text: 'Папки:' }),
+    el('span', { class: 'work-dir primary', title: info.roots?.[0]?.dir || '', text: info.roots?.[0]?.name || 'проект' }),
+    ...extra.map((r) =>
+      el('span', { class: 'work-dir', title: r.dir, 'data-dir': r.dir }, [
+        `@${r.name}`,
+        el('button', {
+          class: 'work-dir-remove',
+          type: 'button',
+          title: 'Убрать доступ',
+          text: '×',
+          onclick: async () => {
+            await api.chat.removeDir(state.sessionId, r.dir);
+            renderWorkDirs(true);
+          },
+        }),
+      ]),
+    ),
+    ...(info.missing || []).map((d) => el('span', { class: 'work-dir missing', title: d, text: `${d.split(/[\\/]/).pop()} (нет на диске)` })),
+    admin
+      ? el('button', {
+          class: 'btn ghost small work-dir-add',
+          type: 'button',
+          text: '＋ папка',
+          title: 'Дать агенту доступ к ещё одной папке в этом чате',
+          onclick: async () => {
+            const r = await api.chat.addDir(state.sessionId);
+            if (r?.ok === false && !r.cancelled) toast(r.error, 'err');
+            renderWorkDirs(true);
+          },
+        })
+      : null,
+  );
+  bar.hidden = false;
+}
+
+/* ---------- прерванная работа (CW5.2, ADR 0051) ---------- */
+
+const CONTINUE_PROMPT =
+  'Работа прервалась: приложение закрылось, пока ты выполнял задачу. Продолжи с того места, где остановился. ' +
+  'Сначала проверь, что уже сделано: список задач (todo_write), файлы и результаты команд выше, — и не повторяй выполненные шаги.';
+
+function renderRunBanner() {
+  const banner = $('#run-banner');
+  if (!banner) return;
+  if (state.run?.status !== 'interrupted' || state.running) {
+    banner.hidden = true;
+    return;
+  }
+  const done = (state.todos || []).filter((t) => t.status === 'completed').length;
+  const total = (state.todos || []).length;
+  banner.replaceChildren(
+    el('span', { text: `⏸ Работа прервалась${state.run.endedAt ? ` (${new Date(state.run.endedAt).toLocaleString()})` : ''}: приложение закрылось во время ответа агента${total ? `, сделано ${done} из ${total} задач` : ''}.` }),
+    el('button', {
+      class: 'btn primary small run-continue',
+      type: 'button',
+      text: 'Продолжить',
+      onclick: () => {
+        state.run = null;
+        renderRunBanner();
+        send({ text: CONTINUE_PROMPT, display: 'Продолжить прерванную работу' });
+      },
+    }),
+    el('button', {
+      class: 'btn ghost small',
+      type: 'button',
+      text: 'Скрыть',
+      onclick: () => {
+        state.run = null;
+        renderRunBanner();
+      },
+    }),
+  );
+  banner.hidden = false;
+}
+
+/* ---------- «Код / Задача» (CW1.1, ADR 0046) ---------- */
+
+let kindFor = undefined;
+function paintKind() {
+  $('#results-btn')?.addEventListener('click', openResults);
+  $('#effort-select')?.addEventListener('change', (e) => {
+    state.effort = e.target.value;
+    try {
+      localStorage.setItem('mai.effort', state.effort);
+    } catch {
+      /* хранилище недоступно */
+    }
+  });
+  try {
+    state.effort = localStorage.getItem('mai.effort') || '';
+  } catch {
+    state.effort = '';
+  }
+  for (const button of document.querySelectorAll('#kind-toggle .kind-btn')) {
+    button.classList.toggle('active', button.dataset.kind === (state.kind || 'code'));
+  }
+  const input = $('#input');
+  if (input) input.placeholder = state.kind === 'task'
+    ? 'Опишите задачу: что сделать с документами, какой нужен результат…  Enter — отправить'
+    : 'Опишите задачу…  Enter — отправить, Shift+Enter — новая строка. Файлы можно перетащить сюда';
+}
+async function syncKind(force = false) {
+  if (!force && kindFor === state.sessionId) return;
+  kindFor = state.sessionId;
+  try {
+    state.kind = (await api.chat.kind(state.sessionId || null)).kind;
+  } catch {
+    state.kind = state.kind || 'code';
+  }
+  paintKind();
+}
+async function setKind(kind) {
+  const result = await api.chat.setKind(state.sessionId || null, kind);
+  state.kind = result.kind;
+  paintKind();
+  toast(result.kind === 'task' ? 'Режим «Задача»: документы и данные, без git и инструментов кода' : 'Режим «Код»: программирование', 'ok');
+}
+
+/* ---------- результаты задачи (CW2.6, ADR 0047) ---------- */
+
+const RESULT_STATUS = { created: 'создан', changed: 'изменён', deleted: 'удалён' };
+let resultsFor = undefined;
+async function refreshResults(force = false) {
+  const button = $('#results-btn');
+  if (!button) return;
+  if (!force && resultsFor === state.sessionId) return;
+  resultsFor = state.sessionId;
+  let items = [];
+  try {
+    items = state.sessionId ? await api.chat.results(state.sessionId) : [];
+  } catch {
+    items = [];
+  }
+  state.results = items;
+  button.hidden = !items.length;
+  button.textContent = `📄 Результаты · ${items.length}`;
+}
+
+async function openResults() {
+  await refreshResults(true);
+  const items = state.results || [];
+  const preview = el('pre', { class: 'result-preview', text: 'Выберите файл, чтобы посмотреть начало.' });
+  const list = el(
+    'div',
+    { class: 'results-list' },
+    items.map((item) =>
+      el('div', { class: `result-row status-${item.status}`, 'data-file': item.file }, [
+        el('button', {
+          class: 'result-name',
+          type: 'button',
+          text: item.name,
+          title: item.file,
+          onclick: async () => {
+            const r = await api.chat.previewResult(state.sessionId, item.file);
+            preview.textContent = !r.ok ? r.error : r.preview === null ? `${item.name}: ${formatBytes(item.size)} — превью только для текстовых файлов, откройте его.` : r.preview || '(пусто)';
+          },
+        }),
+        el('span', { class: 'hint-text', text: `${RESULT_STATUS[item.status]} · ${item.status === 'deleted' ? 'в корзине' : formatBytes(item.size)}` }),
+        el('span', { class: 'result-actions' }, [
+          item.openable
+            ? el('button', {
+                class: 'btn small result-open',
+                type: 'button',
+                text: 'Открыть',
+                onclick: async () => {
+                  const r = await api.chat.openResult(state.sessionId, item.file);
+                  if (r?.ok === false) toast(r.error, 'err');
+                },
+              })
+            : null,
+          el('button', {
+            class: 'btn ghost small result-show',
+            type: 'button',
+            text: 'В папке',
+            onclick: () => api.chat.showResult(state.sessionId, item.file),
+          }),
+        ]),
+      ]),
+    ),
+  );
+  openModal({
+    title: 'Результаты чата',
+    body: [
+      items.length ? list : el('p', { class: 'hint-text', text: 'Агент в этом чате ещё не создавал и не менял файлов.' }),
+      items.length ? preview : null,
+      el('p', { class: 'hint-text', text: 'Файлы, которые агент создал, изменил или удалил (удалённые — в /trash). Открываются только документы и картинки; остальное — «В папке».' }),
+    ],
+  });
+}
+
+/* ---------- глубина рассуждений (CC7.11, ADR 0058) ---------- */
+
+let capsFor = undefined;
+async function refreshEffort() {
+  const select = $('#effort-select');
+  if (!select || capsFor === state.model) return;
+  capsFor = state.model;
+  let caps = null;
+  try {
+    caps = await api.chat.caps(state.model);
+  } catch {
+    caps = null;
+  }
+  state.caps = caps;
+  const levels = caps?.effort || [];
+  for (const option of select.options) option.hidden = Boolean(option.value) && !levels.includes(option.value);
+  select.hidden = !levels.length;
+  if (!levels.includes(state.effort)) state.effort = '';
+  select.value = state.effort || '';
+}
+
 function renderAll() {
+  syncKind();
+  refreshEffort();
+  if (!state.running) refreshResults();
+  renderWorkDirs();
   const box = $('#messages');
   const stick = isNearBottom();
   box.replaceChildren();
@@ -1134,7 +1371,7 @@ function renderSessions() {
       type: 'button',
       onclick: () => loadSession(session.id),
     }, [
-      el('span', { class: 'session-title', text: session.title || 'Без названия' }),
+      el('span', { class: 'session-title', text: `${session.run === 'interrupted' ? '⏸ ' : ''}${session.title || 'Без названия'}`, title: session.run === 'interrupted' ? 'Работа прервалась — откройте чат, чтобы продолжить' : '' }),
       el('span', {
         class: 'session-meta',
         text: `${modelLabel(session.model)} · ${fmtDate(session.updatedAt)}${state.sessionsAll && session.projectDir ? ` · ${shortPath(session.projectDir)}` : ''}`,
@@ -1259,6 +1496,8 @@ async function loadSession(id) {
   state.toolResults = {};
   state.liveOutput = {};
   state.todos = todosFromHistory(state.messages);
+  state.run = session.run || null;
+  renderRunBanner();
   renderTodos();
   refreshContext();
   await refreshCheckpoints();
@@ -1289,6 +1528,8 @@ function newChat() {
   state.toolResults = {};
   state.liveOutput = {};
   state.todos = [];
+  state.run = null;
+  renderRunBanner();
   renderTodos();
   state.context = null;
   renderContextMeter();
@@ -1393,6 +1634,8 @@ async function send(override = null) {
       model: state.model,
       projectDir: state.projectDir,
       permissionMode: state.permissionMode,
+      kind: state.kind || 'code',
+      effort: state.effort || '',
       images,
     }),
   );
@@ -1502,6 +1745,42 @@ const INIT_PROMPT = [
   'Если AGENTS.md уже есть — сохрани действующие правила и дополни.',
 ].join(' ');
 
+/* ---------- git: /commit и /review (CC11.1, CC11.3, ADR 0059) ---------- */
+
+/** Коммит по просьбе: агент смотрит изменения, пишет сообщение, коммитит после подтверждения команды. */
+function commitPrompt(args = '') {
+  const attribution = String(state.settings?.gitAttribution || '').trim();
+  return [
+    'Сделай коммит текущих изменений.',
+    '1. Посмотри `git status` и `git diff` (и `git diff --staged`), `git log -5 --oneline` — чтобы следовать стилю сообщений проекта.',
+    '2. Не добавляй в коммит файлы с секретами (.env, ключи, токены) и случайный мусор (сборки, логи) — если такие есть, скажи о них.',
+    '3. Составь сообщение: короткая первая строка о сути изменения, затем, если нужно, — почему. Покажи его мне в ответе.',
+    attribution ? `4. В конце сообщения добавь строки подписи (каждая — отдельной строкой):\n${attribution}` : '4. Подпись агента в сообщение не добавляй.',
+    '5. Выполни `git add` нужных файлов и `git commit` одной командой run_shell (сообщение — через -m или файл); я подтвержу команду.',
+    'Не делай `git push`, не меняй историю (amend, rebase, reset) и не трогай ветки, если я не прошу.',
+    args ? `Уточнение от меня: ${args}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/** Ревью: текущий diff или PR. Только чтение — находки со ссылками на строки. */
+function reviewPrompt(args = '') {
+  const pr = /^\s*#?(\d+)\s*$/.exec(args)?.[1];
+  const target = pr
+    ? `pull request #${pr}: получи его изменения командой \`gh pr diff ${pr}\` (если gh нет — \`git fetch origin pull/${pr}/head\` и diff с основной веткой)`
+    : args
+      ? `изменения: ${args}`
+      : 'текущие изменения: `git diff HEAD` и новые файлы из `git status`';
+  return [
+    `Сделай ревью кода — ${target}.`,
+    'Только читай: файлы не меняй и ничего не коммить. Чтобы понять контекст, открывай соседний код (read_file, grep).',
+    'Ищи по существу: ошибки логики, падения на краевых случаях, гонки, утечки ресурсов, уязвимости (инъекции, секреты, права), нарушения правил проекта из AGENTS.md, отсутствие тестов для нового поведения.',
+    'Ответ — список находок по убыванию важности: **важно / стоит поправить / мелочь**, `файл:строка`, что не так, чем грозит (конкретный сценарий) и как исправить.',
+    'Не выдумывай проблем ради списка: если серьёзного нет — так и скажи. В конце — одна строка общего вывода.',
+  ].join('\n');
+}
+
 async function loadCommands() {
   try {
     state.commands = await api.commands.list(state.projectDir);
@@ -1541,7 +1820,9 @@ async function runSlash(text) {
     input.value = '';
     autosize();
   };
-  switch (name) {
+  // Своя команда с именем commit/review сильнее встроенной (ADR 0059).
+  const overridden = ['commit', 'review'].includes(name) && (state.commands || []).some((c) => c.name.toLowerCase() === name && c.source !== 'builtin');
+  switch (overridden ? '' : name) {
     case 'help':
       clear();
       await loadCommands();
@@ -1585,6 +1866,14 @@ async function runSlash(text) {
       clear();
       await send({ text: INIT_PROMPT, display: '/init' });
       return;
+    case 'commit':
+      clear();
+      await send({ text: commitPrompt(args), display: `/commit${args ? ` ${args}` : ''}` });
+      return;
+    case 'review':
+      clear();
+      await send({ text: reviewPrompt(args), display: `/review${args ? ` ${args}` : ''}` });
+      return;
     case 'memory':
       clear();
       openMemory();
@@ -1614,9 +1903,29 @@ async function runSlash(text) {
       clear();
       await openHooks();
       return;
+    case 'permissions':
+      clear();
+      await openPermissions();
+      return;
+    case 'trash':
+      clear();
+      await openTrash();
+      return;
+    case 'schedule':
+      clear();
+      await openSchedule();
+      return;
+    case 'connectors':
+      clear();
+      await openConnectors();
+      return;
     case 'agents':
       clear();
       await openSubagents();
+      return;
+    case 'packages':
+      clear();
+      await openPackages();
       return;
     default: {
       const result = await api.commands.expand(state.projectDir, name, args);
@@ -1646,7 +1955,7 @@ async function openHooks() {
               el('div', { class: 'help-row hook-row' }, [
                 el('code', { text: `${r.event}${r.matcher && r.matcher !== '*' ? ` · ${r.matcher}` : ''}` }),
                 el('span', { class: 'suggest-path', text: r.command }),
-                el('span', { class: 'hint-text', text: `${r.source === 'project' ? 'проект' : 'глобальный'} · ${r.timeout} с` }),
+                el('span', { class: 'hint-text', text: `${{ project: 'проект', managed: 'организация' }[r.source] || (r.source?.startsWith?.('package') ? r.source : 'глобальный')} · ${r.timeout} с` }),
               ]),
             ),
           )
@@ -1655,6 +1964,353 @@ async function openHooks() {
       el('p', {
         class: 'hint-text',
         text: `Хуки проекта — ${info.projectFile}; глобальные — поле hooks в settings.json. Команда получает JSON на stdin; код 2 блокирует действие (причина — stderr), JSON { "decision", "reason", "additionalContext" } на stdout — решение и контекст.`,
+      }),
+    ],
+  });
+}
+
+/* ---------- каталог коннекторов (CW3.1, ADR 0052) ---------- */
+
+async function openConnectors() {
+  const grid = el('div', { class: 'connectors' });
+  const render = async () => {
+    const list = await api.mcp.connectors();
+    grid.replaceChildren(
+      ...list.map((c) => {
+        const token = c.auth === 'token' && !c.installed ? el('input', { class: 'connector-token', type: 'password', placeholder: c.tokenHint || 'токен', autocomplete: 'off' }) : null;
+        const label = c.installed ? (c.status === 'ready' ? 'подключён' : c.status === 'needs_auth' ? 'нужен вход' : c.status) : '';
+        return el('div', { class: `connector${c.installed ? ' installed' : ''}`, 'data-id': c.id }, [
+          el('div', { class: 'connector-head' }, [
+            el('b', { text: c.name }),
+            el('span', { class: 'hint-text', text: ` · ${c.category}${c.source === 'managed' ? ' · от организации' : ''}` }),
+            label ? el('span', { class: `badge ${c.status === 'ready' ? 'ok' : c.status === 'needs_auth' ? 'warn' : ''}`, text: label }) : null,
+          ]),
+          el('div', { class: 'hint-text', text: c.description }),
+          el('div', { class: 'hint-text connector-auth', text: c.auth === 'oauth' ? 'Вход через браузер' : c.auth === 'token' ? 'Нужен токен — хранится зашифрованным' : 'Без входа' }),
+          token,
+          c.auth === 'token' && c.tokenUrl && !c.installed
+            ? el('button', { class: 'btn ghost small', type: 'button', text: 'Где взять токен', onclick: () => api.openExternal(c.tokenUrl) })
+            : null,
+          el('div', { class: 'connector-actions' }, [
+            c.installed
+              ? el('button', {
+                  class: 'btn ghost small connector-remove',
+                  type: 'button',
+                  text: 'Отключить',
+                  onclick: async () => {
+                    if (!window.confirm(`Отключить ${c.name}? Вход и токен будут удалены.`)) return;
+                    await api.mcp.removeConnector(c.id);
+                    render();
+                  },
+                })
+              : el('button', {
+                  class: 'btn primary small connector-add',
+                  type: 'button',
+                  text: 'Подключить',
+                  onclick: async (e) => {
+                    const button = e.currentTarget;
+                    button.disabled = true;
+                    button.textContent = c.auth === 'oauth' ? 'Ждём браузер…' : 'Подключаем…';
+                    const r = await api.mcp.addConnector(c.id, token?.value || '');
+                    if (r?.ok === false) toast(r.error, 'err');
+                    else toast(`${c.name} подключён: инструментов ${r.tools?.length || 0}`, 'ok');
+                    state.settings = await api.settings.get();
+                    render();
+                  },
+                }),
+            c.docs ? el('button', { class: 'btn ghost small', type: 'button', text: 'Описание', onclick: () => api.openExternal(c.docs) }) : null,
+          ]),
+        ]);
+      }),
+    );
+  };
+  openModal({
+    title: 'Коннекторы',
+    body: [
+      grid,
+      el('p', {
+        class: 'hint-text',
+        text: 'Коннектор — удалённый MCP-сервер сервиса. Отправка писем, сообщений и публикаций через него всегда спрашивается, даже в «Без вопросов». Свои коннекторы организация задаёт в managed-settings.json (поле connectors). Подключение — роль admin.',
+      }),
+    ],
+  });
+  await render();
+}
+
+/* ---------- плановые задачи (CW5.1, ADR 0050) ---------- */
+
+const RUN_STATUS = { ok: 'готово', error: 'ошибка', busy: 'папка занята — повтор позже' };
+
+async function openSchedule() {
+  const list = el('div', { class: 'schedule-list' });
+  const log = el('div', { class: 'schedule-log' });
+  const render = (view) => {
+    const tasks = view?.tasks || [];
+    list.replaceChildren(
+      ...(tasks.length
+        ? tasks.map((t) =>
+            el('div', { class: `schedule-row${t.enabled ? '' : ' disabled'}`, 'data-id': t.id }, [
+              el('label', { class: 'package-toggle', title: t.enabled ? 'Выключить' : 'Включить' }, [
+                el('input', {
+                  type: 'checkbox',
+                  checked: t.enabled ? 'checked' : null,
+                  onchange: async (e) => {
+                    const r = await api.chat.saveSchedule({ id: t.id, enabled: e.target.checked });
+                    if (r?.ok === false) toast(r.error, 'err');
+                    render(r?.ok === false ? await api.chat.schedule() : r);
+                  },
+                }),
+              ]),
+              el('div', { class: 'package-info' }, [
+                el('b', { text: t.title }),
+                el('span', { class: 'hint-text schedule-when', text: ` · ${t.description}${t.nextRun ? ` · следующий: ${new Date(t.nextRun).toLocaleString()}` : ''}` }),
+                el('div', { class: 'hint-text', text: `${t.kind === 'code' ? 'Код' : 'Задача'} · ${t.projectDir}${t.lastRun ? ` · последний: ${new Date(t.lastRun).toLocaleString()} — ${RUN_STATUS[t.lastStatus] || t.lastStatus}` : ''}${t.running ? ' · выполняется…' : ''}` }),
+                el('div', { class: 'schedule-prompt', text: t.prompt.slice(0, 200) }),
+              ]),
+              el('span', { class: 'trash-actions' }, [
+                el('button', {
+                  class: 'btn small schedule-run',
+                  type: 'button',
+                  text: 'Запустить',
+                  onclick: async (e) => {
+                    e.currentTarget.disabled = true;
+                    toast(`«${t.title}» запущена`, 'ok');
+                    const r = await api.chat.runSchedule(t.id);
+                    toast(r?.ok ? `«${t.title}»: готово` : `«${t.title}»: ${r?.error || 'ошибка'}`, r?.ok ? 'ok' : 'err');
+                    render(await api.chat.schedule());
+                    refreshSessions();
+                  },
+                }),
+                el('button', { class: 'btn ghost small', type: 'button', text: 'Журнал', onclick: () => showLog(t.id) }),
+                el('button', {
+                  class: 'btn ghost small',
+                  type: 'button',
+                  text: 'Удалить',
+                  onclick: async () => {
+                    if (!window.confirm(`Удалить задачу «${t.title}»?`)) return;
+                    render(await api.chat.removeSchedule(t.id));
+                  },
+                }),
+              ]),
+            ]),
+          )
+        : [el('p', { class: 'hint-text', text: 'Плановых задач нет.' })]),
+    );
+  };
+  const showLog = async (id) => {
+    const runs = await api.chat.scheduleRuns(id);
+    log.replaceChildren(
+      el('div', { class: 'docs-group-title', text: 'Журнал запусков' }),
+      ...(runs.length
+        ? runs.map((r) =>
+            el('div', { class: 'help-row schedule-run-row' }, [
+              el('code', { text: new Date(r.at).toLocaleString() }),
+              el('span', { text: `${RUN_STATUS[r.status] || r.status}${r.reason === 'manual' ? ' (вручную)' : ''}${r.error ? `: ${r.error}` : ''}${r.summary ? ` — ${r.summary.slice(0, 160)}` : ''}` }),
+              r.sessionId
+                ? el('button', {
+                    class: 'btn ghost small',
+                    type: 'button',
+                    text: 'Открыть чат',
+                    onclick: () => {
+                      modal.close();
+                      loadSession(r.sessionId);
+                    },
+                  })
+                : el('span'),
+            ]),
+          )
+        : [el('p', { class: 'hint-text', text: 'Запусков ещё не было.' })]),
+    );
+  };
+
+  const title = el('input', { class: 'schedule-title', placeholder: 'Утренняя сводка' });
+  const prompt = el('textarea', { class: 'schedule-prompt-input', rows: '3', placeholder: 'Что сделать: «Прочитай новые файлы в @Входящие и сделай сводку в сводка.md»' });
+  const when = el('select', { class: 'schedule-type' }, [
+    el('option', { value: 'weekdays', text: 'по будням' }),
+    el('option', { value: 'daily', text: 'каждый день' }),
+    el('option', { value: 'interval', text: 'каждые N минут' }),
+  ]);
+  const time = el('input', { class: 'schedule-time', type: 'time', value: '09:00' });
+  const every = el('input', { class: 'schedule-every', type: 'number', min: '15', value: '60', title: 'Минут, не меньше 15' });
+  const kind = el('select', { class: 'schedule-kind' }, [el('option', { value: 'task', text: 'Задача' }), el('option', { value: 'code', text: 'Код' })]);
+  const add = async () => {
+    const schedule =
+      when.value === 'interval'
+        ? { type: 'interval', everyMinutes: Number(every.value) }
+        : { type: 'daily', time: time.value, days: when.value === 'weekdays' ? [1, 2, 3, 4, 5] : [1, 2, 3, 4, 5, 6, 7] };
+    const r = await api.chat.saveSchedule({ title: title.value, prompt: prompt.value, schedule, kind: kind.value, projectDir: state.projectDir, model: state.model });
+    if (r?.ok === false) return toast(r.error, 'err');
+    title.value = '';
+    prompt.value = '';
+    render(r);
+  };
+  const modal = openModal({
+    title: 'Плановые задачи',
+    body: [
+      list,
+      log,
+      el('div', { class: 'docs-group-title', text: 'Новая задача (в текущей папке)' }),
+      field('Название', title),
+      field('Что сделать', prompt),
+      el('div', { class: 'row' }, [field('Когда', when), field('Время', time), field('Каждые, мин', every), field('Вид', kind)]),
+      el('button', { class: 'btn primary small schedule-add', type: 'button', text: 'Добавить', onclick: add }),
+      el('p', {
+        class: 'hint-text',
+        text: 'Задача выполняется, пока открыто приложение, в режиме «Только разрешённое»: спросить некого, поэтому выполняется только то, что разрешено правилами (/permissions). Пропущенный запуск (приложение было закрыто) выполнится один раз после старта, если прошло меньше суток. Результат — новый чат «⏰ …» и уведомление.',
+      }),
+    ],
+  });
+  render(await api.chat.schedule());
+}
+
+/* ---------- корзина (CW1.4, ADR 0044) ---------- */
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} Б`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} КБ`;
+  return `${(n / 1024 / 1024).toFixed(1)} МБ`;
+}
+
+async function openTrash() {
+  const list = el('div', { class: 'help-table trash-list' });
+  const render = async () => {
+    const { items } = await api.chat.trash();
+    list.replaceChildren(
+      ...(items.length
+        ? items.map((item) =>
+            el('div', { class: 'help-row trash-row', 'data-id': item.id }, [
+              el('code', { text: item.name }),
+              el('span', { class: 'suggest-path', text: `${item.original} · ${item.dir ? `папка, файлов: ${item.files}` : formatBytes(item.bytes)} · ${new Date(item.deletedAt).toLocaleString()}` }),
+              el('span', { class: 'trash-actions' }, [
+                el('button', {
+                  class: 'btn small trash-restore',
+                  type: 'button',
+                  text: 'Восстановить',
+                  onclick: async () => {
+                    let r = await api.chat.restoreTrash(item.id);
+                    if (r?.ok === false && /уже есть/.test(r.error || '') && window.confirm(`${r.error}. Заменить?`)) r = await api.chat.restoreTrash(item.id, true);
+                    if (r?.ok === false) return toast(r.error, 'err');
+                    toast(`Восстановлено: ${item.original}`, 'ok');
+                    render();
+                  },
+                }),
+                el('button', {
+                  class: 'btn ghost small trash-purge',
+                  type: 'button',
+                  text: 'Удалить навсегда',
+                  onclick: async () => {
+                    if (!window.confirm(`Удалить «${item.name}» без возможности восстановить?`)) return;
+                    await api.chat.purgeTrash({ id: item.id });
+                    render();
+                  },
+                }),
+              ]),
+            ]),
+          )
+        : [el('p', { class: 'hint-text', text: 'Корзина пуста.' })]),
+    );
+  };
+  await render();
+  openModal({
+    title: 'Корзина',
+    body: [
+      list,
+      el('p', {
+        class: 'hint-text',
+        text: 'Агент не удаляет файлы окончательно: инструмент delete_file переносит их сюда, и на каждое удаление спрашивается разрешение (кроме режима «Без вопросов»). Записи старше 30 дней удаляются сами.',
+      }),
+    ],
+  });
+}
+
+/* ---------- панель «Разрешения» (CC2.9, ADR 0038) ---------- */
+
+const LEVEL_LABEL = {
+  managed: 'организация',
+  global: 'пользователь',
+  project: 'проект (git)',
+  local: 'проект (только у меня)',
+  session: 'этот чат',
+};
+const ACTION_LABEL = { allow: 'разрешено', ask: 'спросит', deny: 'запрещено' };
+
+async function openPermissions() {
+  const info = await api.permissions.modes(state.sessionId);
+  const editable = { session: Boolean(info.sessionId), local: info.trusted && info.role === 'admin', global: info.role === 'admin' };
+  const list = el('div', { class: 'help-table perm-rules' });
+  const render = (data) => {
+    list.replaceChildren();
+    let count = 0;
+    for (const level of ['managed', 'global', 'project', 'local', 'session']) {
+      const rules = data.rules?.[level] || {};
+      for (const kind of ['deny', 'ask', 'allow']) {
+        for (const rule of rules[kind] || []) {
+          count += 1;
+          list.append(
+            el('div', { class: 'help-row perm-row', 'data-level': level, 'data-kind': kind }, [
+              el('span', { class: `perm-kind perm-${kind}`, text: kind }),
+              el('code', { text: rule }),
+              el('span', { class: 'hint-text', text: LEVEL_LABEL[level] }),
+              editable[level]
+                ? el('button', {
+                    class: 'btn ghost small',
+                    type: 'button',
+                    text: 'Убрать',
+                    onclick: async () => {
+                      const result = await api.permissions.rules({ sessionId: state.sessionId, scope: level, kind, remove: [rule] });
+                      if (result?.ok === false) return toast(result.error, 'error');
+                      render(await api.permissions.modes(state.sessionId));
+                    },
+                  })
+                : el('span'),
+            ]),
+          );
+        }
+      }
+    }
+    if (!count) list.append(el('p', { class: 'hint-text', text: 'Правил нет — решения принимает режим.' }));
+  };
+  render(info);
+
+  const tool = el('select', { class: 'perm-tool' }, [
+    el('option', { value: 'run_shell', text: 'команда (run_shell)' }),
+    el('option', { value: 'write_file', text: 'запись файла (write_file)' }),
+    el('option', { value: 'edit_file', text: 'правка файла (edit_file)' }),
+    el('option', { value: 'read_file', text: 'чтение файла (read_file)' }),
+  ]);
+  const subject = el('input', { class: 'perm-subject', placeholder: 'npm test или src/app.js' });
+  const verdict = el('p', { class: 'perm-verdict hint-text' });
+  const check = async () => {
+    const r = await api.permissions.explain({ sessionId: state.sessionId, tool: tool.value, subject: subject.value });
+    const where = r.levels?.length ? ` (${r.levels.map((l) => LEVEL_LABEL[l === 'user' ? 'global' : l] || l).join(', ')})` : '';
+    verdict.textContent = `${ACTION_LABEL[r.action] || r.action}${r.rule ? ` — правило ${r.rule}${where}` : ''}${r.reason ? ` · ${r.reason}` : ''}`;
+    verdict.dataset.action = r.action;
+  };
+  subject.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') check();
+  });
+
+  const modeLabel = info.modes?.find((m) => m.id === info.current)?.label || info.current;
+  openModal({
+    title: 'Разрешения',
+    body: [
+      el('p', { text: `Режим: ${modeLabel}. Запрет (deny) с любого уровня сильнее любого разрешения.` }),
+      info.managed?.present
+        ? el('p', {
+            class: 'hint-text',
+            text: `Настройки организации: ${info.managed.file}${info.managed.disableBypassMode ? ' · «Без вопросов» запрещён' : ''}`,
+          })
+        : null,
+      info.trusted ? null : el('p', { class: 'hint-text', text: 'Папка не доверена: правила проекта не действуют.' }),
+      list,
+      el('h4', { text: 'Что будет с вызовом' }),
+      el('div', { class: 'perm-check' }, [tool, subject, el('button', { class: 'btn', type: 'button', text: 'Проверить', onclick: check })]),
+      verdict,
+      el('p', {
+        class: 'hint-text',
+        text: info.files
+          ? `Проект: ${info.files.project} (в git) и ${info.files.local} (только у вас). Пользователь — поле permissions в settings.json.`
+          : 'Откройте проект, чтобы видеть его правила.',
       }),
     ],
   });
@@ -1682,6 +2338,181 @@ async function openSubagents() {
       }),
     ],
   });
+}
+
+/* ---------- пакеты плагинов (ADR 0037) ---------- */
+
+function packageParts(parts = {}) {
+  const items = [];
+  if (parts.commands) items.push(`команд: ${parts.commands}`);
+  if (parts.agents) items.push(`агентов: ${parts.agents}`);
+  if (parts.skills) items.push(`навыков: ${parts.skills}`);
+  if (parts.plugins) items.push(`плагинов: ${parts.plugins}`);
+  if (parts.hooks) items.push('хуки');
+  if (parts.mcp) items.push(`MCP: ${parts.mcp}`);
+  return items.join(' · ') || 'пусто';
+}
+
+async function openPackages() {
+  const box = el('div', { class: 'packages-list' });
+  const source = el('input', { class: 'sessions-search package-source', placeholder: 'Папка с mai-package.json или git-URL (https://…)' });
+  const render = async () => {
+    const info = await api.chat.packages(state.projectDir);
+    box.replaceChildren(
+      ...(info.packages.length
+        ? info.packages.map((p) =>
+            el('div', { class: `package-row${p.enabled ? '' : ' disabled'}` }, [
+              el('label', { class: 'package-toggle', title: p.enabled ? 'Выключить' : 'Включить' }, [
+                el('input', {
+                  type: 'checkbox',
+                  checked: p.enabled ? 'checked' : null,
+                  onchange: async (e) => {
+                    const r = await api.chat.togglePackage(p.name, e.target.checked);
+                    if (r?.ok === false) toast(r.error || 'Не удалось', 'err');
+                    state.commands = null;
+                    render();
+                  },
+                }),
+              ]),
+              el('div', { class: 'package-info' }, [
+                el('b', { text: `${p.name}${p.version ? ` ${p.version}` : ''}` }),
+                el('span', { class: 'hint-text', text: ` · ${p.source === 'project' ? 'проект' : 'глобальный'}${p.executable ? ' · исполняемый код' : ''}` }),
+                p.description ? el('div', { class: 'hint-text', text: p.description }) : null,
+                el('div', { class: 'package-parts', text: packageParts(p.parts) }),
+              ]),
+              p.source === 'global'
+                ? el('button', {
+                    class: 'btn ghost small',
+                    type: 'button',
+                    text: 'Удалить',
+                    onclick: async () => {
+                      if (!window.confirm(`Удалить пакет «${p.name}»?`)) return;
+                      const r = await api.chat.uninstallPackage(p.name);
+                      if (r?.ok === false) toast(r.error || 'Не удалось', 'err');
+                      state.commands = null;
+                      render();
+                    },
+                  })
+                : null,
+            ]),
+          )
+        : [el('div', { class: 'sessions-empty', text: 'Пакетов нет.' })]),
+      info.trusted ? null : el('p', { class: 'hint-text', text: 'Папка не доверена: пакеты проекта не загружены.' }),
+    );
+  };
+  const install = async (replace = false) => {
+    const from = source.value.trim();
+    if (!from) return;
+    const r = await api.chat.installPackage(from, replace);
+    if (r?.ok === false && /уже установлен/.test(r.error || '') && window.confirm(`${r.error}. Заменить?`)) return install(true);
+    if (r?.ok === false) {
+      toast(r.error || 'Пакет не установлен', 'err');
+      return;
+    }
+    toast(`Установлен ${r.package.name}: ${packageParts(r.package.parts)}`, 'ok');
+    source.value = '';
+    state.commands = null;
+    render();
+  };
+  // Каталоги (маркетплейс, ADR 0042).
+  const market = el('div', { class: 'market-list' });
+  const marketUrl = el('input', { class: 'market-url', placeholder: 'Каталог: git-URL или папка с mai-marketplace.json' });
+  const renderMarket = (data) => {
+    const list = data?.marketplaces || [];
+    market.replaceChildren(
+      ...(list.length
+        ? list.map((m) =>
+            el('div', { class: 'market', 'data-market': m.name }, [
+              el('div', { class: 'market-head' }, [
+                el('b', { text: m.name }),
+                el('span', { class: 'hint-text', text: ` · ${m.url}${m.description ? ` · ${m.description}` : ''}` }),
+                el('button', {
+                  class: 'btn ghost small',
+                  type: 'button',
+                  text: 'Убрать',
+                  onclick: async () => renderMarket(await api.chat.removeMarketplace(m.name)),
+                }),
+              ]),
+              m.error ? el('p', { class: 'hint-text', text: m.error }) : null,
+              ...m.packages.map((p) =>
+                el('div', { class: 'market-row', 'data-package': p.name }, [
+                  el('div', { class: 'package-info' }, [
+                    el('b', { text: `${p.name}${p.version ? ` ${p.version}` : ''}` }),
+                    el('span', {
+                      class: 'hint-text market-state',
+                      text: p.installedVersion === null ? '' : p.updateAvailable ? ` · установлена ${p.installedVersion || 'без версии'}` : ' · установлен',
+                    }),
+                    p.description ? el('div', { class: 'hint-text', text: p.description }) : null,
+                  ]),
+                  p.installedVersion !== null && !p.updateAvailable
+                    ? el('span')
+                    : el('button', {
+                        class: `btn small ${p.updateAvailable ? 'primary' : 'ghost'} market-install`,
+                        type: 'button',
+                        text: p.updateAvailable ? 'Обновить' : 'Установить',
+                        onclick: async (e) => {
+                          e.currentTarget.disabled = true;
+                          const r = await api.chat.installFromMarketplace(m.name, p.name, p.installedVersion !== null);
+                          if (r?.ok === false) {
+                            toast(r.error || 'Пакет не установлен', 'err');
+                            e.currentTarget.disabled = false;
+                            return;
+                          }
+                          toast(`${p.updateAvailable ? 'Обновлён' : 'Установлен'} ${r.package.name} ${r.package.version || ''}: ${packageParts(r.package.parts)}`, 'ok');
+                          state.commands = null;
+                          renderMarket(r);
+                          render();
+                        },
+                      }),
+                ]),
+              ),
+            ]),
+          )
+        : [el('p', { class: 'hint-text', text: 'Каталогов нет. Добавьте git-репозиторий или папку с mai-marketplace.json.' })]),
+    );
+  };
+  const addMarket = async () => {
+    const url = marketUrl.value.trim();
+    if (!url) return;
+    const r = await api.chat.addMarketplace(url);
+    if (r?.ok === false) return toast(r.error || 'Каталог не добавлен', 'err');
+    marketUrl.value = '';
+    renderMarket(r);
+  };
+  openModal({
+    title: 'Пакеты плагинов',
+    body: [
+      box,
+      el('div', { class: 'docs-group-title', text: 'Каталоги' }),
+      market,
+      el('div', { class: 'row' }, [
+        marketUrl,
+        el('button', { class: 'btn small', type: 'button', text: 'Добавить', onclick: addMarket }),
+        el('button', {
+          class: 'btn ghost small',
+          type: 'button',
+          text: 'Обновить каталоги',
+          onclick: async () => {
+            const r = await api.chat.refreshMarketplaces();
+            if (r?.errors?.length) toast(r.errors.join('; '), 'err');
+            renderMarket(r);
+          },
+        }),
+      ]),
+      el('div', { class: 'docs-group-title', text: 'Установить' }),
+      el('div', { class: 'row' }, [source, el('button', { class: 'btn primary small package-install', type: 'button', text: 'Установить', onclick: () => install(false) })]),
+      el('p', {
+        class: 'hint-text',
+        text: 'Пакет — папка с mai-package.json и папками commands/, agents/, skills/, plugins/, файлами hooks.json и mcp.json. Плагины, хуки и MCP пакета — исполняемый код: ставьте только проверенные пакеты. Установка, удаление и включение — роль admin.',
+      }),
+    ],
+  });
+  await render();
+  try {
+    renderMarket(await api.chat.marketplaces());
+  } catch {
+    renderMarket(null);
+  }
 }
 
 /* ---------- быстрая запись в память (CC4.3) ---------- */
@@ -2237,6 +3068,7 @@ function renderTodos() {
     return;
   }
   const done = todos.filter((t) => t.status === 'completed').length;
+  const current = todos.find((t) => t.status === 'in_progress');
   const icon = { pending: '☐', in_progress: '◐', completed: '☑' };
   box.replaceChildren(
     el(
@@ -2249,7 +3081,12 @@ function renderTodos() {
           renderTodos();
         },
       },
-      [el('span', { text: `Задачи агента: ${done} из ${todos.length}` }), el('span', { class: 'hint-text', text: state.todosCollapsed ? '▸' : '▾' })],
+      [
+        el('span', { text: `Задачи агента: ${done} из ${todos.length}` }),
+        // Текущий шаг виден и в свёрнутом списке (CW5.3).
+        current ? el('span', { class: 'todos-current hint-text', text: `сейчас: ${current.activeForm || current.content}` }) : null,
+        el('span', { class: 'hint-text', text: state.todosCollapsed ? '▸' : '▾' }),
+      ],
     ),
     state.todosCollapsed
       ? null
@@ -2405,7 +3242,7 @@ function handleEvent(event) {
       toast('Подтверждение истекло — действие отменено', 'err');
       break;
     case 'notice':
-      toast(event.text || '', 'ok');
+      toast(event.text || '', event.level === 'warn' ? 'err' : 'ok');
       break;
     case 'review:start':
       toast(`Ревизор ${event.model || ''} проверяет ответ…`);
@@ -2420,6 +3257,7 @@ function handleEvent(event) {
       break;
     case 'done':
       refreshCheckpoints().then(() => renderAll());
+      refreshResults(true);
       notify('Агент закончил', [...(event.messages || [])].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '');
       state.messages = event.messages || state.messages;
       state.live = null;
@@ -2435,6 +3273,12 @@ function handleEvent(event) {
       setRunning(false);
       renderAll();
       refreshSessions();
+      break;
+    case 'scheduled:run':
+      refreshSessions();
+      break;
+    case 'scheduled:open':
+      if (event.sessionId) loadSession(event.sessionId);
       break;
     case 'saved':
       if (event.sessionId) state.sessionId = event.sessionId;
@@ -2483,12 +3327,27 @@ function handleEvent(event) {
 }
 
 const RISK_LABEL = { low: 'Низкий риск', medium: 'Средний риск', high: 'Высокий риск' };
+/** Аргументы инструмента по строкам: «поле: значение» — для превью отправки. */
+function prettyArgs(raw) {
+  try {
+    const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!data || typeof data !== 'object') return String(raw);
+    return Object.entries(data)
+      .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value, null, 2)}`)
+      .join('\n');
+  } catch {
+    return String(raw);
+  }
+}
+
 const CLASS_LABEL = {
   read: 'чтение',
   write: 'правка файла',
+  delete: 'удаление (в корзину)',
   exec: 'команда',
   memory: 'память',
   network: 'сеть',
+  send: 'отправка от вашего имени',
   external: 'внешний инструмент',
 };
 
@@ -2560,6 +3419,7 @@ function approvalCard() {
   feedback.value = a.feedback || '';
   const scope = el('select', { class: 'approve-scope', onchange: (e) => (a.scope = e.target.value) }, [
     el('option', { value: 'session', text: 'в этом чате' }),
+    el('option', { value: 'local', text: 'в этом проекте (только у меня)' }),
     el('option', { value: 'global', text: 'всегда (все чаты)' }),
   ]);
   scope.value = a.scope || 'session';
@@ -2582,8 +3442,15 @@ function approvalCard() {
     ]),
     el('div', { class: 'approve-args', text: a.summary || '' }),
     diffView(a.diff),
-    a.why ? el('p', { class: 'hint-text', text: `Почему спрашиваем: ${a.why}.` }) : null,
+    a.why
+      ? el('p', {
+          class: `hint-text approve-why${a.decisionSource === 'injection' ? ' approve-injection' : ''}`,
+          text: `${a.decisionSource === 'injection' ? '⚠ Возможна атака через данные' : a.decisionSource === 'classifier' ? 'Авто спрашивает' : 'Почему спрашиваем'}: ${a.why}.`,
+        })
+      : null,
     a.rule ? el('p', { class: 'hint-text', text: `Сработало правило ask: ${a.rule}` }) : null,
+    // Отправка (CW3.2): что уйдёт — сразу видно, не под спойлером.
+    a.args && a.cls === 'send' ? el('div', { class: 'approve-send' }, [el('div', { class: 'approve-send-title', text: 'Будет отправлено:' }), el('pre', { class: 'approve-send-body', text: prettyArgs(a.args) })]) : null,
     a.args && a.cls === 'external'
       ? el('details', { class: 'approve-details' }, [el('summary', { text: 'Аргументы' }), el('pre', { text: a.args })])
       : null,
@@ -2624,6 +3491,12 @@ async function openSettings() {
   const settings = state.settings;
   const temperature = el('input', { type: 'number', step: '0.1', min: '0', max: '2', value: settings.temperature });
   const maxIterations = el('input', { type: 'number', min: '1', max: '100', value: settings.maxIterations });
+  // Запасная модель (ADR 0057): на неё агент переходит, если основная недоступна.
+  // Git (ADR 0059): защищённые ветки и подпись коммитов.
+  const protectedBranches = el('input', { class: 'protected-branches', placeholder: 'main, master (пусто — без защиты)', value: (settings.protectedBranches ?? ['main', 'master']).join(', ') });
+  const gitAttribution = el('textarea', { class: 'git-attribution', rows: '2', placeholder: 'Подпись в коммитах агента, например: Co-Authored-By: MAI Code <ai@example.com>' });
+  gitAttribution.value = settings.gitAttribution || '';
+  const fallbackModel = el('input', { class: 'fallback-model', placeholder: 'провайдер/модель, например openai/gpt-5-mini', value: settings.fallbackModel || '' });
   const outside = el('input', { type: 'checkbox' });
   outside.checked = Boolean(settings.allowOutsideProject);
   const reviewerEnabled = el('input', { type: 'checkbox' });
@@ -2658,6 +3531,30 @@ async function openSettings() {
     placeholder: 'Дополнительные запреты: по одному регулярному выражению в строке',
   });
   guardExtra.value = (guard.extraDeny || []).join('\n');
+  // Песочница для команд агента (ADR 0040).
+  const shellBox = settings.shellSandbox || {};
+  const shellDocker = el('input', { type: 'checkbox', class: 'shell-sandbox-docker' });
+  shellDocker.checked = shellBox.mode === 'docker';
+  const shellImage = el('input', { class: 'shell-sandbox-image', value: shellBox.image || 'node:22-bookworm-slim' });
+  const shellNetwork = el('select', { class: 'shell-sandbox-network' }, [
+    el('option', { value: 'none', text: 'выключена' }),
+    el('option', { value: 'bridge', text: 'включена' }),
+  ]);
+  shellNetwork.value = shellBox.network === 'bridge' ? 'bridge' : 'none';
+  const shellHost = el('textarea', { rows: '2', class: 'shell-sandbox-host', placeholder: 'Команды на хосте, по маске в строке: git *' });
+  // Поиск в интернете (ADR 0056).
+  const web = settings.webSearch || {};
+  const webProvider = el('select', { class: 'web-provider' }, [
+    el('option', { value: 'duckduckgo', text: 'DuckDuckGo (без ключа)' }),
+    el('option', { value: 'searxng', text: 'SearXNG (свой адрес)' }),
+    el('option', { value: 'brave', text: 'Brave Search (ключ)' }),
+  ]);
+  webProvider.value = web.provider || 'duckduckgo';
+  const webUrl = el('input', { class: 'web-url', placeholder: 'https://searx.example.org', value: web.url || '' });
+  const webKey = el('input', { class: 'web-key', type: 'password', placeholder: web.apiKeySet ? 'ключ сохранён' : 'ключ Brave Search', value: web.apiKeySet ? '***' : '' });
+  const webPrivate = el('input', { type: 'checkbox', class: 'web-private' });
+  webPrivate.checked = Boolean(web.allowPrivate);
+  shellHost.value = (shellBox.hostCommands || []).join('\n');
   const telemetry = settings.telemetry || {};
   const telemetryEnabled = el('input', { type: 'checkbox' });
   telemetryEnabled.checked = Boolean(telemetry.enabled);
@@ -2729,6 +3626,9 @@ async function openSettings() {
       el('div', { class: 'row' }, [
         field('Температура', temperature),
         field('Максимум шагов агента', maxIterations),
+        field('Запасная модель', fallbackModel),
+        field('Защищённые ветки (пуш запрещён)', protectedBranches),
+        field('Подпись в коммитах (/commit)', gitAttribution),
       ]),
       el('label', { class: 'field' }, [
         el('span', { text: 'Доступ к файлам вне проекта' }),
@@ -2773,6 +3673,17 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Guardrails не заменяют песочницу: внешние рантаймы запускаются как отдельные процессы/контейнеры и не проходят эти проверки.',
       }),
+      el('div', { class: 'docs-group-title', text: 'Команды агента' }),
+      el('label', { class: 'hint-text' }, [shellDocker, ' выполнять run_shell в Docker-песочнице (проект в /workspace, без лишних прав)']),
+      el('div', { class: 'row' }, [field('Образ', shellImage), field('Сеть в контейнере', shellNetwork)]),
+      field('На хосте (маски)', shellHost),
+      el('p', {
+        class: 'hint-text',
+        text: 'Команда в контейнере — Linux (sh), даже на Windows. Если Docker не запущен, команда не выполнится на хосте молча — агент получит ошибку. Правки файлов проекта из контейнера видны сразу.',
+      }),
+      el('div', { class: 'docs-group-title', text: 'Поиск в интернете' }),
+      el('div', { class: 'row' }, [field('Поисковик', webProvider), field('Адрес SearXNG', webUrl), field('Ключ', webKey)]),
+      el('label', { class: 'hint-text' }, [webPrivate, ' разрешить web_fetch адреса локальной сети (localhost, 192.168.*) — осторожно']),
       el('div', { class: 'docs-group-title', text: 'OpenTelemetry' }),
       el('label', { class: 'hint-text' }, [telemetryEnabled, ' отправлять логи и трейсы в OTLP-коллектор']),
       field('OTLP HTTP endpoint', telemetryEndpoint),
@@ -2816,6 +3727,9 @@ async function openSettings() {
           state.settings = await api.settings.save({
             temperature: Number(temperature.value),
             maxIterations: Number(maxIterations.value),
+            fallbackModel: fallbackModel.value.trim(),
+            protectedBranches: protectedBranches.value.split(',').map((b) => b.trim()).filter(Boolean),
+            gitAttribution: gitAttribution.value.trim(),
             allowOutsideProject: outside.checked,
             reviewer: {
               enabled: reviewerEnabled.checked,
@@ -2829,6 +3743,13 @@ async function openSettings() {
               allowSecrets: guardAllowSecrets.checked,
               maxCommandLength: Math.max(100, Math.min(20000, Number(guardMaxLength.value || 4000))),
               extraDeny: guardExtra.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
+            },
+            webSearch: { provider: webProvider.value, url: webUrl.value.trim(), apiKey: webKey.value, allowPrivate: webPrivate.checked },
+            shellSandbox: {
+              mode: shellDocker.checked ? 'docker' : 'off',
+              image: shellImage.value.trim(),
+              network: shellNetwork.value,
+              hostCommands: shellHost.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
             },
             telemetry: {
               enabled: telemetryEnabled.checked,
@@ -3818,25 +4739,58 @@ async function openDocs(start = 'README.md') {
 async function openMcp() {
   const status = await api.mcp.status();
   const servers = (await api.mcp.configs(state.projectDir)) || {};
+  // Область каждого сервера (CC9.5): глобальный, пакет, проект (git), только у меня.
+  let scopes = {};
+  try {
+    scopes = (await api.mcp.scopes(state.projectDir)) || {};
+  } catch {
+    scopes = {};
+  }
+  const SCOPE_LABEL = { global: 'глобальный', package: 'из пакета', project: 'проект (git)', local: 'проект (только у меня)' };
   const list = el('div', { class: 'list' });
   const names = new Set([...Object.keys(servers), ...status.map((s) => s.name)]);
   if (!names.size) list.append(el('p', { class: 'hint-text', text: 'MCP-серверы не настроены.' }));
   for (const name of names) {
     const info = status.find((s) => s.name === name);
     const badge = el('span', {
-      class: `badge ${info?.status === 'ready' ? 'ok' : info?.status === 'error' ? 'err' : ''}`,
-      text: info?.status || (servers[name]?.disabled ? 'выключен' : 'не подключён'),
+      class: `badge ${info?.status === 'ready' ? 'ok' : info?.status === 'error' ? 'err' : info?.status === 'needs_auth' ? 'warn' : ''}`,
+      text: info?.status === 'needs_auth' ? 'нужен вход' : info?.status || (servers[name]?.disabled ? 'выключен' : 'не подключён'),
     });
+    // OAuth (ADR 0041): вход в браузере для HTTP-серверов.
+    const remote = Boolean(servers[name]?.url) && servers[name]?.oauth !== false;
+    const loginButton = remote
+      ? el('button', {
+          class: `btn ${info?.status === 'needs_auth' ? 'primary' : 'ghost'} mcp-login`,
+          type: 'button',
+          text: info?.loggedIn ? 'Выйти' : 'Войти',
+          onclick: async (e) => {
+            const button = e.currentTarget;
+            if (info?.loggedIn) {
+              await api.mcp.logout(name);
+              toast(`Выход из ${name}`, 'ok');
+            } else {
+              button.disabled = true;
+              button.textContent = 'Ждём браузер…';
+              const res = await api.mcp.login(name, state.projectDir);
+              if (!res.ok) toast(res.error, 'err');
+              else toast(`Вход выполнен: ${name}`, 'ok');
+            }
+            modal.close();
+            openMcp();
+          },
+        })
+      : null;
     list.append(
       el('div', { class: 'list-item' }, [
         el('div', {}, [
-          el('div', { class: 'title' }, [name, ' ', badge]),
+          el('div', { class: 'title' }, [name, ' ', badge, scopes[name] ? el('span', { class: 'hint-text mcp-scope', text: ` · ${SCOPE_LABEL[scopes[name]] || scopes[name]}` }) : null]),
           el('div', {
             class: 'sub',
             text: info?.tools?.length ? `инструменты: ${info.tools.join(', ')}` : servers[name]?.url || servers[name]?.command || '',
           }),
         ]),
         el('div', { class: 'actions' }, [
+          loginButton,
           el('button', {
             class: 'btn ghost',
             type: 'button',
@@ -3854,7 +4808,7 @@ async function openMcp() {
             type: 'button',
             text: 'Удалить',
             onclick: async () => {
-              await api.mcp.remove(name);
+              await api.mcp.remove(name, state.projectDir);
               state.settings = await api.settings.get();
               modal.close();
               openMcp();
@@ -3869,16 +4823,33 @@ async function openMcp() {
   const command = el('input', { placeholder: 'npx' });
   const args = el('input', { placeholder: '-y @modelcontextprotocol/server-filesystem C:\\project' });
   const url = el('input', { placeholder: 'https://… (для HTTP-сервера)' });
+  const scope = el('select', { class: 'mcp-add-scope' }, [
+    el('option', { value: 'global', text: 'для всех проектов' }),
+    el('option', { value: 'local', text: 'в этом проекте (только у меня)' }),
+  ]);
 
   const modal = openModal({
     title: 'MCP-серверы',
     body: [
+      el('button', {
+        class: 'btn small open-connectors',
+        type: 'button',
+        text: '🔌 Каталог коннекторов',
+        onclick: () => {
+          modal.close();
+          openConnectors();
+        },
+      }),
       list,
       el('hr', { style: 'border:0;border-top:1px solid var(--border-soft)' }),
       el('div', { class: 'row' }, [field('Имя', name), field('Команда', command)]),
       field('Аргументы (через пробел)', args),
       field('или URL', url),
-      el('p', { class: 'hint-text', text: 'Локальный сервер: команда + аргументы. Удалённый: URL (streamable HTTP).' }),
+      field('Где', scope),
+      el('p', {
+        class: 'hint-text',
+        text: 'Локальный сервер: команда + аргументы. Удалённый: URL (streamable HTTP). «Только у меня» — .mai-code/mcp.local.json, не попадает в git; общий для команды — .mai-code/mcp.json.',
+      }),
     ],
     footer: [
       el('button', {
@@ -3891,6 +4862,13 @@ async function openMcp() {
             ? { url: url.value.trim() }
             : { command: command.value.trim(), args: args.value.trim().split(/\s+/).filter(Boolean) };
           if (!config.url && !config.command) return toast('Нужна команда или URL', 'err');
+          if (scope.value === 'local') {
+            const r = await api.mcp.saveLocal({ projectDir: state.projectDir, name: name.value.trim(), config });
+            if (r?.ok === false) return toast(r.error, 'err');
+            modal.close();
+            openMcp();
+            return;
+          }
           const serversNext = { ...(state.settings.mcpServers || {}), [name.value.trim()]: config };
           state.settings = await api.settings.save({ mcpServers: serversNext });
           await api.mcp.sync(state.projectDir);
@@ -4472,6 +5450,10 @@ $('#export-chat').addEventListener('click', async (event) => {
   $('#project-btn').addEventListener('click', pickProject);
   $('#new-project-btn').addEventListener('click', newProjectModal);
   $('#settings-btn').addEventListener('click', openSettings);
+  for (const button of document.querySelectorAll('#kind-toggle .kind-btn')) {
+    button.addEventListener('click', () => setKind(button.dataset.kind));
+  }
+  syncKind(true);
   $('#mode-select').addEventListener('change', (event) => setPermissionMode(event.target.value));
   $('#send').addEventListener('click', send);
   $('#mic').addEventListener('click', toggleVoice);

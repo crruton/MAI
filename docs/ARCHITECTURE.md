@@ -104,6 +104,26 @@ main кладёт резолвер в `state.approvals` и отправляет 
 `mcp__<server>__<tool>`, чтобы не конфликтовать с встроенными. При вызове имя разбирается
 обратно, ищется сервер и оригинальное имя инструмента.
 
+OAuth (ADR 0041): `new McpManager({ oauth: { store, openBrowser, callbackPort } })`.
+`connect()` передаёт HTTP-транспорту `authProvider` без `onAuthorize` — при 401
+статус `needs_auth`, браузер не открывается. `login(name, config)` поднимает
+`startCallbackServer` (127.0.0.1, проверка `state`), провайдер с `onAuthorize`
+открывает браузер, после кода — `transport.finishAuth(code)` и новый `connect()`.
+Хранилище — `createOAuthStore(<данные>/mcp-oauth.json, secretBox)`. IPC:
+`mcp:login`, `mcp:logout` (admin); `mcp:status` отдаёт `loggedIn`.
+
+Каталог (ADR 0052): `listConnectors({ managed, onlyManaged })`,
+`connectorServerConfig(connector, { token })` в `electron/lib/connectors.js`;
+IPC `connectors:list` (any), `connectors:add | remove` (admin; для OAuth — сразу
+`mcp.login`). Секреты `mcpServers.*.headers.*`, `mcpServers.*.env.*` — в
+`SECRET_PATHS`; `publicSettings` маскирует их, `saveSettings` восстанавливает `***`.
+
+Области (CC9.5): `mcpSources(dir)` в main собирает `global → package → project →
+local` (`.mai-code/mcp.local.json`, только доверенная папка) с полем `scope`;
+`mcpConfigs` — их слияние. IPC `mcp:scopes`, `mcp:saveLocal` (через
+`updateLocalMcp` из `settings-levels.js`), `mcp:remove(name, projectDir)` удаляет и
+локальную запись.
+
 ## Плагины
 
 Плагины исполняются в отдельном процессе (ADR 0030). `loadPlugins(projectDir)`
@@ -139,15 +159,36 @@ ADR 0017). Инструменты сами `approve` не вызывают: ци
 встроенного инструмента, MCP или плагина.
 
 Режим хранится **в сессии** (`session.permissionMode`), `settings.permissionMode` —
-значение по умолчанию. Сохранённое `auto` читается как `bypass`.
+значение по умолчанию. Сохранённое `auto` читается как `bypass`. Решение
+классификатора режима `smart` помечается `source: 'classifier'` и уходит в
+карточку как `decisionSource`; для внешних CLI `permissionPlan` читает `smart`
+как `acceptEdits`.
 
 | Режим | read | write | memory | exec | external (MCP, плагин) |
 |---|---|---|---|---|---|
 | `manual` | да | спросить | спросить | спросить | спросить |
 | `acceptEdits` | да | да | спросить | спросить | спросить |
+| `smart` («Авто», ADR 0039) | да | `classifyAuto`: в проекте — да | да | `classifyAuto`: без высокого риска и путей вне проекта — да | спросить |
 | `plan` | да | запрет | запрет | запрет | запрет |
 | `dontAsk` | да | запрет | запрет | запрет | запрет |
 | `bypass` | да | да | да | да | да |
+
+Prompt injection (ADR 0053): `toApiMessage` оборачивает результаты
+`isDataTool` в `wrapData`; после такого шага `detectInjection` ставит `taint`
+прогона (`policyCtx.getTaint`), и `runToolCall` превращает `allow` классификатора
+в `ask` с `source: 'injection'` для всех классов, кроме `read`.
+
+Класс `send` (ADR 0048) — MCP-инструмент с глаголом отправки в имени
+(`isSendTool`) или плагин с `kind: 'send'`: спросить во всех режимах, включая
+`bypass`; `dontAsk` и `plan` — запрет; без вопроса — только явное `allow`.
+`suggestRules` для него пуст; карточка показывает аргументы блоком
+«Будет отправлено».
+
+Класс `delete` (`delete_file`, ADR 0044) — вне таблицы: спросить во всех режимах,
+кроме `bypass` (разрешено), `plan` и `dontAsk` (запрет без правила `allow`).
+Корзина — `electron/lib/trash.js` (`moveToTrash`, `listTrash`, `restoreFromTrash`,
+`purgeTrash`), путь передаётся инструменту как `ctx.trashDir` из `agentSettings`;
+IPC `trash:list` (any), `trash:restore` (замена — admin), `trash:purge` (admin).
 
 Порядок проверки: guardrails → `deny` → «План» → `ask` → чтение → `allow` → режим.
 Правила: `settings.permissions` и `session.permissionRules`, синтаксис
@@ -265,6 +306,167 @@ ADR 0036. `runAgent({ agentDefs })` добавляет инструмент `age
 командой `cmd.exe` (`run_shell`, стадии досок); `createOutputDecoder` читает
 вывод как UTF-8, а невалидные куски перекодирует из cp866 или cp1251. CI
 гоняет всё на `windows-latest` (`scripts/test-windows.mjs` и электронные наборы).
+
+### Пакеты плагинов
+
+ADR 0037. `packagesFor(projectDir)` в main — включённые пакеты (глобальные и,
+для доверенной папки, проектные). Загрузчики принимают `extraDirs` из
+`packageDirs(packages, kind)`: `listCustomCommands`, `listAgentDefs`,
+`listSkills` (и `runAgent({ skillDirs })`), `loadPlugins`; `collectHooks`
+получает `packageHooks`, `mcpConfigs` — `packageMcpServers`. IPC:
+`packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
+`packages:toggle({ name, enabled })`.
+
+### Длинные задачи
+
+ADR 0051. `session.run` (`setSessionRun`, защищённое поле, в индексе — `run`):
+`running` в `chat:start` и `runScheduled`, итог в `finally`. При старте
+`markInterrupted()` переводит `running` → `interrupted`. Окно: `renderRunBanner`
+(«Продолжить» — `send({ text: CONTINUE_PROMPT })`), «⏸» в списке чатов, текущий
+шаг в `renderTodos`.
+
+### Плановые задачи
+
+ADR 0050. `electron/lib/scheduler.js`: `normalizeSchedule`, `nextRunAt`,
+`previousRunAt`, `isDue` (пропущенный — один раз в пределах суток),
+`describeSchedule`, `createScheduleStore(dataDir)` (`scheduled.json`, журнал
+`scheduled-runs.jsonl`). В main: `startScheduler` (проверка раз в 30 с, первая —
+через `MAI_SCHEDULER_DELAY_MS` или минуту), `runScheduled(task)` — новый чат,
+`runAgent` с `policy.getMode = 'dontAsk'`, `ask: null`, без окна;
+уведомление `Notification`. IPC `schedule:list | runs` (any),
+`schedule:save | remove | runNow` (admin).
+
+### Файловые инструменты
+
+ADR 0054. `tools/fs.js`: `glob` (`globToRegExp`), `edit_file` через
+`planEdits` (precheck/preview/run на одном плане), `readGuard` и `markRead` —
+`ctx.readFiles` (Map путь → mtime) создаётся один раз на `runAgent`. Лимит —
+`spillOutput` в `tool-runner.js` (`MAX_TOOL_OUTPUT`, папка `ctx.outputDir`,
+подключена в `roots` как `@вывод`).
+
+### Git-поток
+
+ADR 0059. `pushViolation(command, { protectedBranches, branchOf })` в
+`git-guard.js`; `runToolCall` превращает решение в `deny` (`source:
+'protected-branch'`) для класса `exec`. `ctx.protectedBranches` — из
+`settings.protectedBranches` (по умолчанию `DEFAULT_PROTECTED`). `/commit` и
+`/review` — шаблоны `commitPrompt`/`reviewPrompt` в renderer; `overridable` в
+`BUILTIN_COMMANDS` уступает своей команде с тем же именем.
+
+### Возможности модели
+
+ADR 0058. `modelCapabilities(model, provider)` в `capabilities.js` — флаги
+`tools`, `vision`, `reasoning`, `effort`, `temperature`, `transport`, `context`;
+`requestOptions(caps, { temperature, effort })` — поля запроса. В `runAgent`:
+`caps` определяют транспорт, картинки, `tools` в запросе и `effort`
+(параметр прогона из `chat:start`). IPC `models:caps`.
+
+### Повторы и запасная модель
+
+ADR 0057. `electron/lib/retry.js`: `isTransient`, `needsFallback`, `retryDelay`
+(Retry-After), `sleep(ms, signal)`. В `runAgent` шаг (`attempt`) обёрнут в цикл
+повторов; `fallback` ({ provider, model, label } из `fallbackFor` в main)
+заменяет `client`, `model`, `provider` до конца прогона. `clientOptions` — `maxRetries: 0`
+для шагов, 2 — для компакции и ревизора.
+
+### Веб
+
+ADR 0056. `electron/lib/web.js`: `isPrivateAddress`, `fetchPage` (проверка
+адреса до запроса и на каждом перенаправлении, лимит, `htmlToText`),
+`webSearch` (duckduckgo → `parseDuckDuckGo`, searxng, brave). Инструменты —
+`tools/web.js`, конфигурация — `ctx.webConfig` из `settings.webSearch`.
+Предмет `web_fetch` в `subjectOf` — домен.
+
+### Фоновые команды
+
+ADR 0055. `tools/shell.js`: `spawnCommand` (хост или `docker run`, `kill`),
+`startBackground` — реестр `background` (кольцевой буфер, позиция чтения,
+код), `backgroundTools` (`shell_output`, `shell_kill`), `disposeBackground` —
+в `before-quit` main.
+
+### Документы
+
+ADR 0049. `electron/lib/documents.js`: `buildDocx`, `buildXlsx` (`sheetsToXlsx` в
+`export/xlsx.js` — типы ячеек, формулы, закрепление; общая `buildWorkbook`),
+`docxToMarkdown`, `readXlsx`, `sheetsToText`; ZIP читается `export/unzip.js`
+(лимиты записей и размера). Инструменты — `tools/documents.js`:
+`create_document` (write, precheck формата, preview текста), `read_document`
+(read; есть в наборе субагентов explore/plan).
+
+### Результаты задачи
+
+ADR 0047. `touchedFiles(dataDir, sessionId)` (checkpoints.js) →
+`sessionResults`, `resultFile` (проверка, что файл из результатов чата),
+`previewResult`, `canOpen` (белый список расширений) в `electron/lib/results.js`.
+IPC `results:list | preview | open | show` принимают `{ sessionId, file }`.
+
+### Режим «Задача»
+
+ADR 0046. `runAgent({ kind })`: при `task` — `TASK_PROMPT` вместо `BASE_PROMPT`
+(`systemPrompt({ kind })`), инструменты из `CODE_ONLY_TOOLS` скрыты. Вид —
+`session.kind` (`setSessionKind`, защищённое поле) или `settings.defaultKind`
+для нового чата; `chat:start({ kind })`. IPC `session:kind`, `session:setKind`.
+
+### Рабочие папки чата
+
+ADR 0045. `electron/lib/workroots.js`: `normalizeRoots(projectDir, extraDirs)`,
+`resolveIn(roots, target, { allowOutside })` (`@имя/путь`, относительный — от
+проекта), `subjectIn` (предмет для правил), `describeRoots` (промпт).
+`runAgent({ extraDirs })` кладёт `roots` в контекст инструментов; `resolveInside`
+в `tools/fs.js`, `resolveCwd` в `tools/shell.js`, `subjectOf({ roots })` и
+`dockerRunArgs({ roots })` работают от них. Папки — `session.extraDirs`
+(`setSessionDirs`, поле защищено от перезаписи прогоном); IPC `session:dirs`,
+`session:addDir` (системный диалог, admin), `session:removeDir`.
+
+### Навыки
+
+ADR 0043. `listSkills` читает `allowed-tools`; `skillFiles(skill)` и
+`readSkillFile(skill, rel)` (без выхода из папки) — в `skills.js`.
+`load_skill({ name, file? })` (`tools/skills.js`) возвращает тело и список файлов
+или файл; `grantableRules` отбрасывает широкие правила, `ctx.grantRules(rules, skill)`
+(только встроенным инструментам) кладёт их в `skillGrants` прогона, которые
+`policyCtx.getRules` в `runAgent` сливает с обычными правилами.
+
+### Маркетплейс пакетов
+
+ADR 0042. `electron/lib/marketplace.js`: `normalizeMarketplace`,
+`refreshMarketplace` (клон в `<данные>/marketplaces/<имя>`, замена кеша только
+при успехе), `readCatalog` (записи без выхода из каталога), `listMarketplaces`
+(с `installedVersion`, `updateAvailable` по `compareVersions`),
+`installFromMarketplace` → `installPackage({ from, ref, expect })`. IPC:
+`marketplace:list` (any), `marketplace:add | remove | refresh | install` (admin).
+
+### Песочница для команд
+
+ADR 0040. `electron/lib/shell-sandbox.js`: `normalizeShellSandbox` (в
+`loadSettings`/`saveSettings`), `hostAllowed(command, masks)`,
+`sandboxPlan(command, cfg, { dockerAvailable })` → `host | docker | blocked`,
+`dockerRunArgs(...)`. `run_shell` (`tools/shell.js`) получает в контексте
+`shellSandbox` и `dockerAvailable()` — main передаёт их через
+`agentSettings(settings)` (кеш `docker info` на минуту). `execute(..., { container })`
+запускает `docker run` без оболочки хоста и останавливает его `docker kill`.
+
+### Уровни настроек и панель «Разрешения»
+
+ADR 0038. `electron/lib/settings-levels.js`: `readManaged()` (файл организации,
+путь — `managedSettingsPath()` или `MAI_MANAGED_SETTINGS`), `readProjectLevels`
+(только для доверенной папки), `mergeLevels` (правила и их источник),
+`updateLocalRules` (атомарная запись `settings.local.json` и строка в
+`.mai-code/.gitignore`). В main: `rulesFor(sessionId, dir)` питает
+`policyFor().getRules`; `bypassBlocked(dir)` (гость, недоверенная папка,
+`disableBypassMode`) опускает «Без вопросов» до «Вручную» в `policyFor().getMode`,
+`runtimeMode`, `makeAsker`, а `permissions:set` его отклоняет; `managedHooks()`
+ставится первым в `collectHooks`. `permissions:modes` отдаёт правила по уровням,
+файл организации и пути файлов проекта; `permissions:rules` принимает
+`scope: 'local'`; `permissions:explain({ sessionId, tool, subject })` возвращает
+решение `evaluate` и уровни найденного правила. Ответ на запрос
+`remember: 'local'` пишет правило в `settings.local.json` (admin, доверенная папка).
+
+## Проверка данных IPC
+
+ADR 0060. `guardIpc` перед матрицей прав вызывает `validateIpc(channel, args)`
+из `ipc-schemas.js`: `checkShape` (размеры, глубина, циклы, опасные ключи) и
+типы по `IPC_SCHEMAS[channel]`. Отказ — `{ ok: false, invalid: true, error }`.
 
 ## Доверие к папке и матрица прав IPC
 

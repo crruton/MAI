@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const READ_TOOLS = ['read_file', 'list_files', 'grep', 'load_skill', 'memory_read', 'repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search'];
+const READ_TOOLS = ['read_file', 'read_document', 'list_files', 'glob', 'grep', 'load_skill', 'memory_read', 'repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search'];
 
 /** Инструменты, которых у субагента нет никогда: диалог с пользователем и вложенные субагенты. */
 export const NEVER_FOR_SUBAGENT = new Set(['agent', 'ask_user', 'exit_plan', 'todo_write']);
@@ -60,10 +60,11 @@ function parseFrontmatter(raw) {
 }
 
 /** Встроенные и свои типы. Свой тип проекта сильнее глобального; встроенные имена не переопределяются. */
-export function listAgentDefs(projectDir, dataDir, { includeProject = true } = {}) {
+export function listAgentDefs(projectDir, dataDir, { includeProject = true, extraDirs = [] } = {}) {
   const defs = new Map(BUILTIN_AGENTS.map((d) => [d.name, d]));
   const dirs = [];
   if (includeProject && projectDir) dirs.push({ source: 'project', dir: path.join(projectDir, '.mai-code', 'agents') });
+  dirs.push(...extraDirs); // пакеты (ADR 0037)
   if (dataDir) dirs.push({ source: 'global', dir: path.join(dataDir, 'agents') });
   for (const { source, dir } of dirs) {
     let entries = [];

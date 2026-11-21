@@ -1,0 +1,8 @@
+{
+  "PreToolUse": [
+    { "matcher": "run_shell", "hooks": [{ "type": "command", "command": "node examples/hooks/no-push-main.mjs main", "timeout": 15 }] }
+  ],
+  "Stop": [
+    { "hooks": [{ "type": "command", "command": "node examples/hooks/require-docs.mjs electron renderer", "timeout": 30 }] }
+  ]
+}

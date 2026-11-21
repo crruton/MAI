@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 /**
  * Выполнение одного вызова инструмента через PolicyEngine (ADR 0027).
  *
@@ -10,6 +13,7 @@
  */
 import { classifyTool, evaluate, subjectOf, summarize, suggestRules } from './policy.js';
 import { effectiveCommand } from './tools/shell.js';
+import { pushViolation, currentBranch, DEFAULT_PROTECTED } from './git-guard.js';
 import { unifiedDiff } from './diff.js';
 
 const ARGS_PREVIEW = 2000;
@@ -46,6 +50,41 @@ export function normalizeAnswer(answer) {
   };
 }
 
+/* ---------- единый лимит вывода (CC1.13, ADR 0054) ---------- */
+
+export const MAX_TOOL_OUTPUT = 30_000;
+const KEEP_DAYS = 7;
+
+/**
+ * Длинный результат любого инструмента (встроенного, MCP, плагина) — целиком в
+ * файл `<данные>/tool-output/…`, модели — начало, конец и путь `@вывод/…`.
+ * Без папки вывода — просто обрезка.
+ */
+export function spillOutput(ctx, tool, content) {
+  if (content.length <= MAX_TOOL_OUTPUT) return content;
+  const head = content.slice(0, Math.floor(MAX_TOOL_OUTPUT * 0.7));
+  const tail = content.slice(-Math.floor(MAX_TOOL_OUTPUT * 0.2));
+  if (!ctx?.outputDir) return `${head}\n\n… обрезано ${content.length - head.length - tail.length} символов …\n\n${tail}`;
+  try {
+    fs.mkdirSync(ctx.outputDir, { recursive: true });
+    const now = Date.now();
+    for (const name of fs.readdirSync(ctx.outputDir)) {
+      const full = path.join(ctx.outputDir, name);
+      try {
+        if (now - fs.statSync(full).mtimeMs > KEEP_DAYS * 86_400_000) fs.rmSync(full, { force: true });
+      } catch {
+        /* файл занят — удалится в следующий раз */
+      }
+    }
+    const name = `${new Date(now).toISOString().replace(/[:.]/g, '-')}-${String(tool).replace(/[^\w-]/g, '_').slice(0, 40)}-${crypto.randomBytes(3).toString('hex')}.txt`;
+    fs.writeFileSync(path.join(ctx.outputDir, name), content, 'utf8');
+    const lines = content.split('\n').length;
+    return `${head}\n\n… вывод длиннее ${MAX_TOOL_OUTPUT} символов (${content.length} символов, ${lines} строк). Полностью — @вывод/${name}: read_file с offset/limit или grep по этому пути …\n\n${tail}`;
+  } catch {
+    return `${head}\n\n… обрезано …\n\n${tail}`;
+  }
+}
+
 function preview(args) {
   const json = JSON.stringify(args ?? {}, null, 2);
   return json.length > ARGS_PREVIEW ? `${json.slice(0, ARGS_PREVIEW)}\n…` : json;
@@ -73,7 +112,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
   const mode = policy.getMode ? policy.getMode() : 'manual';
   const rules = policy.getRules ? policy.getRules() : {};
   const command = entry.cls === 'exec' ? effectiveCommand(ctx, args) : undefined;
-  const subject = subjectOf({ tool: entry.name, cls: entry.cls, args, projectDir: ctx.projectDir, command });
+  const subject = subjectOf({ tool: entry.name, cls: entry.cls, args, projectDir: ctx.projectDir, command, roots: ctx.roots });
 
   const record = (extra) => {
     try {
@@ -126,6 +165,23 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
     guardrails: ctx.guardrails,
     role: policy.role || 'admin',
   });
+  // Защита веток (CC11.6): пуш в main/master запрещён в любом режиме, как guardrails.
+  if (entry.cls === 'exec' && decision.action !== 'deny') {
+    const why = pushViolation(command ?? subject, { protectedBranches: ctx.protectedBranches ?? DEFAULT_PROTECTED, branchOf: () => currentBranch(ctx.projectDir) });
+    if (why) decision = { ...decision, action: 'deny', source: 'protected-branch', reason: `Запрещено: ${why}. Защищённые ветки — «Настройки» → «Защищённые ветки».` };
+  }
+  // В прочитанном нашлись внушённые указания (CC2.10): «Авто» больше не решает молча.
+  const taint = policy.getTaint ? policy.getTaint() : null;
+  if (taint && decision.action === 'allow' && decision.source === 'classifier' && entry.cls !== 'read') {
+    decision = {
+      ...decision,
+      action: 'ask',
+      source: 'injection',
+      risk: 'high',
+      recommended: 'deny',
+      why: `в прочитанном (${taint.source}${taint.path ? ` ${taint.path}` : ''}) найдено похожее на внушённые указания — ${taint.why}: «${taint.snippet}». Проверьте, что действие нужно вам`,
+    };
+  }
 
   // PreToolUse (ADR 0035): хук не может разрешить то, что запретили guardrails,
   // правило deny или «План», но может запретить, потребовать вопрос или снять его.
@@ -157,6 +213,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
           args: preview(args),
           risk: decision.risk,
           why: decision.why,
+          decisionSource: decision.source,
           recommended: decision.recommended,
           rule: decision.rule || null,
           suggestions: suggestRules({ tool: entry.name, cls: entry.cls, subject }),
@@ -195,10 +252,11 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
         signal: builtin ? ctx.signal : undefined,
         todos: builtin ? ctx.todos : undefined,
         beforeWrite: builtin ? ctx.beforeWrite : undefined,
+        grantRules: builtin ? ctx.grantRules : undefined,
       },
       args,
     );
-    let content = String(result);
+    let content = spillOutput(ctx, entry.name, String(result));
     if (hookNote) content = `${content}\n\n[Хук PreToolUse]\n${hookNote}`;
     // PostToolUse: контекст от хука дописывается к результату; block — замечание агенту.
     if (hooks?.has('PostToolUse', entry.name)) {

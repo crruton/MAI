@@ -78,6 +78,7 @@
           </nav>
         </header>
 
+        <div class="run-banner" id="run-banner" hidden></div>
         <section class="messages" id="messages">
           <div class="empty" id="empty">
             <div class="empty-mark">M</div>
@@ -99,6 +100,7 @@
             <div class="queue" id="queue" hidden></div>
             <div class="suggest" id="suggest" role="listbox" hidden></div>
             <div class="attachments" id="attachments" hidden></div>
+            <div class="work-dirs" id="work-dirs" hidden></div>
             <textarea id="input" rows="1" placeholder="Опишите задачу…  Enter — отправить, Shift+Enter — новая строка. Файлы можно перетащить сюда"></textarea>
             <div class="composer-actions">
               <button class="btn icon attach" id="attach" type="button" title="Прикрепить файлы: документы, архивы, изображения">+</button>
@@ -108,9 +110,20 @@
                   <path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
                 </svg>
               </button>
+              <div class="kind-toggle" id="kind-toggle" role="group" title="Код — программирование; Задача — документы и данные">
+                <button type="button" class="kind-btn" data-kind="code">Код</button>
+                <button type="button" class="kind-btn" data-kind="task">Задача</button>
+              </div>
+              <select id="effort-select" class="effort-select" title="Глубина рассуждений модели" hidden>
+                <option value="">Глубина: по умолчанию</option>
+                <option value="low">Глубина: быстро</option>
+                <option value="medium">Глубина: средняя</option>
+                <option value="high">Глубина: глубоко</option>
+              </select>
               <div class="mode-wrap">
                 <select id="mode-select" class="mode-select" title="Режим разрешений"></select>
               </div>
+              <button class="results-btn" id="results-btn" type="button" title="Файлы, созданные и изменённые агентом в этом чате" hidden></button>
               <button class="context-meter" id="context-meter" type="button" title="Заполнение контекста модели — /context" hidden></button>
               <span class="composer-hint" id="composer-hint"></span>
               <button class="btn icon send" id="send" title="Отправить">➤</button>

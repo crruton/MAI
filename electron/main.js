@@ -1,20 +1,33 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, clipboard } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, Notification } from 'electron';
 import path from 'node:path';
+import os from 'node:os';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets } from './lib/config.js';
+import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets, secretBox } from './lib/config.js';
 import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
-import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, addSessionRules, removeSessionRules } from './lib/sessions.js';
+import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, setSessionRun, markInterrupted, addSessionRules, removeSessionRules } from './lib/sessions.js';
 import { runAgent, compactSession, describeContext } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
 import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
 import { listAgentDefs } from './lib/agent-defs.js';
+import { normalizeShellSandbox } from './lib/shell-sandbox.js';
+import { createOAuthStore } from './lib/mcp-oauth.js';
+import { listTrash, restoreFromTrash, purgeTrash } from './lib/trash.js';
+import { disposeBackground } from './lib/tools/shell.js';
+import { normalizeRoots } from './lib/workroots.js';
+import { listConnectors, connectorServerConfig } from './lib/connectors.js';
+import { sessionResults, previewResult, resultFile } from './lib/results.js';
+import { createScheduleStore, isDue, nextRunAt, describeSchedule } from './lib/scheduler.js';
+import { modelCapabilities } from './lib/capabilities.js';
+import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
+import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
+import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -60,7 +73,7 @@ import * as sandbox from './lib/container.js';
 import { saveFromPaths, saveImage, uploadsRoot, removeSessionUploads, adoptDraftUploads, recognizeAttachment } from './lib/attachments.js';
 import { ocrStatus } from './lib/ocr.js';
 import { normalizeMode, MODE_INFO, PERMISSION_MODES } from './lib/permissions.js';
-import { effectiveMode, mergeRules, parseRule } from './lib/policy.js';
+import { effectiveMode, mergeRules, parseRule, classifyTool, evaluate, relativeSubject } from './lib/policy.js';
 import { createAuditLog, readAudit } from './lib/audit.js';
 import { trustState, setTrust, removeTrust, listTrust, inspectProject } from './lib/trust.js';
 import { guardIpc } from './lib/ipc-permissions.js';
@@ -93,7 +106,16 @@ if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !proc
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const mcp = new McpManager();
+// OAuth удалённых MCP (ADR 0041): токены — в mcp-oauth.json, зашифрованы как ключи провайдеров.
+const mcp = new McpManager({
+  oauth: {
+    store: createOAuthStore(path.join(dataDir(), 'mcp-oauth.json'), secretBox),
+    openBrowser: (url) => shell.openExternal(url),
+    get callbackPort() {
+      return Number(loadSettings().oauth?.callbackPort) || undefined;
+    },
+  },
+});
 const runs = new Map(); // windowId -> { controller, approvals: Map }
 
 /** Сколько ждём ответа на подтверждение, прежде чем отменить действие. */
@@ -111,10 +133,10 @@ guardIpc(ipcMain, requireAdmin, {
  * MCP-серверы проекта лежат в <проект>/.mai-code/mcp.json и дополняют
  * глобальные настройки. Проектные записи имеют приоритет.
  */
-function projectMcpConfig(projectDir) {
+function projectMcpConfig(projectDir, file = 'mcp.json') {
   if (!projectDir) return {};
   try {
-    const file = path.join(projectDir, '.mai-code', 'mcp.json');
+    file = path.join(projectDir, '.mai-code', file);
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
     return data.mcpServers || data || {};
   } catch {
@@ -138,11 +160,90 @@ function needTrust(projectDir) {
   return { ok: false, needTrust: true, projectDir, found: inspectProject(projectDir), error: 'Папка проекта не доверена' };
 }
 
+/** Включённые пакеты (ADR 0037): глобальные и, для доверенной папки, проектные. */
+function packagesFor(projectDir) {
+  const settings = loadSettings();
+  const dir = projectDir || settings.projectDir;
+  return listPackages(dir, dataDir(), { includeProject: isTrusted(dir), settings: settings.packages || {} }).filter((p) => p.enabled);
+}
+
 function mcpConfigs(projectDir) {
   const settings = loadSettings();
   const dir = projectDir || settings.projectDir;
   // MCP проекта запускает процессы из чужого репозитория — только после доверия.
-  return { ...(settings.mcpServers || {}), ...(isTrusted(dir) ? projectMcpConfig(dir) : {}) };
+  // Порядок: глобальные → пакеты → проект → локальные (последний сильнее, CC9.5).
+  return Object.fromEntries(mcpSources(dir).map(({ name, config }) => [name, config]));
+}
+
+/** MCP-серверы с областью: global | package | project | local. Позднее сильнее. */
+function mcpSources(projectDir) {
+  const settings = loadSettings();
+  const dir = projectDir || settings.projectDir;
+  const trusted = isTrusted(dir);
+  const layers = [
+    ['global', settings.mcpServers || {}],
+    ['package', packageMcpServers(packagesFor(dir))],
+    ['project', trusted ? projectMcpConfig(dir) : {}],
+    ['local', trusted ? projectMcpConfig(dir, 'mcp.local.json') : {}],
+  ];
+  const merged = new Map();
+  for (const [scope, servers] of layers) {
+    for (const [name, config] of Object.entries(servers || {})) {
+      if (config && typeof config === 'object') merged.set(name, { name, scope, config });
+    }
+  }
+  return [...merged.values()];
+}
+
+/** Управляемые настройки организации (ADR 0038): читаются при каждом решении — правка файла действует сразу. */
+function managed() {
+  return readManaged();
+}
+
+function managedHooks() {
+  const org = managed();
+  return org.hooks ? [{ source: 'managed', config: org.hooks }] : [];
+}
+
+/** Docker проверяется не чаще раза в минуту и только когда песочница команд включена (ADR 0040). */
+let dockerCache = { at: 0, available: false };
+function dockerReady() {
+  if (Date.now() - dockerCache.at < 60_000) return dockerCache.available;
+  dockerCache = { at: Date.now(), available: Boolean(sandbox.dockerStatus().available) };
+  return dockerCache.available;
+}
+
+function agentSettings(settings) {
+  const shellSandbox = normalizeShellSandbox(settings.shellSandbox);
+  return {
+    ...settings,
+    shellSandbox,
+    dockerAvailable: shellSandbox.mode === 'docker' ? dockerReady : () => false,
+    // Корзина для delete_file (CW1.4).
+    trashDir: path.join(dataDir(), 'trash'),
+    // Длинный вывод инструментов — в файл (CC1.13).
+    outputDir: path.join(dataDir(), 'tool-output'),
+  };
+}
+
+/** «Без вопросов» недоступен: гость, недоверенная папка или запрет организации. */
+function bypassBlocked(projectDir) {
+  return authStatus().role !== 'admin' || (projectDir && !isTrusted(projectDir)) || managed().disableBypassMode;
+}
+
+/** Правила всех уровней для PolicyEngine и откуда каждое пришло. */
+function rulesFor(sessionId, projectDir) {
+  const settings = loadSettings();
+  const session = sessionId ? getSession(sessionId) : null;
+  const dir = projectDir || session?.projectDir || settings.projectDir;
+  const levels = readProjectLevels(dir, { trusted: isTrusted(dir) });
+  return mergeLevels([
+    { level: 'managed', rules: managed().permissions },
+    { level: 'user', rules: settings.permissions },
+    { level: 'project', rules: levels.project },
+    { level: 'local', rules: levels.local },
+    { level: 'session', rules: session?.permissionRules },
+  ]);
 }
 
 /** Режим разрешений для внешнего рантайма: тот же, что у встроенного агента в этом чате. */
@@ -150,13 +251,13 @@ function runtimeMode(sessionId, projectDir) {
   const settings = loadSettings();
   const session = sessionId ? getSession(sessionId) : null;
   let mode = effectiveMode(session?.permissionMode || settings.permissionMode, authStatus().role);
-  if (mode === 'bypass' && projectDir && !isTrusted(projectDir)) mode = 'manual';
+  if (mode === 'bypass' && bypassBlocked(projectDir)) mode = 'manual';
   return mode;
 }
 
 /** loadPlugins с учётом доверия: плагины проекта исполняются в main-процессе. */
 function loadPluginsFor(projectDir) {
-  return loadPlugins(projectDir, { includeProject: isTrusted(projectDir) });
+  return loadPlugins(projectDir, { includeProject: isTrusted(projectDir), extraDirs: packageDirs(packagesFor(projectDir), 'plugins') });
 }
 
 function send(window, event) {
@@ -288,6 +389,14 @@ app.whenReady().then(async () => {
   const settings = loadSettings();
   emitLog('MAI Code запущен', { attributes: { platform: process.platform, version: app.getVersion() } });
   mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
+  // Прогоны, прерванные закрытием приложения (CW5.2), — отметить, чтобы их можно было продолжить.
+  try {
+    const interrupted = markInterrupted();
+    if (interrupted.length) emitLog(`Прерванных прогонов: ${interrupted.length}`);
+  } catch (err) {
+    console.error('[sessions] не удалось отметить прерванные прогоны:', err?.message || err);
+  }
+  startScheduler();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -301,6 +410,8 @@ app.on('window-all-closed', () => {
 // внешние рантаймы и MCP-сервер repowise.
 app.on('before-quit', () => {
   disposePluginHosts();
+  // Фоновые команды агента (CC1.4) не переживают приложение.
+  disposeBackground();
   for (const state of runs.values()) {
     try {
       state.stage?.kill();
@@ -376,7 +487,13 @@ ipcMain.handle('ocr:recognize', async (_e, payload) => {
 });
 
 ipcMain.handle('settings:save', async (_e, patch) => {
-  if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth || patch.guardrails || patch.telemetry) {
+  // Настройки, которые расширяют права агента или меняют изоляцию, — только admin.
+  if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth || patch.guardrails || patch.telemetry || patch.marketplaces || patch.webSearch || 'protectedBranches' in (patch || {})) {
+    requireAdmin();
+  }
+  const current = loadSettings();
+  if ('allowOutsideProject' in (patch || {}) && Boolean(patch.allowOutsideProject) !== Boolean(current.allowOutsideProject)) requireAdmin();
+  if (patch?.shellSandbox && JSON.stringify(normalizeShellSandbox({ ...current.shellSandbox, ...patch.shellSandbox })) !== JSON.stringify(normalizeShellSandbox(current.shellSandbox))) {
     requireAdmin();
   }
   const clean = { ...patch };
@@ -732,17 +849,20 @@ ipcMain.handle('project:pick', async () => {
 ipcMain.handle('commands:list', (_e, projectDir) => {
   const dir = projectDir || loadSettings().projectDir;
   const trusted = isTrusted(dir);
-  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted }).map(({ name, description, argumentHint, source }) => ({
+  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(dir), 'commands') }).map(({ name, description, argumentHint, source }) => ({
     name,
     description,
     argumentHint,
     source,
   }));
   const taken = new Set([...BUILTIN_COMMANDS.map((c) => c.name), ...custom.map((c) => c.name.toLowerCase())]);
-  const skills = listSkills(dir, { includeProject: trusted })
+  const skills = listSkills(dir, { includeProject: trusted, extraDirs: packageDirs(packagesFor(dir), 'skills') })
     .filter((skill) => /^[a-z0-9][a-z0-9_-]*$/i.test(skill.name) && !taken.has(skill.name.toLowerCase()))
     .map((skill) => ({ name: skill.name, description: skill.description || 'навык', argumentHint: '<задача>', source: 'skill' }));
-  return [...BUILTIN_COMMANDS.map((c) => ({ ...c, source: 'builtin' })), ...custom, ...skills];
+  const customNames = new Set(custom.map((c) => c.name.toLowerCase()));
+  // /commit и /review можно заменить своей командой (ADR 0059).
+  const builtins = BUILTIN_COMMANDS.filter((c) => !(c.overridable && customNames.has(c.name)));
+  return [...builtins.map((c) => ({ ...c, source: 'builtin' })), ...custom, ...skills];
 });
 
 /** Своя команда или навык → текст запроса агенту. */
@@ -750,9 +870,9 @@ ipcMain.handle('commands:expand', (_e, payload = {}) => {
   const dir = payload.projectDir || loadSettings().projectDir;
   const name = String(payload.name || '').toLowerCase();
   const trusted = isTrusted(dir);
-  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted }).find((c) => c.name.toLowerCase() === name);
+  const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(dir), 'commands') }).find((c) => c.name.toLowerCase() === name);
   if (custom) return { ok: true, prompt: expandTemplate(custom.body, payload.args), source: custom.source };
-  const skill = listSkills(dir, { includeProject: trusted }).find((s) => s.name.toLowerCase() === name);
+  const skill = listSkills(dir, { includeProject: trusted, extraDirs: packageDirs(packagesFor(dir), 'skills') }).find((s) => s.name.toLowerCase() === name);
   if (skill) {
     const task = String(payload.args || '').trim();
     return {
@@ -809,17 +929,32 @@ ipcMain.handle('permissions:modes', (_e, sessionId) => {
   const settings = loadSettings();
   const session = sessionId ? getSession(sessionId) : null;
   const role = authStatus().role;
+  const dir = session?.projectDir || settings.projectDir;
+  const org = managed();
+  const levels = readProjectLevels(dir, { trusted: isTrusted(dir) });
+  const blocked = bypassBlocked(dir);
+  const clamp = (mode) => (effectiveMode(mode, role) === 'bypass' && blocked ? 'manual' : effectiveMode(mode, role));
   return {
-    current: effectiveMode(session?.permissionMode || settings.permissionMode, role),
-    fallback: effectiveMode(settings.permissionMode, role),
+    current: clamp(session?.permissionMode || settings.permissionMode),
+    fallback: clamp(settings.permissionMode),
     sessionId: session?.id || null,
     role,
-    // Режим «Без вопросов» гостю не показываем выбираемым (ADR 0027).
-    modes: PERMISSION_MODES.map((id) => ({ ...MODE_INFO[id], disabled: Boolean(MODE_INFO[id].adminOnly && role !== 'admin') })),
+    // «Без вопросов» недоступен гостю, в недоверенной папке и при запрете организации.
+    modes: PERMISSION_MODES.map((id) => ({
+      ...MODE_INFO[id],
+      disabled: Boolean(id === 'bypass' && blocked),
+      ...(id === 'bypass' && org.disableBypassMode ? { reason: 'запрещён настройками организации' } : {}),
+    })),
     rules: {
+      managed: org.permissions,
       global: mergeRules(settings.permissions),
+      project: levels.project,
+      local: levels.local,
       session: mergeRules(session?.permissionRules),
     },
+    managed: { present: org.present, file: org.file, disableBypassMode: org.disableBypassMode },
+    files: dir ? projectSettingsFiles(dir) : null,
+    trusted: isTrusted(dir),
   };
 });
 
@@ -834,6 +969,9 @@ ipcMain.handle('permissions:set', (_e, payload) => {
   if (MODE_INFO[next]?.adminOnly && authStatus().role !== 'admin') {
     return { ok: false, error: `Режим «${MODE_INFO[next].label}» доступен только роли admin`, mode: effectiveMode(next, 'guest') };
   }
+  if (next === 'bypass' && managed().disableBypassMode) {
+    return { ok: false, error: 'Режим «Без вопросов» запрещён настройками организации', mode: 'manual' };
+  }
   if (sessionId) {
     const session = setSessionMode(sessionId, next);
     if (session) return { ok: true, mode: next, sessionId: session.id, scope: 'session' };
@@ -842,10 +980,31 @@ ipcMain.handle('permissions:set', (_e, payload) => {
   return { ok: true, mode: next, sessionId: null, scope: 'default' };
 });
 
+/** Что будет с вызовом при текущих режиме и правилах — для панели «Разрешения» (CC2.9). */
+ipcMain.handle('permissions:explain', (_e, payload = {}) => {
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  const dir = session?.projectDir || loadSettings().projectDir;
+  const tool = String(payload.tool || 'run_shell');
+  const cls = classifyTool(tool);
+  const { rules, origin } = rulesFor(session?.id, dir);
+  const mode = policyFor(session?.id, dir).getMode();
+  const subject = cls === 'exec' ? String(payload.subject || '') : payload.subject ? relativeSubject(dir, payload.subject) : null;
+  const decision = evaluate({ tool, cls, subject, mode, rules, guardrails: loadSettings().guardrails, role: authStatus().role });
+  return { ...decision, tool, cls, subject, levels: decision.rule ? origin[`${decision.action}:${decision.rule}`] || origin[`allow:${decision.rule}`] || [] : [] };
+});
+
 /** Правила разрешений: сессия или глобально. Глобальные меняет только admin. */
 ipcMain.handle('permissions:rules', (_e, payload) => {
   const { sessionId, scope = 'session', kind = 'allow', add = [], remove = [] } = payload || {};
   const valid = (list) => (list || []).map(String).filter((rule) => parseRule(rule));
+  if (scope === 'local') {
+    // Личные правила проекта (ADR 0038): только для доверенной папки, меняет admin.
+    requireAdmin();
+    const session = sessionId ? getSession(sessionId) : null;
+    const dir = session?.projectDir || loadSettings().projectDir;
+    if (!isTrusted(dir)) return { ok: false, error: 'Папка не доверена — правила проекта не сохраняются' };
+    return { ok: true, rules: updateLocalRules(dir, { kind, add: valid(add), remove: valid(remove) }) };
+  }
   if (scope === 'global') {
     requireAdmin();
     const current = mergeRules(loadSettings().permissions);
@@ -1032,6 +1191,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
       model,
       projectDir,
       permissionMode: payload.permissionMode ? normalizeMode(payload.permissionMode) : '',
+      // Вид чата из переключателя «Код / Задача» (CW1.1) — до первого сообщения.
+      kind: payload.kind === 'task' ? 'task' : loadSettings().defaultKind === 'task' ? 'task' : 'code',
     });
   }
   session.model = model;
@@ -1061,6 +1222,9 @@ ipcMain.handle('chat:start', async (event, payload) => {
     }
   }
   saveSession(session);
+  // Прогон идёт (CW5.2): если приложение закроют посреди работы, чат это покажет.
+  setSessionRun(session.id, { status: 'running', startedAt: new Date().toISOString() });
+  let runStatus = 'done';
 
   const controller = new AbortController();
   state.controller = controller;
@@ -1078,7 +1242,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
   (async () => {
     try {
       const history = await runAgent({
-        settings,
+        settings: agentSettings(settings),
         provider: resolved.provider,
         projectDir,
         model: resolved.modelId,
@@ -1094,11 +1258,18 @@ ipcMain.handle('chat:start', async (event, payload) => {
         trusted,
         // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Запасная модель при сбое основной (ADR 0057).
+        fallback: fallbackFor(settings, activeKey),
+        // Глубина рассуждений из поля ввода (CC7.11).
+        effort: ['low', 'medium', 'high'].includes(payload.effort) ? payload.effort : '',
         // Чекпоинты правок для отката (CC6.1).
         checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
         hooks,
         // Типы субагентов: встроенные и свои (проекта — только доверенная папка, ADR 0036).
-        agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: trusted }),
+        agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(projectDir), 'agents') }),
+        skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
+        extraDirs: (getSession(session.id)?.extraDirs || []).filter((d) => fs.existsSync(d)),
+        kind: getSession(session.id)?.kind || 'code',
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -1118,6 +1289,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
       send(window, { type: 'saved', sessionId: session.id, title: session.title, plugins: loaded });
     } catch (err) {
       const aborted = controller.signal.aborted;
+      runStatus = aborted ? 'stopped' : 'error';
       const message = aborted ? 'Остановлено пользователем' : err?.message || String(err);
       if (!aborted) logError({ source: 'agent', model, message, cause: err?.cause?.message || '' });
       send(window, {
@@ -1134,11 +1306,183 @@ ipcMain.handle('chat:start', async (event, payload) => {
       // Не взятые агентом сообщения возвращаем в поле ввода, чтобы они не пропали.
       const leftover = state.queue.splice(0);
       if (leftover.length) send(window, { type: 'queued:returned', items: leftover });
+      setSessionRun(session.id, { status: runStatus, endedAt: new Date().toISOString() });
       lock.release();
     }
   })();
 
   return { ok: true, sessionId: session.id, title: session.title };
+});
+
+/* ---------- плановые задачи (CW5.1, ADR 0050) ---------- */
+
+let scheduleStoreInstance = null;
+const scheduleStore = () => (scheduleStoreInstance ||= createScheduleStore(dataDir()));
+const scheduledRunning = new Set();
+
+/** Запасная модель (ADR 0057): settings.fallbackModel = «провайдер/модель», с ключом и не та же, что основная. */
+function fallbackFor(settings, primaryKey) {
+  const key = String(settings.fallbackModel || '').trim();
+  if (!key || key === primaryKey) return null;
+  try {
+    const resolved = resolveModel(settings, key);
+    if (!resolved.provider?.apiKey || !resolved.provider?.baseURL) return null;
+    return { provider: resolved.provider, model: resolved.modelId, label: key };
+  } catch {
+    return null;
+  }
+}
+
+function anyWindow() {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : BrowserWindow.getAllWindows().find((w) => !w.isDestroyed()) || null;
+}
+
+/**
+ * Запуск плановой задачи без окна: новый чат «⏰ …», режим «Только
+ * разрешённое» (вопросов задать некому), результат — уведомление и журнал.
+ */
+async function runScheduled(task, { reason = 'schedule' } = {}) {
+  const store = scheduleStore();
+  if (scheduledRunning.has(task.id)) return { ok: false, error: 'Задача уже выполняется' };
+  const settings = loadSettings();
+  const projectDir = task.projectDir || settings.projectDir;
+  const finish = (status, extra = {}) => {
+    store.markRun(task.id, { lastRun: new Date().toISOString(), lastStatus: status, ...(extra.sessionId ? { lastSessionId: extra.sessionId } : {}) });
+    store.log({ taskId: task.id, title: task.title, reason, status, ...extra });
+    return { ok: status === 'ok', status, ...extra };
+  };
+  if (!projectDir || !fs.existsSync(projectDir)) return finish('error', { error: 'папка задачи не найдена' });
+  if (!isTrusted(projectDir)) return finish('error', { error: 'папка не доверена — плановая задача не запускается' });
+  let resolved;
+  try {
+    resolved = resolveModel(settings, task.model || settings.activeModel);
+    if (!resolved.provider.apiKey) throw new Error(`не задан ключ провайдера «${resolved.provider.name}»`);
+  } catch (err) {
+    return finish('error', { error: err.message });
+  }
+  const lock = acquireProject(projectDir, { label: `плановая задача «${task.title}»` });
+  if (!lock.ok) {
+    store.log({ taskId: task.id, title: task.title, reason, status: 'busy', error: lock.error });
+    return { ok: false, busy: true, error: lock.error };
+  }
+  scheduledRunning.add(task.id);
+  const stamp = new Date().toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+  const session = createSession({ title: `⏰ ${task.title} — ${stamp}`, model: task.model || settings.activeModel, projectDir, permissionMode: 'dontAsk', kind: task.kind });
+  session.messages.push({ role: 'user', content: task.prompt, display: task.prompt });
+  session.scheduledTaskId = task.id;
+  saveSession(session);
+  setSessionRun(session.id, { status: 'running', startedAt: new Date().toISOString(), scheduled: true });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30 * 60_000);
+  try {
+    const plugins = await loadPluginsFor(projectDir);
+    const history = await runAgent({
+      settings: agentSettings(settings),
+      provider: resolved.provider,
+      projectDir,
+      model: resolved.modelId,
+      messages: session.messages,
+      signal: controller.signal,
+      mcp,
+      pluginTools: plugins.tools,
+      transforms: plugins.transforms,
+      reviewer: null,
+      permissionMode: 'dontAsk',
+      policy: { ...policyFor(session.id, projectDir), getMode: () => 'dontAsk' },
+      audit,
+      trusted: true,
+      contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+      // Запасная модель при сбое основной (ADR 0057).
+      fallback: fallbackFor(settings, task.model || settings.activeModel),
+      checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
+      hooks: hookRunnerFor(null, { projectDir, sessionId: session.id, trusted: true }),
+      agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: true, extraDirs: packageDirs(packagesFor(projectDir), 'agents') }),
+      skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
+      kind: task.kind,
+      onHistory: (h) => {
+        session.messages = h;
+        saveSession(session);
+      },
+      emit: () => {},
+      approve: async () => ({ allow: false, message: 'Плановая задача: спросить некого' }),
+      ask: null,
+    });
+    session.messages = history;
+    saveSession(session);
+    if (controller.signal.aborted) throw new Error('превышено время выполнения (30 мин)');
+    const answer = [...history].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+    notifyScheduled(task, answer.slice(0, 200) || 'готово', session.id);
+    setSessionRun(session.id, { status: 'done', endedAt: new Date().toISOString(), scheduled: true });
+    return finish('ok', { sessionId: session.id, summary: answer.slice(0, 500) });
+  } catch (err) {
+    saveSession(session);
+    setSessionRun(session.id, { status: 'error', endedAt: new Date().toISOString(), scheduled: true });
+    notifyScheduled(task, `Ошибка: ${err?.message || err}`, session.id);
+    return finish('error', { sessionId: session.id, error: err?.message || String(err) });
+  } finally {
+    clearTimeout(timeout);
+    scheduledRunning.delete(task.id);
+    lock.release();
+    send(anyWindow(), { type: 'scheduled:run', taskId: task.id });
+  }
+}
+
+function notifyScheduled(task, body, sessionId) {
+  try {
+    if (!Notification.isSupported()) return;
+    const n = new Notification({ title: `⏰ ${task.title}`, body });
+    n.on('click', () => send(anyWindow(), { type: 'scheduled:open', sessionId }));
+    n.show();
+  } catch {
+    /* уведомления недоступны — результат есть в журнале и чате */
+  }
+}
+
+let schedulerTimer = null;
+function startScheduler() {
+  if (schedulerTimer) return;
+  const tick = () => {
+    const now = new Date();
+    for (const task of scheduleStore().list()) {
+      if (isDue(task, now) && !scheduledRunning.has(task.id)) runScheduled(task).catch(() => {});
+    }
+  };
+  // Пропущенные запуски (приложение было закрыто) — через минуту после старта.
+  setTimeout(tick, Number(process.env.MAI_SCHEDULER_DELAY_MS) || 60_000);
+  schedulerTimer = setInterval(tick, 30_000);
+}
+
+function scheduleView() {
+  const now = new Date();
+  return {
+    tasks: scheduleStore()
+      .list()
+      .map((t) => ({ ...t, description: describeSchedule(t.schedule), nextRun: t.enabled ? nextRunAt(t.schedule, now, t.lastRun)?.toISOString() || null : null, running: scheduledRunning.has(t.id) })),
+  };
+}
+
+ipcMain.handle('schedule:list', () => scheduleView());
+ipcMain.handle('schedule:runs', (_e, id) => scheduleStore().runs(id || null, 30));
+/** Создать или изменить задачу. Задача работает без пользователя — только admin. */
+ipcMain.handle('schedule:save', (_e, payload = {}) => {
+  try {
+    const projectDir = payload.projectDir || loadSettings().projectDir;
+    if (!projectDir || !isTrusted(projectDir)) throw new Error('Плановая задача — только в доверенной папке');
+    const task = scheduleStore().save({ ...payload, projectDir });
+    audit({ at: new Date().toISOString(), tool: 'schedule:save', source: 'user', cls: 'external', subject: `${task.title} · ${describeSchedule(task.schedule)}`, decision: 'allow' });
+    return { ok: true, task, ...scheduleView() };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+ipcMain.handle('schedule:remove', (_e, id) => {
+  scheduleStore().remove(String(id));
+  return { ok: true, ...scheduleView() };
+});
+ipcMain.handle('schedule:runNow', async (_e, id) => {
+  const task = scheduleStore().get(String(id));
+  if (!task) return { ok: false, error: 'Задача не найдена' };
+  return runScheduled(task, { reason: 'manual' });
 });
 
 const audit = (record) => auditLog()(record);
@@ -1159,15 +1503,12 @@ function policyFor(sessionId, projectDir = '') {
       const settings = loadSettings();
       const session = sessionId ? getSession(sessionId) : null;
       const mode = effectiveMode(session?.permissionMode || settings.permissionMode, authStatus().role);
-      // В недоверенной папке «Без вопросов» не действует (ADR 0028).
-      if (mode === 'bypass' && projectDir && !isTrusted(projectDir)) return 'manual';
+      // «Без вопросов» не действует в недоверенной папке (ADR 0028) и при запрете организации (ADR 0038).
+      if (mode === 'bypass' && bypassBlocked(projectDir)) return 'manual';
       return mode;
     },
-    getRules: () => {
-      const settings = loadSettings();
-      const session = sessionId ? getSession(sessionId) : null;
-      return mergeRules(settings.permissions, session?.permissionRules);
-    },
+    // Правила всех уровней: организация, пользователь, проект, локальные, чат (ADR 0038).
+    getRules: () => rulesFor(sessionId, projectDir).rules,
   };
 }
 
@@ -1178,7 +1519,8 @@ function policyFor(sessionId, projectDir = '') {
 function hookRunnerFor(window, { projectDir, sessionId, trusted }) {
   const settings = loadSettings();
   return createHookRunner({
-    hooks: collectHooks({ settingsHooks: settings.hooks, projectDir, trusted }),
+    // Хуки организации (ADR 0038) идут первыми и не выключаются пользователем.
+    hooks: collectHooks({ settingsHooks: settings.hooks, projectDir, trusted, packageHooks: [...managedHooks(), ...packageHooks(packagesFor(projectDir))] }),
     projectDir,
     sessionId,
     onRun: (record) => {
@@ -1216,6 +1558,12 @@ function makeApprover(window, state, sessionId) {
               const current = mergeRules(loadSettings().permissions);
               current.allow = [...current.allow, ...rules.filter((r) => !current.allow.includes(r))];
               saveSettings({ permissions: current });
+            } else if (answer.remember === 'local') {
+              // Личные правила проекта — .mai-code/settings.local.json (ADR 0038).
+              const dir = (sessionId && getSession(sessionId)?.projectDir) || loadSettings().projectDir;
+              if (!isTrusted(dir)) throw new Error('папка не доверена — правила проекта не сохраняются');
+              requireAdmin();
+              updateLocalRules(dir, { kind: 'allow', add: rules });
             } else if (sessionId) {
               addSessionRules(sessionId, 'allow', rules);
             }
@@ -1250,9 +1598,9 @@ function makeAsker(window, state, sessionId, projectDir) {
         clearTimeout(timer);
         if (request.kind === 'plan' && answer?.action === 'approve') {
           const wanted = normalizeMode(answer.mode);
-          let mode = ['manual', 'acceptEdits', 'bypass'].includes(wanted) ? wanted : 'manual';
+          let mode = ['manual', 'acceptEdits', 'smart', 'bypass'].includes(wanted) ? wanted : 'manual';
           // Те же ограничения, что у селектора режима: гостю и в недоверенной папке — без «Без вопросов».
-          if (mode === 'bypass' && (authStatus().role !== 'admin' || !isTrusted(projectDir))) mode = 'manual';
+          if (mode === 'bypass' && bypassBlocked(projectDir)) mode = 'manual';
           if (sessionId) setSessionMode(sessionId, mode);
           answer = { ...answer, mode };
           send(window, { type: 'mode:changed', sessionId, mode });
@@ -1327,17 +1675,238 @@ ipcMain.handle('checkpoints:rewind', (event, payload = {}) => {
   }
 });
 
+// ---------- пакеты плагинов (ADR 0037) ----------
+
+ipcMain.handle('packages:list', (_e, projectDir) => {
+  const settings = loadSettings();
+  const dir = projectDir || settings.projectDir;
+  return {
+    packages: listPackages(dir, dataDir(), { includeProject: isTrusted(dir), settings: settings.packages || {} }),
+    trusted: isTrusted(dir),
+    globalDir: path.join(dataDir(), 'packages'),
+  };
+});
+
+/** Установка из папки или git-URL в глобальные пакеты. Код пакета исполняется — только admin. */
+ipcMain.handle('packages:install', async (_e, payload = {}) => {
+  try {
+    const pkg = installPackage({ from: payload.from, dataDir: dataDir(), replace: payload.replace === true });
+    retirePluginHosts();
+    await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
+    audit({ at: new Date().toISOString(), tool: 'package:install', source: 'user', cls: 'external', subject: `${pkg.name} ← ${String(payload.from).slice(0, 300)}`, decision: 'allow' });
+    return { ok: true, package: pkg };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('packages:uninstall', async (_e, name) => {
+  try {
+    uninstallPackage({ name, dataDir: dataDir() });
+    retirePluginHosts();
+    await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('packages:toggle', async (_e, payload = {}) => {
+  const settings = loadSettings();
+  const packages = { ...(settings.packages || {}) };
+  packages[String(payload.name)] = { ...(packages[payload.name] || {}), enabled: payload.enabled === true };
+  saveSettings({ packages });
+  retirePluginHosts();
+  await mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
+  return { ok: true };
+});
+
+/* ---------- рабочие папки чата (CW1.2, ADR 0045) ---------- */
+
+function sessionDirsView(sessionId) {
+  const session = sessionId ? getSession(sessionId) : null;
+  const projectDir = session?.projectDir || loadSettings().projectDir;
+  return {
+    ok: true,
+    roots: normalizeRoots(projectDir, (session?.extraDirs || []).filter((d) => fs.existsSync(d))),
+    missing: (session?.extraDirs || []).filter((d) => !fs.existsSync(d)),
+  };
+}
+
+ipcMain.handle('session:dirs', (_e, sessionId) => sessionDirsView(sessionId));
+
+/** Возможности модели для окна (CC13.1): показывать ли переключатель глубины, зрение и т. п. */
+ipcMain.handle('models:caps', (_e, key) => {
+  try {
+    const settings = loadSettings();
+    const resolved = resolveModel(settings, key || settings.activeModel);
+    return modelCapabilities(resolved.modelId, resolved.provider);
+  } catch {
+    return null;
+  }
+});
+
+/** «Код / Задача» (CW1.1, ADR 0046). Без чата — значение по умолчанию для новых. */
+ipcMain.handle('session:setKind', (_e, payload = {}) => {
+  const kind = payload.kind === 'task' ? 'task' : 'code';
+  if (payload.sessionId && getSession(payload.sessionId)) {
+    setSessionKind(payload.sessionId, kind);
+    return { ok: true, kind, scope: 'session' };
+  }
+  saveSettings({ defaultKind: kind });
+  return { ok: true, kind, scope: 'default' };
+});
+ipcMain.handle('session:kind', (_e, sessionId) => {
+  const session = sessionId ? getSession(sessionId) : null;
+  return { kind: session?.kind || (loadSettings().defaultKind === 'task' ? 'task' : 'code'), sessionId: session?.id || null };
+});
+
+/** Добавить папку к чату: выбор в системном диалоге — путь из окна не принимается. Расширяет доступ агента — admin. */
+ipcMain.handle('session:addDir', async (event, sessionId) => {
+  const session = sessionId ? getSession(sessionId) : null;
+  if (!session) return { ok: false, error: 'Сначала начните чат' };
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const picked = await dialog.showOpenDialog(window, { title: 'Папка для этого чата', properties: ['openDirectory', 'multiSelections'] });
+  if (picked.canceled || !picked.filePaths.length) return { ok: false, cancelled: true };
+  const home = os.homedir();
+  const bad = picked.filePaths.find((d) => path.resolve(d) === path.parse(path.resolve(d)).root || path.resolve(d) === home);
+  if (bad) return { ok: false, error: `Нельзя дать доступ ко всему диску или домашней папке: ${bad}` };
+  setSessionDirs(session.id, [...(session.extraDirs || []), ...picked.filePaths]);
+  audit({ at: new Date().toISOString(), tool: 'session:addDir', source: 'user', cls: 'read', subject: picked.filePaths.join(', '), decision: 'allow' });
+  return sessionDirsView(session.id);
+});
+
+ipcMain.handle('session:removeDir', (_e, payload = {}) => {
+  const session = payload.sessionId ? getSession(payload.sessionId) : null;
+  if (!session) return { ok: false, error: 'Нет чата' };
+  setSessionDirs(session.id, (session.extraDirs || []).filter((d) => path.resolve(d) !== path.resolve(String(payload.dir || ''))));
+  return sessionDirsView(session.id);
+});
+
+/* ---------- результаты задачи (CW2.6, ADR 0047) ---------- */
+
+ipcMain.handle('results:list', (_e, sessionId) => (sessionId ? sessionResults(dataDir(), sessionId) : []));
+ipcMain.handle('results:preview', (_e, payload = {}) => {
+  try {
+    return { ok: true, ...previewResult(dataDir(), payload.sessionId, payload.file) };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+/** Открыть программой по умолчанию — только документ или картинку из результатов этого чата. */
+ipcMain.handle('results:open', async (_e, payload = {}) => {
+  try {
+    const item = resultFile(dataDir(), payload.sessionId, payload.file);
+    if (!item.openable) return { ok: false, error: 'Такой файл не открывается из приложения — «Показать в папке»' };
+    const error = await shell.openPath(item.file);
+    return error ? { ok: false, error } : { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+ipcMain.handle('results:show', (_e, payload = {}) => {
+  try {
+    const item = resultFile(dataDir(), payload.sessionId, payload.file);
+    shell.showItemInFolder(item.status === 'deleted' ? path.dirname(item.file) : item.file);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+/* ---------- корзина (CW1.4, ADR 0044) ---------- */
+
+const trashDir = () => path.join(dataDir(), 'trash');
+ipcMain.handle('trash:list', () => ({ items: listTrash(trashDir()), dir: trashDir() }));
+ipcMain.handle('trash:restore', (_e, payload = {}) => {
+  try {
+    // Восстановить своё может любой; заменить то, что уже лежит на месте, — только admin.
+    if (payload.overwrite === true) requireAdmin();
+    const meta = restoreFromTrash(trashDir(), payload.id, { overwrite: payload.overwrite === true });
+    audit({ at: new Date().toISOString(), tool: 'trash:restore', source: 'user', cls: 'write', subject: meta.original, decision: 'allow' });
+    return { ok: true, item: meta };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+ipcMain.handle('trash:purge', (_e, payload = {}) => ({ ok: true, removed: purgeTrash(trashDir(), { id: payload.id || null, all: payload.all === true }) }));
+
+/* ---------- маркетплейс пакетов (CC10.2, ADR 0042) ---------- */
+
+function marketplaces() {
+  const list = loadSettings().marketplaces;
+  return Array.isArray(list) ? list.filter((m) => m && m.name && m.url) : [];
+}
+
+function marketplaceView() {
+  const settings = loadSettings();
+  const installed = listPackages(settings.projectDir, dataDir(), { includeProject: false, settings: settings.packages || {} });
+  return { marketplaces: listMarketplaces(marketplaces(), dataDir(), installed) };
+}
+
+ipcMain.handle('marketplace:list', () => marketplaceView());
+
+ipcMain.handle('marketplace:add', (_e, payload = {}) => {
+  try {
+    const market = normalizeMarketplace(payload);
+    const list = marketplaces().filter((m) => m.name !== market.name);
+    refreshMarketplace(market, dataDir());
+    saveSettings({ marketplaces: [...list, market] });
+    audit({ at: new Date().toISOString(), tool: 'marketplace:add', source: 'user', cls: 'external', subject: `${market.name} ← ${market.url.slice(0, 300)}`, decision: 'allow' });
+    return { ok: true, ...marketplaceView() };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('marketplace:remove', (_e, name) => {
+  saveSettings({ marketplaces: marketplaces().filter((m) => m.name !== name) });
+  fs.rmSync(path.join(dataDir(), 'marketplaces', String(name).replace(/[^a-z0-9._-]/gi, '')), { recursive: true, force: true });
+  return { ok: true, ...marketplaceView() };
+});
+
+ipcMain.handle('marketplace:refresh', () => {
+  const errors = [];
+  for (const market of marketplaces()) {
+    try {
+      refreshMarketplace(market, dataDir());
+    } catch (err) {
+      errors.push(err?.message || String(err));
+    }
+  }
+  return { ok: !errors.length, errors, ...marketplaceView() };
+});
+
+/** Установка и обновление из каталога. Пакет — исполняемый код: только admin, в журнал. */
+ipcMain.handle('marketplace:install', async (_e, payload = {}) => {
+  try {
+    const market = marketplaces().find((m) => m.name === payload.marketplace);
+    if (!market) throw new Error(`Каталог «${payload.marketplace}» не подключён`);
+    const { package: pkg, origin } = installFromMarketplace({ market, name: String(payload.name || ''), dataDir: dataDir(), replace: payload.replace === true });
+    const settings = loadSettings();
+    const packages = { ...(settings.packages || {}) };
+    packages[pkg.name] = { ...(packages[pkg.name] || {}), origin };
+    saveSettings({ packages });
+    retirePluginHosts();
+    await mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
+    audit({ at: new Date().toISOString(), tool: 'package:install', source: 'user', cls: 'external', subject: `${pkg.name} ${pkg.version} ← каталог ${market.name}`, decision: 'allow' });
+    return { ok: true, package: pkg, ...marketplaceView() };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
 /** Типы субагентов для `/agents` (CC8.2). */
 ipcMain.handle('agents:defs', (_e, projectDir) => {
   const dir = projectDir || loadSettings().projectDir;
-  return listAgentDefs(dir, dataDir(), { includeProject: isTrusted(dir) }).map(({ name, description, tools, source }) => ({ name, description, tools, source }));
+  return listAgentDefs(dir, dataDir(), { includeProject: isTrusted(dir), extraDirs: packageDirs(packagesFor(dir), 'agents') }).map(({ name, description, tools, source }) => ({ name, description, tools, source }));
 });
 
 /** Хуки для `/hooks`: события, matcher, команда, источник (CC3.3). */
 ipcMain.handle('hooks:list', (_e, projectDir) => {
   const dir = projectDir || loadSettings().projectDir;
   const trusted = isTrusted(dir);
-  const config = collectHooks({ settingsHooks: loadSettings().hooks, projectDir: dir, trusted });
+  const config = collectHooks({ settingsHooks: loadSettings().hooks, projectDir: dir, trusted, packageHooks: [...managedHooks(), ...packageHooks(packagesFor(dir))] });
   const rows = [];
   for (const event of HOOK_EVENTS) {
     for (const group of config[event] || []) {
@@ -1397,6 +1966,8 @@ ipcMain.handle('context:stats', (_e, payload = {}) => {
     mcp,
     history: session?.messages || [],
     window,
+    skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
+    kind: session?.kind || 'code',
   });
 });
 
@@ -1450,7 +2021,7 @@ ipcMain.handle('chat:approval', (event, payload = {}) => {
     // allow === undefined означает «модалку закрыли без ответа» — это отказ.
     resolve({
       allow: allow === true,
-      remember: remember === 'global' || remember === 'session' ? remember : null,
+      remember: ['global', 'session', 'local'].includes(remember) ? remember : null,
       rules: Array.isArray(rules) ? rules.map(String) : [],
       feedback: String(feedback || '').slice(0, 2000),
     });
@@ -1563,6 +2134,17 @@ ipcMain.handle('docs:search', (_e, query) => searchDocs(query));
 
 ipcMain.handle('mcp:status', () => mcp.status());
 ipcMain.handle('mcp:configs', (_e, projectDir) => mcpConfigs(projectDir));
+ipcMain.handle('mcp:scopes', (_e, projectDir) => Object.fromEntries(mcpSources(projectDir).map(({ name, scope }) => [name, scope])));
+/** Личный MCP-сервер проекта (CC9.5): .mai-code/mcp.local.json, только доверенная папка. */
+ipcMain.handle('mcp:saveLocal', async (_e, payload = {}) => {
+  const dir = payload.projectDir || loadSettings().projectDir;
+  const name = String(payload.name || '').trim();
+  if (!dir || !isTrusted(dir)) return { ok: false, error: 'Папка не доверена — локальные MCP-серверы не сохраняются' };
+  if (!/^[\w.-]{1,64}$/.test(name)) return { ok: false, error: 'Неверное имя сервера' };
+  updateLocalMcp(dir, name, payload.config || null);
+  const result = payload.config ? await mcp.connect(name, payload.config) : (await mcp.disconnect(name), { ok: true });
+  return { ok: true, connect: result };
+});
 ipcMain.handle('mcp:sync', async (_e, projectDir) => {
   const settings = loadSettings();
   return mcp.sync(mcpConfigs(projectDir || settings.projectDir));
@@ -1572,8 +2154,65 @@ ipcMain.handle('mcp:connect', async (_e, name, projectDir) => {
   if (!config) return { ok: false, error: 'Сервер не найден в настройках' };
   return mcp.connect(name, config);
 });
-ipcMain.handle('mcp:remove', async (_e, name) => {
+ipcMain.handle('mcp:login', async (_e, name, projectDir) => {
+  const config = mcpConfigs(projectDir)[name];
+  if (!config) return { ok: false, error: 'Сервер не найден в настройках' };
+  const result = await mcp.login(name, config);
+  audit({ at: new Date().toISOString(), type: 'mcp_login', server: name, ok: result.ok });
+  return result;
+});
+ipcMain.handle('mcp:logout', (_e, name) => mcp.logout(name));
+
+/* ---------- каталог коннекторов (CW3.1, ADR 0052) ---------- */
+
+function connectorCatalog() {
+  const org = managed();
+  return listConnectors({ managed: org.connectors, onlyManaged: org.onlyManagedConnectors });
+}
+
+ipcMain.handle('connectors:list', () => {
+  const servers = loadSettings().mcpServers || {};
+  const status = mcp.status();
+  return connectorCatalog().map((c) => {
+    const name = Object.keys(servers).find((n) => servers[n]?.connector === c.id);
+    const st = name ? status.find((s) => s.name === name) : null;
+    return { ...c, installed: Boolean(name), server: name || null, status: st?.status || (name ? 'не подключён' : ''), loggedIn: Boolean(st?.loggedIn) };
+  });
+});
+
+/** Подключить из каталога: запись в mcpServers, для OAuth — сразу вход в браузере. Только admin. */
+ipcMain.handle('connectors:add', async (_e, payload = {}) => {
+  const connector = connectorCatalog().find((c) => c.id === payload.id);
+  if (!connector) return { ok: false, error: 'Нет такого коннектора в каталоге' };
+  let config;
+  try {
+    config = connectorServerConfig(connector, { token: payload.token });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
   const settings = loadSettings();
+  saveSettings({ mcpServers: { ...(settings.mcpServers || {}), [connector.id]: config } });
+  audit({ at: new Date().toISOString(), tool: 'connectors:add', source: 'user', cls: 'external', subject: `${connector.id} ← ${connector.url}`, decision: 'allow' });
+  const fresh = mcpConfigs(settings.projectDir)[connector.id] || config;
+  let result = await mcp.connect(connector.id, fresh);
+  if (!result.ok && result.needsAuth && connector.auth === 'oauth') result = await mcp.login(connector.id, fresh);
+  return result.ok ? { ok: true, tools: result.tools } : { ok: false, error: result.error, saved: true };
+});
+
+ipcMain.handle('connectors:remove', async (_e, id) => {
+  const settings = loadSettings();
+  const servers = { ...(settings.mcpServers || {}) };
+  const name = Object.keys(servers).find((n) => servers[n]?.connector === id);
+  if (!name) return { ok: false, error: 'Коннектор не подключён' };
+  delete servers[name];
+  saveSettings({ mcpServers: servers });
+  await mcp.logout(name);
+  return { ok: true };
+});
+ipcMain.handle('mcp:remove', async (_e, name, projectDir) => {
+  const settings = loadSettings();
+  const dir = projectDir || settings.projectDir;
+  if (dir && isTrusted(dir) && projectMcpConfig(dir, 'mcp.local.json')[name]) updateLocalMcp(dir, name, null);
   const servers = { ...(settings.mcpServers || {}) };
   delete servers[name];
   saveSettings({ mcpServers: servers });
@@ -1939,7 +2578,7 @@ ipcMain.handle('boards:correction', async (event, payload) => {
   (async () => {
     try {
       const history = await runAgent({
-        settings,
+        settings: agentSettings(settings),
         provider: resolved.provider,
         projectDir,
         model: resolved.modelId,
@@ -1954,8 +2593,12 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         trusted,
         // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Запасная модель при сбое основной (ADR 0057).
+        fallback: fallbackFor(settings, payload.model || settings.activeModel),
         // Чекпоинты правок для отката (CC6.1).
         checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
+        extraDirs: (getSession(session.id)?.extraDirs || []).filter((d) => fs.existsSync(d)),
+        kind: getSession(session.id)?.kind || 'code',
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {

@@ -30,6 +30,17 @@ jobs:
       - name: Тесты
         run: npm test
 
+      # Настоящий Docker на раннере: команда агента в песочнице (ADR 0040).
+      - name: Песочница команд в Docker
+        env:
+          MAI_DOCKER_TEST: '1'
+        run: node scripts/test-shell-sandbox.mjs
+
+      - name: Веб-инструменты на настоящем интернете
+        env:
+          MAI_LIVE_WEB: '1'
+        run: node scripts/test-web.mjs
+
       - name: Проверки транспорта Responses API
         run: npm run test:responses
 
@@ -47,6 +58,10 @@ jobs:
           xvfb-run -a npx electron --no-sandbox scripts/test-plugin-host.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-secrets-electron.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-ui.mjs
+
+      # Плановая задача на настоящем приложении с поддельной моделью (ADR 0050).
+      - name: Плановые задачи (дымовая)
+        run: xvfb-run -a node scripts/smoke-scheduler.mjs
 
       - name: Ссылки в документации
         run: npm run docs:check
@@ -101,3 +116,6 @@ jobs:
             if ($p.ExitCode -ne 0) { $failed += $t; Get-Content "$t.err.txt" -ErrorAction SilentlyContinue | Select-Object -Last 20 }
           }
           if ($failed.Count) { throw "Не прошли: $($failed -join ', ')" }
+
+      - name: Плановые задачи (дымовая)
+        run: node scripts/smoke-scheduler.mjs

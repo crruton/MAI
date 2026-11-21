@@ -9,14 +9,14 @@
  * Полное решение принимает PolicyEngine (policy.js, ADR 0027).
  */
 
-export const PERMISSION_MODES = ['manual', 'acceptEdits', 'plan', 'dontAsk', 'bypass'];
+export const PERMISSION_MODES = ['manual', 'acceptEdits', 'smart', 'plan', 'dontAsk', 'bypass'];
 
 export const DEFAULT_PERMISSION_MODE = 'manual';
 
 /**
  * Старые значения режима. До ADR 0027 режим «Авто» разрешал всё без вопросов,
  * поэтому сохранённое `auto` переводится в `bypass` — поведение пользователя
- * не меняется молча. Новый «Авто» с классификатором появится отдельным id.
+ * не меняется молча. Новый «Авто» с классификатором — отдельный id `smart` (ADR 0039).
  */
 const LEGACY_MODES = { auto: 'bypass' };
 
@@ -32,6 +32,13 @@ export const MODE_INFO = {
     label: 'Принимать правки',
     short: 'Правки',
     description: 'Правки файлов проекта — без вопросов. Команды, память и внешние инструменты — с подтверждением.',
+  },
+  smart: {
+    id: 'smart',
+    label: 'Авто',
+    short: 'Авто',
+    description:
+      'Правки проекта и безопасные команды — без вопросов. Сеть, установка пакетов, удаление, git push, всё вне проекта и внешние инструменты — с подтверждением.',
   },
   plan: {
     id: 'plan',
@@ -112,7 +119,7 @@ export function decide({ mode, tool } = {}) {
   if (current === 'dontAsk') {
     return { action: 'deny', reason: 'Режим «Только разрешённое»: действие не покрыто правилом allow.' };
   }
-  if (current === 'acceptEdits' && (name === 'write_file' || name === 'edit_file')) return { action: 'allow' };
+  if ((current === 'acceptEdits' || current === 'smart') && (name === 'write_file' || name === 'edit_file')) return { action: 'allow' };
   return { action: 'ask' };
 }
 
@@ -147,6 +154,14 @@ export function modePrompt(mode) {
       'Пользователь разрешил выполнять правки и команды без подтверждения.',
       'Guardrails и правила deny по-прежнему блокируют разрушительные команды и доступ к секретам.',
       'Действуй осторожно: не удаляй данные и не коммить в git без явной просьбы.',
+    ].join('\n');
+  }
+  if (current === 'smart') {
+    return [
+      '# Режим: Авто',
+      'Правки файлов проекта и команды без высокого риска внутри проекта выполняются без подтверждения.',
+      'Сеть, установка пакетов, удаление, git push, пути вне проекта, встроенный код интерпретатора и внешние инструменты — с подтверждением.',
+      'Предпочитай обратимые шаги; не обходи подтверждение, разбивая опасную команду на части.',
     ].join('\n');
   }
   if (current === 'dontAsk') {

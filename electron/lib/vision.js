@@ -51,6 +51,57 @@ export function imagePart(projectDir, relPath, { maxBytes = IMAGE_LIMITS.perImag
   return { part: { type: 'image_url', image_url: { url: `data:${mime};base64,${data}` } }, bytes: stat.size };
 }
 
+/** Картинка по полному пути (вызывающий уже проверил, что путь в рабочих папках). */
+export function imageFilePart(full, { maxBytes = IMAGE_LIMITS.perImageBytes } = {}) {
+  const mime = MIME[path.extname(String(full)).toLowerCase()];
+  if (!mime) return null;
+  try {
+    const stat = fs.statSync(full);
+    if (!stat.isFile() || stat.size > maxBytes) return null;
+    return { part: { type: 'image_url', image_url: { url: `data:${mime};base64,${fs.readFileSync(full).toString('base64')}` } }, bytes: stat.size };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Картинки, которые агент открыл read_file (CC1.3): после блока результатов
+ * шага вставляется сообщение пользователя с изображениями. В историю чата оно
+ * не попадает — только в запрос. Индексы: `sourceMessages[i]` ↔ `apiMessages[i]`.
+ */
+export function attachToolImages(apiMessages, sourceMessages, limits = IMAGE_LIMITS) {
+  const out = [];
+  let count = 0;
+  let total = 0;
+  for (let i = 0; i < apiMessages.length; i += 1) {
+    out.push(apiMessages[i]);
+    const src = sourceMessages[i];
+    if (src?.role !== 'tool' || !Array.isArray(src.images) || !src.images.length) continue;
+    // Вставляем после последнего результата этого шага.
+    let j = i;
+    while (sourceMessages[j + 1]?.role === 'tool') {
+      j += 1;
+      out.push(apiMessages[j]);
+    }
+    const parts = [];
+    const names = [];
+    for (let k = i; k <= j; k += 1) {
+      for (const file of sourceMessages[k]?.images || []) {
+        if (count >= limits.maxImages) continue;
+        const image = imageFilePart(file, { maxBytes: limits.perImageBytes });
+        if (!image || total + image.bytes > limits.totalBytes) continue;
+        count += 1;
+        total += image.bytes;
+        parts.push(image.part);
+        names.push(path.basename(file));
+      }
+    }
+    if (parts.length) out.push({ role: 'user', content: [{ type: 'text', text: `[Изображения, открытые read_file: ${names.join(', ')}]` }, ...parts] });
+    i = j;
+  }
+  return { messages: out, count };
+}
+
 /**
  * Добавляет картинки к сообщениям пользователя, начиная с последних, пока не
  * исчерпан бюджет. Возвращает новые сообщения и сколько картинок пропущено.

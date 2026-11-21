@@ -127,6 +127,7 @@ export async function streamResponseTurn({
   input,
   tools,
   temperature,
+  effort = '',
   signal,
   emit = () => {},
 }) {
@@ -137,6 +138,8 @@ export async function streamResponseTurn({
     stream: true,
     ...(tools?.length ? { tools } : {}),
     ...(temperature != null && supportsTemperature(model) ? { temperature } : {}),
+    // Глубина рассуждений и краткое изложение размышлений (CC7.11).
+    ...(effort ? { reasoning: { effort, summary: 'auto' } } : {}),
   };
   const stream = await client.responses.create(body, { signal });
 

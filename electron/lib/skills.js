@@ -14,18 +14,20 @@ function parseFrontmatter(raw) {
   return { meta, body: text.slice(match[0].length) };
 }
 
-export function skillDirs(projectDir) {
+export function skillDirs(projectDir, extraDirs = []) {
   return [
     { scope: 'project', dir: path.join(projectDir || '', '.mai-code', 'skills') },
     { scope: 'project', dir: path.join(projectDir || '', '.opencode', 'skills') },
+    // Навыки пакетов (ADR 0037): scope — «package:<имя>».
+    ...extraDirs.map((d) => ({ scope: d.source, dir: d.dir })),
     { scope: 'global', dir: path.join(dataDir(), 'skills') },
   ];
 }
 
 /** Навыки. Без доверия к папке навыки проекта не попадают к агенту (ADR 0028). */
-export function listSkills(projectDir, { includeProject = true } = {}) {
+export function listSkills(projectDir, { includeProject = true, extraDirs = [] } = {}) {
   const skills = [];
-  for (const { scope, dir } of skillDirs(projectDir)) {
+  for (const { scope, dir } of skillDirs(projectDir, extraDirs)) {
     if (!includeProject && scope === 'project') continue;
     if (!dir || !fs.existsSync(dir)) continue;
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -37,6 +39,11 @@ export function listSkills(projectDir, { includeProject = true } = {}) {
       skills.push({
         name: meta.name || entry.name,
         description: meta.description || '',
+        // allowed-tools (CC10.4): правила allow на время прогона после загрузки навыка.
+        allowedTools: String(meta['allowed-tools'] || meta.allowedTools || '')
+          .split(',')
+          .map((t) => t.trim())
+          .filter(Boolean),
         body,
         file,
         scope,
@@ -45,6 +52,41 @@ export function listSkills(projectDir, { includeProject = true } = {}) {
     }
   }
   return skills;
+}
+
+/** Файлы навыка кроме SKILL.md — третий уровень загрузки (CC10.4). Пути относительно папки навыка. */
+export function skillFiles(skill, { limit = 200 } = {}) {
+  const root = path.dirname(skill.file);
+  const out = [];
+  const walk = (dir) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (out.length >= limit) return;
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && full !== skill.file) out.push(path.relative(root, full).split(path.sep).join('/'));
+    }
+  };
+  walk(root);
+  return out.sort();
+}
+
+/** Читает файл навыка; путь не выходит из папки навыка. */
+export function readSkillFile(skill, relative, { maxBytes = 100_000 } = {}) {
+  const root = path.dirname(skill.file);
+  const full = path.resolve(root, String(relative || ''));
+  const rel = path.relative(root, full);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('Файл вне папки навыка');
+  const stat = fs.statSync(full);
+  if (!stat.isFile()) throw new Error('Это не файл');
+  const text = fs.readFileSync(full, 'utf8');
+  return stat.size > maxBytes ? `${text.slice(0, maxBytes)}\n… обрезано (${stat.size} байт)` : text;
 }
 
 /**

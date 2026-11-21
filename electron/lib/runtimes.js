@@ -82,6 +82,8 @@ function presetField(runtime, field) {
  *   кроме «Без вопросов» (CLI работает по своим настройкам).
  */
 export function permissionPlan(runtime, mode = 'manual') {
+  // Внешний CLI не умеет наш классификатор: «Авто» для него — «Принимать правки» (ADR 0039).
+  if (mode === 'smart') mode = 'acceptEdits';
   if (runtime?.mode === 'docker') {
     return { ok: true, args: [], readOnly: READ_ONLY_MODES.has(mode), how: READ_ONLY_MODES.has(mode) ? 'docker: проект только на чтение' : 'docker' };
   }

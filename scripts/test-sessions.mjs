@@ -69,6 +69,22 @@ const byText = store.listSessions({ query: 'postgres' });
 check('поиск по тексту сообщений с фрагментом', byText.length === 1 && /postgres/.test(byText[0].match), JSON.stringify(byText));
 check('нет совпадений — пусто', store.listSessions({ query: 'kubernetes' }).length === 0);
 
+console.log('[прерванные прогоны] (CW5.2)');
+const runStore = createSessionStore(fs.mkdtempSync(path.join(os.tmpdir(), 'mai-run-')));
+const r1 = runStore.createSession({ title: 'a' });
+const r2 = runStore.createSession({ title: 'b' });
+runStore.setSessionRun(r1.id, { status: 'running', startedAt: 'x' });
+runStore.setSessionRun(r2.id, { status: 'done' });
+const copy = runStore.getSession(r1.id);
+copy.run = { status: 'stale' };
+copy.title = 'новое';
+runStore.saveSession(copy);
+check('run защищён от перезаписи прогоном', runStore.getSession(r1.id).run.status === 'running' && runStore.getSession(r1.id).title === 'новое');
+check('run в индексе', runStore.listSessions().find((m) => m.id === r1.id).run === 'running');
+const marked = runStore.markInterrupted();
+check('после перезапуска running → interrupted, остальные не тронуты', marked.length === 1 && marked[0] === r1.id && runStore.getSession(r1.id).run.status === 'interrupted' && runStore.getSession(r2.id).run.status === 'done');
+check('повторно — ничего', runStore.markInterrupted().length === 0);
+
 fs.rmSync(root, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

@@ -10,10 +10,12 @@ import {
   supportsTemperature,
 } from './responses.js';
 import { fsTools } from './tools/fs.js';
-import { shellTools } from './tools/shell.js';
+import { shellTools, backgroundTools } from './tools/shell.js';
 import { skillTools } from './tools/skills.js';
 import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
+import { documentTools } from './tools/documents.js';
+import { webTools } from './tools/web.js';
 import { interactiveTools } from './tools/interactive.js';
 import { todoTools } from './tools/todo.js';
 import { nestedInstructions, projectInstructions } from './instructions.js';
@@ -22,8 +24,12 @@ import { listSkills, readAgents, readMemory } from './skills.js';
 import { reviewAnswer } from './reviewer.js';
 import { modePrompt } from './permissions.js';
 import { effectiveMode, mergeRules } from './policy.js';
+import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
+import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DELAYS } from './retry.js';
+import { modelCapabilities, requestOptions } from './capabilities.js';
+import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
 import { runToolCall, toolEntry } from './tool-runner.js';
-import { attachImages, isImageRejected, supportsVision } from './vision.js';
+import { attachImages, attachToolImages, isImageRejected, supportsVision, isImageFile } from './vision.js';
 import { addUsage, isStreamOptionsRejected, normalizeUsage } from './usage.js';
 import { activeHistory, compactionCut, compactionPrompt, contextBreakdown, DEFAULT_CONTEXT, needsCompaction } from './context.js';
 
@@ -40,11 +46,33 @@ const BASE_PROMPT = `Ты — MAI Code, агент для программиро
 - После изменений проверяй результат (тесты, сборка, линтер), если это возможно.
 - Не коммить в git и не удалять данные без явной просьбы.`;
 
-export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true }) {
+/** Режим «Задача» (CW1.1, ADR 0046): работа с документами и данными, не с кодом. */
+const TASK_PROMPT = `Ты — MAI, помощник для рабочих задач на компьютере пользователя: документы, таблицы, заметки, отчёты, письма, разбор файлов.
+
+Правила:
+- Отвечай по-русски, ясно и без жаргона программистов: пользователь может не быть разработчиком.
+- Сначала пойми задачу. Если не хватает важного (для кого документ, формат, срок, какие файлы брать), спроси через ask_user с вариантами.
+- Перед работой посмотри файлы в рабочих папках инструментами list_files и read_file. Не выдумывай содержимое файлов.
+- Документы Word и таблицы Excel создавай инструментом create_document (.docx из Markdown, .xlsx из листов с формулами), читай — read_document.
+- Результат сохраняй файлом в рабочей папке и назови путь. Не перезаписывай файлы пользователя: создавай новый файл рядом (например, «отчёт (итог).md»), если тебя явно не попросили изменить исходный.
+- Удаляй только инструментом delete_file и только когда об этом попросили.
+- Для задачи из трёх шагов и больше веди список задач инструментом todo_write.
+- Команды оболочки — только если без них никак, и объясни простыми словами, что команда сделает.
+- Не используй git, не предлагай коммиты и не ищи AGENTS.md: это не программный проект.
+- В конце коротко: что сделано, какие файлы созданы или изменены, что проверить пользователю.`;
+
+/** Инструменты, скрытые в режиме «Задача»: про код и репозиторий. */
+export const CODE_ONLY_TOOLS = new Set(['repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search']);
+
+export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true, extraDirs = [], kind = 'code' }) {
   const agents = readAgents(projectDir);
   const memory = readMemory(projectDir);
-  const parts = [BASE_PROMPT, `\nРабочая папка проекта: ${projectDir}`];
+  const task = kind === 'task';
+  const parts = [task ? TASK_PROMPT : BASE_PROMPT, `\n${task ? 'Основная рабочая папка' : 'Рабочая папка проекта'}: ${projectDir}`];
+  const roots = describeRoots(normalizeRoots(projectDir, extraDirs));
+  if (roots) parts.push(roots);
   parts.push(`\n${modePrompt(mode)}`);
+  parts.push(DATA_RULE);
   if (!trusted) {
     // ADR 0028: инструкции из недоверенной папки — данные, а не указания агенту.
     parts.push(
@@ -108,6 +136,8 @@ export function toApiMessage(message) {
   }
   const out = { role: API_ROLES.has(message.role) ? message.role : 'user' };
   if (message.content !== undefined) out.content = message.content;
+  // Чужой текст — в рамке «данные» (CC2.10, ADR 0053).
+  if (message.role === 'tool' && isDataTool(message.name) && typeof message.content === 'string') out.content = wrapData(message.name, message.content);
   if (message.name && out.role === 'tool') out.name = message.name;
   if (message.tool_call_id) out.tool_call_id = message.tool_call_id;
   if (message.tool_calls) out.tool_calls = message.tool_calls;
@@ -144,9 +174,11 @@ export function trimMessages(messages, limit = 320_000) {
 }
 
 /** Клиент провайдера с нужным User-Agent: общий для агента, ревизора и компакции. */
-function clientOptions(prov) {
+function clientOptions(prov, { maxRetries = 0 } = {}) {
   const ua = providerUserAgent('', prov);
-  return { apiKey: prov.apiKey, baseURL: prov.baseURL, maxRetries: 1, ...(ua ? { defaultHeaders: { 'User-Agent': ua } } : {}) };
+  // Шаги агента повторяет сам цикл — с уведомлением и запасной моделью (ADR 0057);
+  // разовые вызовы (компакция, ревизор) полагаются на повторы SDK.
+  return { apiKey: prov.apiKey, baseURL: prov.baseURL, maxRetries, ...(ua ? { defaultHeaders: { 'User-Agent': ua } } : {}) };
 }
 
 /** Один ответ модели без потока: chat.completions, при отказе — Responses API. */
@@ -197,16 +229,16 @@ export async function compactHistory({ client, model, history, instructions = ''
 
 /** Ручная компакция сессии из окна (`/compact`): тот же код, свой клиент. */
 export async function compactSession({ provider, model, messages, instructions = '', signal, clientFactory = null }) {
-  const client = (clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider));
+  const client = (clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider, { maxRetries: 2 }));
   const history = [...messages];
   const marker = await compactHistory({ client, model, history, instructions, signal });
   return { marker, history };
 }
 
 /** Разбор контекста для /context: системный промпт и инструменты как у агента. */
-export function describeContext({ settings, projectDir, mode, trusted = true, mcp, history = [], window = DEFAULT_CONTEXT }) {
-  const skills = listSkills(projectDir, { includeProject: trusted });
-  const system = systemPrompt({ projectDir, skills, mcpStatus: mcp?.status?.() || [], mode, trusted });
+export function describeContext({ settings, projectDir, mode, trusted = true, mcp, history = [], window = DEFAULT_CONTEXT, skillDirs = [], kind = 'code' }) {
+  const skills = listSkills(projectDir, { includeProject: trusted, extraDirs: skillDirs });
+  const system = systemPrompt({ projectDir, skills, mcpStatus: mcp?.status?.() || [], mode, trusted, kind });
   const tools = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...interactiveTools, ...todoTools]
     .map((t) => t.schema)
     .concat((mcp?.toolSchemas?.() || []).map((t) => ({ type: 'function', function: t.function })));
@@ -244,46 +276,65 @@ export async function runAgent({
   checkpoint = null,
   hooks = null,
   agentDefs = null,
+  skillDirs = [],
+  extraDirs = [],
+  kind = 'code',
   subagent = null,
   onHistory = null,
   clientFactory = null,
   contextWindow = DEFAULT_CONTEXT,
+  fallback = null,
+  // Глубина рассуждений (CC7.11): '' — по умолчанию модели, low | medium | high.
+  effort = '',
 }) {
+  let usingFallback = false;
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
   if (!provider.apiKey) throw new Error(`Не задан API-ключ провайдера «${provider.name || 'unknown'}»`);
 
   // defaultHeaders собираем отдельно для каждого провайдера: User-Agent
   // основного не должен перетекать в клиент ревизора.
   const makeClient = clientFactory || ((options) => new OpenAI(options));
-  const client = makeClient(clientOptions(provider));
+  let client = makeClient(clientOptions(provider));
   const reviewerClient = reviewer?.provider?.baseURL && reviewer?.provider?.apiKey
-    ? makeClient(clientOptions(reviewer.provider))
+    ? makeClient(clientOptions(reviewer.provider, { maxRetries: 2 }))
     : null;
   // Часть моделей (gpt-5.6-sol, gpt-6.1-sol на AgentRouter) не принимает
   // /v1/chat/completions. Запоминаем выбор транспорта на всю сессию,
   // чтобы не ловить 400 на каждой итерации.
-  let useResponses = false;
+  // Возможности модели (CC13.1): транспорт, зрение, temperature, глубина рассуждений.
+  let caps = modelCapabilities(model, provider);
+  let useResponses = caps.transport === 'responses';
+  let effortSupported = true;
+  let toolsNoticeShown = false;
   // Изображения из вложений — только моделям, которые их принимают (бэклог F1).
-  let useImages = supportsVision(model, provider);
+  let useImages = caps.vision;
   let imageNoticeShown = false;
   // usage в потоке chat.completions приходит только с stream_options (A3.8).
   // Шлюз, который этот параметр не знает, отвечает 400 — тогда выключаем.
   let streamUsage = true;
   let runUsage = null;
-  const skills = listSkills(projectDir, { includeProject: trusted });
+  // Навыки пакетов (ADR 0037) — вместе с проектными и глобальными.
+  const skills = listSkills(projectDir, { includeProject: trusted, extraDirs: skillDirs });
   const repoTools = settings.repowise?.enabled ? repowiseTools : [];
 
   // Режим и правила читаются на каждый вызов: переключение в интерфейсе
   // действует сразу, в том числе на список инструментов следующей итерации.
   const role = policy?.role || 'admin';
+  const skillGrants = [];
+  // Отметки «файл прочитан» живут весь прогон, а не одну итерацию (CC1.2).
+  const readFiles = new Map();
+  // Признаки prompt injection в прочитанном (CC2.10): до конца прогона «Авто» спрашивает про действия.
+  let taint = null;
   const currentMode = () => effectiveMode(policy?.getMode ? policy.getMode() : permissionMode || settings.permissionMode, role);
   const policyCtx = {
     role,
     getMode: currentMode,
-    getRules: () => (policy?.getRules ? policy.getRules() : mergeRules(settings.permissions)),
+    // Правила навыков (allowed-tools, CC10.4) — только на этот прогон, поверх обычных.
+    getRules: () => mergeRules(policy?.getRules ? policy.getRules() : mergeRules(settings.permissions), { allow: skillGrants }),
+    getTaint: () => taint,
   };
 
-  const builtin = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
+  const builtin = [...fsTools, ...documentTools, ...shellTools, ...backgroundTools, ...(settings.webTools === false ? [] : webTools), ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
     toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview }),
   );
   const builtinNames = new Set(builtin.map((t) => t.name));
@@ -337,6 +388,11 @@ export async function runAgent({
       hooks,
       clientFactory,
       contextWindow,
+      skillDirs,
+      extraDirs,
+      kind,
+      fallback: usingFallback ? null : fallback,
+      effort,
       subagent: { def },
     });
     const final = [...subHistory].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '(субагент не вернул текст)';
@@ -364,6 +420,8 @@ export async function runAgent({
     const extra = !subagent && agentEntry ? [agentEntry] : [];
     const all = [...builtin, ...fromPlugins, ...fromMcp, ...extra].filter((t) => {
       if (subagent && !allowedForSub(t)) return false;
+      // «Задача» (CW1.1): инструменты про код и репозиторий не нужны.
+      if (kind === 'task' && CODE_ONLY_TOOLS.has(t.name)) return false;
       // exit_plan нужен только в «Плане»; спросить пользователя в «Только разрешённое» некого.
       if (t.name === 'exit_plan') return mode === 'plan';
       if (t.name === 'ask_user') return mode !== 'dontAsk' && typeof ask === 'function';
@@ -415,7 +473,7 @@ export async function runAgent({
     const mode = currentMode();
     const tools = buildTools(mode);
     const system =
-      systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted }) +
+      systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs, kind }) +
       (subagent
         ? `\n\n# Ты — субагент «${subagent.def.name}»\n${subagent.def.prompt || ''}\nПользователь этот диалог не видит: родительский агент получит только твой последний ответ. ` +
           'Заверши работу одним итоговым сообщением: что найдено или сделано, пути файлов, что не удалось.'
@@ -457,6 +515,8 @@ export async function runAgent({
       if (withImages) {
         const attached = attachImages(api, trimmed, projectDir);
         api = attached.messages;
+        // Картинки из read_file (CC1.3) — после результатов шага; индексы ещё совпадают.
+        api = attachToolImages(api, trimmed).messages;
         if (attached.skipped && !imageNoticeShown) {
           imageNoticeShown = true;
           emit({ type: 'notice', text: `Изображений не передано: ${attached.skipped} (тип, размер или лимит запроса).` });
@@ -478,8 +538,9 @@ export async function runAgent({
           model,
           instructions,
           input: toInput(rest.map(toApiMessage)),
-          tools: toResponseTools(tools),
-          temperature: settings.temperature ?? 0.3,
+          tools: caps.tools ? toResponseTools(tools) : [],
+          temperature: caps.temperature ? settings.temperature ?? 0.3 : null,
+          effort: effortSupported && caps.effort.includes(effort) ? effort : '',
           signal,
           emit,
         });
@@ -492,11 +553,15 @@ export async function runAgent({
         await runViaResponses();
       } else {
         try {
+          if (!caps.tools && !toolsNoticeShown) {
+            toolsNoticeShown = true;
+            emit({ type: 'notice', level: 'warn', text: `${model} не вызывает инструменты — агент только отвечает текстом` });
+          }
           const body = {
             model,
             messages: requestMessages,
-            tools: tools.map((t) => t.schema),
-            ...(supportsTemperature(model) ? { temperature: settings.temperature ?? 0.3 } : {}),
+            ...(caps.tools ? { tools: tools.map((t) => t.schema) } : {}),
+            ...requestOptions(caps, { temperature: settings.temperature ?? 0.3, effort: effortSupported ? effort : '' }),
             stream: true,
           };
           let stream;
@@ -506,9 +571,17 @@ export async function runAgent({
               { signal },
             );
           } catch (err) {
-            if (!streamUsage || !isStreamOptionsRejected(err)) throw err;
-            streamUsage = false;
-            stream = await client.chat.completions.create(body, { signal });
+            // Шлюз не знает reasoning_effort — повторяем без него и больше не шлём (CC7.11).
+            if (body.reasoning_effort && /reasoning_effort|reasoning|unrecognized|unknown param|extra.?(inputs|fields)/i.test(String(err?.message || ''))) {
+              effortSupported = false;
+              delete body.reasoning_effort;
+              emit({ type: 'notice', text: `${model}: шлюз не принимает глубину рассуждений — без неё` });
+              stream = await client.chat.completions.create(streamUsage ? { ...body, stream_options: { include_usage: true } } : body, { signal });
+            } else {
+              if (!streamUsage || !isStreamOptionsRejected(err)) throw err;
+              streamUsage = false;
+              stream = await client.chat.completions.create(body, { signal });
+            }
           }
 
           const calls = [];
@@ -547,17 +620,57 @@ export async function runAgent({
       }
     };
 
-    try {
-      await runTurn(buildRequest(useImages));
-    } catch (err) {
-      // Шлюз не принял изображение — повторяем шаг без картинок, один раз на прогон.
-      if (signal.aborted || !useImages || !isImageRejected(err)) throw err;
-      useImages = false;
+    const resetTurn = () => {
       content = '';
       reasoning = '';
       validCalls = [];
-      emit({ type: 'notice', text: `${model} не принял изображение — продолжаю без картинок (путь к файлу и OCR в тексте запроса).` });
-      await runTurn(buildRequest(false));
+      turnUsage = null;
+    };
+    const attempt = async () => {
+      try {
+        await runTurn(buildRequest(useImages));
+      } catch (err) {
+        // Шлюз не принял изображение — повторяем шаг без картинок, один раз на прогон.
+        if (signal.aborted || !useImages || !isImageRejected(err)) throw err;
+        useImages = false;
+        resetTurn();
+        emit({ type: 'notice', text: `${model} не принял изображение — продолжаю без картинок (путь к файлу и OCR в тексте запроса).` });
+        await runTurn(buildRequest(false));
+      }
+    };
+    // Повторы при временных сбоях (CC13.3) и запасная модель (CC13.2), ADR 0057.
+    for (let retry = 0; ; retry += 1) {
+      try {
+        await attempt();
+        break;
+      } catch (err) {
+        if (signal.aborted) throw err;
+        // Повторяем, только если модель ещё ничего не показала: иначе текст в ленте задвоится.
+        const clean = !content && !reasoning && !validCalls.length;
+        if (clean && isTransient(err) && retry < RETRY_DELAYS.length) {
+          const wait = retryDelay(err, retry);
+          emit({ type: 'notice', level: 'warn', text: `${model}: ${describeError(err)} — повтор через ${Math.round(wait / 1000)} с (${retry + 1} из ${RETRY_DELAYS.length})` });
+          await sleep(wait, signal);
+          resetTurn();
+          continue;
+        }
+        if (clean && fallback?.provider && !usingFallback && needsFallback(err)) {
+          usingFallback = true;
+          const failed = model;
+          client = makeClient(clientOptions(fallback.provider));
+          model = fallback.model;
+          provider = fallback.provider;
+          caps = modelCapabilities(model, provider);
+          useResponses = caps.transport === 'responses';
+          useImages = caps.vision;
+          resetTurn();
+          retry = -1;
+          emit({ type: 'notice', level: 'warn', text: `${failed} недоступна (${describeError(err)}) — дальше отвечает запасная модель ${fallback.label || model}` });
+          emit({ type: 'model:fallback', from: failed, to: fallback.label || model });
+          continue;
+        }
+        throw err;
+      }
     }
 
     const assistantMessage = { role: 'assistant', content: content || null, model };
@@ -635,11 +748,26 @@ export async function runAgent({
 
     const toolCtx = {
       projectDir,
+      // Папка длинных выводов (CC1.13) — тоже рабочая: агент дочитывает её read_file/grep.
+      roots: normalizeRoots(projectDir, [...extraDirs, ...(settings.outputDir ? [{ dir: settings.outputDir, name: 'вывод' }] : [])]),
+      outputDir: settings.outputDir || null,
+      // Какие файлы агент прочитал в этом прогоне — правка вслепую запрещена (CC1.2).
+      readFiles,
+      // Видит ли модель картинки — read_file отвечает по-разному (CC1.3).
+      vision: () => useImages,
       allowOutsideProject: settings.allowOutsideProject,
       guardrails: settings.guardrails,
       repowise: settings.repowise,
+      shellSandbox: settings.shellSandbox,
+      trashDir: settings.trashDir,
+      // Защищённые ветки (CC11.6): по умолчанию main и master.
+      protectedBranches: Array.isArray(settings.protectedBranches) ? settings.protectedBranches : undefined,
+      // Поиск: провайдер и ключ из настроек (ADR 0056).
+      webConfig: settings.webSearch || {},
+      dockerAvailable: settings.dockerAvailable,
       trusted,
       ask,
+      skillDirs,
     };
     const execCall = async (call) => {
       const args = parseArgs(call.function.arguments);
@@ -659,6 +787,13 @@ export async function runAgent({
             signal,
             progress: (text) => emit({ type: 'tool_progress', id: call.id, text: String(text).slice(0, 8000) }),
             todos: (todos) => emit({ type: 'todos', todos }),
+            grantRules: (rules, skill) => {
+              const fresh = rules.filter((r) => !skillGrants.includes(r));
+              if (!fresh.length) return;
+              skillGrants.push(...fresh);
+              emit({ type: 'notice', level: 'info', text: `Навык «${skill}» разрешил на этот прогон: ${fresh.join(', ')}` });
+              audit?.({ at: new Date().toISOString(), tool: 'load_skill', source: 'skill', cls: 'read', subject: skill, decision: 'grant', rules: fresh });
+            },
             // Чекпоинт правки — к последнему сообщению пользователя (CC6.1).
             beforeWrite: (file) => {
               try {
@@ -702,13 +837,31 @@ export async function runAgent({
           /* инструкции не должны ломать шаг */
         }
       }
+      if (!taint && isDataTool(call.function.name)) {
+        const hit = detectInjection(outcome.content);
+        if (hit) {
+          taint = { ...hit, source: call.function.name, path: args?.path || args?.query || '' };
+          emit({ type: 'notice', level: 'warn', text: `В прочитанном (${call.function.name}${taint.path ? ` ${taint.path}` : ''}) похоже на внушённые указания: ${hit.why}. До конца ответа действия агента — только с вашего подтверждения.` });
+          audit?.({ at: new Date().toISOString(), tool: call.function.name, source: 'injection', cls: 'read', subject: String(taint.path).slice(0, 300), decision: 'taint', reason: hit.why, snippet: hit.snippet });
+        }
+      }
       emit({ type: 'tool_result', id: call.id, name: call.function.name, content: outcome.content, ok: outcome.ok, diff: outcome.diff || null });
+      // read_file картинки (CC1.3): путь — в результат, сама картинка уйдёт в запрос.
+      let images = null;
+      if (call.function.name === 'read_file' && outcome.ok !== false && isImageFile(args?.path) && /^Изображение /.test(String(outcome.content))) {
+        try {
+          images = [resolveIn(toolCtx.roots, args.path, { allowOutside: Boolean(settings.allowOutsideProject) })];
+        } catch {
+          images = null;
+        }
+      }
       history.push({
         role: 'tool',
         tool_call_id: call.id,
         name: call.function.name,
         content: outcome.content,
         ...(outcome.diff ? { diff: outcome.diff } : {}),
+        ...(images ? { images } : {}),
       });
       snapshot();
     };

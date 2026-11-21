@@ -25,7 +25,15 @@ export const BUILTIN_COMMANDS = [
   { name: 'compact', description: 'Сжать раннюю часть диалога в сводку', argumentHint: '[что сохранить]' },
   { name: 'cost', description: 'Токены и стоимость чата' },
   { name: 'hooks', description: 'Хуки на события агента' },
+  { name: 'permissions', description: 'Правила разрешений по уровням и проверка вызова' },
+  { name: 'trash', description: 'Корзина: удалённые агентом файлы, восстановление' },
+  // overridable: своя команда проекта или пакета с тем же именем сильнее встроенной.
+  { name: 'commit', description: 'Закоммитить изменения: агент пишет сообщение, вы подтверждаете', argumentHint: '[уточнение]', overridable: true },
+  { name: 'review', description: 'Ревью текущих изменений или PR', argumentHint: '[номер PR]', overridable: true },
+  { name: 'connectors', description: 'Каталог коннекторов: Linear, Notion, GitHub и другие в два клика' },
+  { name: 'schedule', description: 'Плановые задачи: по расписанию, без вопросов, только по правилам' },
   { name: 'agents', description: 'Типы субагентов' },
+  { name: 'packages', description: 'Пакеты плагинов: список, установка, включение' },
 ];
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -42,9 +50,11 @@ function parseFrontmatter(raw) {
   return { meta, body: text.slice(match[0].length) };
 }
 
-export function commandDirs(projectDir, dataDir, { includeProject = true } = {}) {
+/** Порядок: проект → пакеты (ADR 0037) → глобальные; первая команда с именем побеждает. */
+export function commandDirs(projectDir, dataDir, { includeProject = true, extraDirs = [] } = {}) {
   const dirs = [];
   if (includeProject && projectDir) dirs.push({ source: 'project', dir: path.join(projectDir, '.mai-code', 'commands') });
+  dirs.push(...extraDirs);
   if (dataDir) dirs.push({ source: 'global', dir: path.join(dataDir, 'commands') });
   return dirs;
 }
@@ -63,7 +73,7 @@ export function listCustomCommands(projectDir, dataDir, options = {}) {
       if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
       const name = entry.name.slice(0, -3);
       if (!NAME_RE.test(name) || seen.has(name.toLowerCase())) continue;
-      if (BUILTIN_COMMANDS.some((c) => c.name === name.toLowerCase())) continue; // встроенные не переопределяются
+      if (BUILTIN_COMMANDS.some((c) => c.name === name.toLowerCase() && !c.overridable)) continue; // встроенные не переопределяются (кроме overridable)
       const file = path.join(dir, entry.name);
       try {
         const { meta, body } = parseFrontmatter(fs.readFileSync(file, 'utf8'));

@@ -5,6 +5,7 @@ import { createSecretBox, openSettings, sealSettings, keepUnreadable, plaintextS
 import { envCandidates, readEnvFiles } from './env.js';
 import { RUNTIME_PRESETS } from './runtimes.js';
 import { DEFAULT_GUARDRAILS } from './guardrails.js';
+import { normalizeShellSandbox } from './shell-sandbox.js';
 
 const DEFAULTS = {
   temperature: 0.3,
@@ -276,6 +277,7 @@ export function loadSettings() {
     providers,
     runtimes: bootstrapRuntimes(saved),
     guardrails: { ...DEFAULT_GUARDRAILS, ...(saved.guardrails || {}) },
+    shellSandbox: normalizeShellSandbox(saved.shellSandbox),
     permissions: {
       allow: Array.isArray(saved.permissions?.allow) ? saved.permissions.allow : [],
       ask: Array.isArray(saved.permissions?.ask) ? saved.permissions.ask : [],
@@ -323,8 +325,31 @@ export function saveSettings(patch) {
     }
   }
 
+  // Окно видит заголовки и env MCP как «***»: при сохранении такие значения не затирают настоящие.
+  if (patch.mcpServers) {
+    const keep = (value, previous) => (value === '***' ? previous : value);
+    next.mcpServers = Object.fromEntries(
+      Object.entries(patch.mcpServers).map(([name, server]) => {
+        const old = current.mcpServers?.[name] || {};
+        const restore = (field) =>
+          server?.[field] ? { [field]: Object.fromEntries(Object.entries(server[field]).map(([k, v]) => [k, keep(v, old[field]?.[k])]).filter(([, v]) => v !== undefined)) } : {};
+        return [name, { ...server, ...restore('headers'), ...restore('env') }];
+      }),
+    );
+  }
+
+  if (patch.webSearch) {
+    const provider = ['duckduckgo', 'searxng', 'brave'].includes(patch.webSearch.provider) ? patch.webSearch.provider : current.webSearch?.provider || 'duckduckgo';
+    const apiKey = patch.webSearch.apiKey === '***' || patch.webSearch.apiKey === undefined ? current.webSearch?.apiKey || '' : String(patch.webSearch.apiKey);
+    next.webSearch = { provider, url: String(patch.webSearch.url ?? current.webSearch?.url ?? ''), apiKey, allowPrivate: patch.webSearch.allowPrivate === true };
+  }
+
   if (patch.repowise) {
     next.repowise = { ...(current.repowise || {}), ...patch.repowise };
+  }
+
+  if (patch.shellSandbox) {
+    next.shellSandbox = normalizeShellSandbox({ ...(current.shellSandbox || {}), ...patch.shellSandbox });
   }
 
   if (patch.guardrails) {
@@ -379,6 +404,18 @@ export function publicSettings() {
     token: s.mas?.token ? '***' : '',
     tokenSet: Boolean(s.mas?.token),
   };
+  safe.webSearch = { ...(s.webSearch || {}), apiKey: s.webSearch?.apiKey ? '***' : '', apiKeySet: Boolean(s.webSearch?.apiKey) };
+  // Заголовки и env MCP-серверов — наружу только факт наличия (ADR 0052).
+  safe.mcpServers = Object.fromEntries(
+    Object.entries(s.mcpServers || {}).map(([name, server]) => [
+      name,
+      {
+        ...server,
+        ...(server?.headers ? { headers: Object.fromEntries(Object.keys(server.headers).map((k) => [k, '***'])) } : {}),
+        ...(server?.env ? { env: Object.fromEntries(Object.keys(server.env).map((k) => [k, '***'])) } : {}),
+      },
+    ]),
+  );
   const secrets = secretsStatus();
   safe.secretsProtection = secrets.protection;
   safe.secretsPlaintext = secrets.plaintext.length;
@@ -390,4 +427,4 @@ export function publicSettings() {
   return safe;
 }
 
-export { dataDir, STATIC_MODELS };
+export { dataDir, STATIC_MODELS, secretBox };

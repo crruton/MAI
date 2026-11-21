@@ -1,10 +1,14 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
+import { createOAuthProvider, startCallbackServer, DEFAULT_CALLBACK_PORT, NeedsLoginError } from './mcp-oauth.js';
 
 /**
  * Держит подключения к MCP-серверам из настроек.
  * Поддержаны два транспорта: локальный процесс (stdio) и HTTP (streamable http).
+ * Для HTTP — OAuth (ADR 0041): вход только по кнопке «Войти», токены в
+ * зашифрованном хранилище, обновление токена — в SDK.
  */
 function withTimeout(promise, ms, message) {
   let timer = null;
@@ -18,9 +22,39 @@ function withTimeout(promise, ms, message) {
   });
 }
 
+function isAuthError(err) {
+  return err instanceof UnauthorizedError || err instanceof NeedsLoginError || err?.needsLogin || err?.code === 401 || /\b401\b|unauthori[sz]ed|invalid_token/i.test(err?.message || '');
+}
+
 export class McpManager {
-  constructor() {
+  /**
+   * @param {object} [options]
+   * @param {object} [options.oauth] { store, openBrowser(url), callbackPort }
+   */
+  constructor({ oauth = null } = {}) {
     this.servers = new Map(); // name -> { status, error, client, tools }
+    this.oauth = oauth;
+  }
+
+  redirectUrl() {
+    return `http://127.0.0.1:${this.oauth?.callbackPort || DEFAULT_CALLBACK_PORT}/callback`;
+  }
+
+  /** OAuth-провайдер для HTTP-сервера; null — OAuth выключен для сервера или нет хранилища. */
+  authProviderFor(name, config, { onAuthorize = null, redirectUrl = this.redirectUrl() } = {}) {
+    if (!this.oauth?.store || !config.url || config.oauth === false) return null;
+    const saved = this.oauth.store.get(name);
+    // Другой адрес сервера — старые токены не отправляем.
+    if (saved.url && saved.url !== config.url) this.oauth.store.clear(name);
+    if (saved.url !== config.url) this.oauth.store.update(name, { url: config.url });
+    return createOAuthProvider({ server: name, store: this.oauth.store, redirectUrl, onAuthorize });
+  }
+
+  transportFor(name, config, authProvider) {
+    return new StreamableHTTPClientTransport(new URL(config.url), {
+      requestInit: config.headers ? { headers: config.headers } : undefined,
+      ...(authProvider ? { authProvider } : {}),
+    });
   }
 
   status() {
@@ -29,6 +63,7 @@ export class McpManager {
       status: s.status,
       error: s.error || '',
       tools: (s.tools || []).map((t) => t.name),
+      loggedIn: Boolean(this.oauth?.store?.has(name)),
     }));
   }
 
@@ -51,9 +86,7 @@ export class McpManager {
       const client = new Client({ name: 'mai-code', version: '0.1.0' }, { capabilities: {} });
       let transport;
       if (config.url) {
-        transport = new StreamableHTTPClientTransport(new URL(config.url), {
-          requestInit: config.headers ? { headers: config.headers } : undefined,
-        });
+        transport = this.transportFor(name, config, this.authProviderFor(name, config));
       } else {
         if (!config.command) throw new Error('Нужен command или url');
         transport = new StdioClientTransport({
@@ -71,10 +104,74 @@ export class McpManager {
       entry.status = 'ready';
       return { ok: true, tools: entry.tools.map((t) => t.name) };
     } catch (err) {
+      if (config.url && config.oauth === false && isAuthError(err)) {
+        entry.status = 'error';
+        entry.error = 'сервер требует авторизацию: задайте заголовок Authorization в headers или уберите oauth: false';
+        return { ok: false, error: `MCP ${name}: ${entry.error}` };
+      }
+      if (config.url && isAuthError(err)) {
+        entry.status = 'needs_auth';
+        entry.error = 'нужен вход';
+        return { ok: false, needsAuth: true, error: `MCP ${name}: нужен вход — нажмите «Войти»` };
+      }
       entry.status = 'error';
       entry.error = err?.message || String(err);
       return { ok: false, error: entry.error };
     }
+  }
+
+  /**
+   * Вход через браузер (ADR 0041): поднимает приём кода на 127.0.0.1, открывает
+   * страницу входа, ждёт код, обменивает его на токены и подключается заново.
+   */
+  async login(name, config) {
+    if (!config?.url) return { ok: false, error: 'Вход нужен только HTTP-серверам' };
+    if (!this.oauth?.store || typeof this.oauth.openBrowser !== 'function') return { ok: false, error: 'OAuth недоступен' };
+    if (config.oauth === false) return { ok: false, error: 'OAuth для сервера выключен (oauth: false)' };
+    await this.disconnect(name);
+    let provider = null;
+    const callback = await startCallbackServer({
+      port: this.oauth.callbackPort || DEFAULT_CALLBACK_PORT,
+      expectedState: () => provider?.expectedState(),
+      timeoutMs: this.oauth.timeoutMs,
+    });
+    let opened = false;
+    try {
+      // Клиент зарегистрирован на другой адрес возврата — регистрируемся заново.
+      const saved = this.oauth.store.get(name);
+      if (saved.client && !(saved.client.redirect_uris || []).includes(callback.redirectUrl)) this.oauth.store.update(name, { client: undefined });
+      provider = this.authProviderFor(name, config, {
+        redirectUrl: callback.redirectUrl,
+        onAuthorize: async (url) => {
+          opened = true;
+          await this.oauth.openBrowser(url.toString());
+        },
+      });
+      const transport = this.transportFor(name, config, provider);
+      const client = new Client({ name: 'mai-code', version: '0.1.0' }, { capabilities: {} });
+      try {
+        await withTimeout(client.connect(transport), 30_000, 'MCP: нет ответа на initialize за 30 с');
+        // Токен уже был и подошёл — вход не понадобился.
+        await client.close().catch(() => {});
+      } catch (err) {
+        if (!opened || !isAuthError(err)) throw err;
+        const code = await callback.code;
+        await transport.finishAuth(code);
+        await client.close().catch(() => {});
+      }
+      return await this.connect(name, config);
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    } finally {
+      callback.close();
+    }
+  }
+
+  /** Выход: токены и регистрация клиента удаляются, сервер отключается. */
+  async logout(name) {
+    this.oauth?.store?.clear(name);
+    await this.disconnect(name);
+    return { ok: true };
   }
 
   async sync(configs = {}) {

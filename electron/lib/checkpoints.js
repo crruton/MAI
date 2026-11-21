@@ -152,6 +152,20 @@ export function rewindFiles(dataDir, sessionId, turn) {
   return { restored: done, failed };
 }
 
+/**
+ * Все файлы, которые агент менял в чате (CW2.6): первый ход, где файл тронут,
+ * и было ли его до этого (absent — файл создан агентом).
+ */
+export function touchedFiles(dataDir, sessionId) {
+  const files = new Map();
+  for (const entry of readIndex(dataDir, sessionId).turns) {
+    for (const [file, state] of Object.entries(entry.files)) {
+      if (!files.has(file)) files.set(file, { file, turn: entry.turn, at: entry.at, existedBefore: !state.absent });
+    }
+  }
+  return [...files.values()];
+}
+
 /** Ходы с правками — для отметки в ленте. */
 export function checkpointTurns(dataDir, sessionId) {
   return readIndex(dataDir, sessionId).turns.map((t) => ({ turn: t.turn, files: Object.keys(t.files).length, at: t.at }));

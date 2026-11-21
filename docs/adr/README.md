@@ -52,3 +52,27 @@ ADR фиксируют решения, которые дорого менять:
 | [0034](0034-hranilishche-chatov.md) | Чаты: файл на сессию, индекс, поиск | accepted | 2026-11-20 |
 | [0035](0035-huki.md) | Хуки на события агента | accepted | 2026-11-20 |
 | [0036](0036-subagenty.md) | Субагенты | accepted | 2026-11-20 |
+| [0037](0037-pakety-plaginov.md) | Пакеты плагинов | accepted | 2026-11-20 |
+| [0038](0038-urovni-nastroek.md) | Уровни настроек и панель «Разрешения» | accepted | 2026-11-20 |
+| [0039](0039-rezhim-avto.md) | Режим «Авто» с классификатором | accepted | 2026-11-20 |
+| [0040](0040-pesochnica-dlya-komand.md) | Песочница для команд агента | accepted | 2026-11-20 |
+| [0041](0041-oauth-dlya-mcp.md) | OAuth для удалённых MCP-серверов | accepted | 2026-11-20 |
+| [0042](0042-marketpleys-paketov.md) | Маркетплейс пакетов | accepted | 2026-11-21 |
+| [0043](0043-navyki-fajly-i-razresheniya.md) | Навыки: файлы и allowed-tools | accepted | 2026-11-21 |
+| [0044](0044-zashchita-ot-udaleniya.md) | Защита от удаления и корзина | accepted | 2026-11-21 |
+| [0045](0045-rabochie-papki-chata.md) | Рабочие папки чата | accepted | 2026-11-21 |
+| [0046](0046-rezhim-zadacha.md) | Режим «Задача» | accepted | 2026-11-21 |
+| [0047](0047-rezultaty-zadachi.md) | Результаты задачи | accepted | 2026-11-21 |
+| [0048](0048-otpravka-cherez-konnektory.md) | Отправка через коннекторы | accepted | 2026-11-21 |
+| [0049](0049-dokumenty-docx-xlsx.md) | Документы: создание и чтение DOCX и XLSX | accepted | 2026-11-21 |
+| [0050](0050-planovye-zadachi.md) | Плановые задачи | accepted | 2026-11-21 |
+| [0051](0051-dlinnye-zadachi.md) | Длинные задачи и прогресс | accepted | 2026-11-21 |
+| [0052](0052-katalog-konnektorov.md) | Каталог коннекторов и токены MCP | accepted | 2026-11-21 |
+| [0053](0053-zashchita-ot-prompt-injection.md) | Защита от prompt injection | accepted | 2026-11-21 |
+| [0054](0054-glob-edit-file-limit-vyvoda.md) | glob, правка файлов и лимит вывода | accepted | 2026-11-21 |
+| [0055](0055-fonovye-komandy.md) | Фоновые команды | accepted | 2026-11-21 |
+| [0056](0056-web-fetch-web-search.md) | web_fetch и web_search | accepted | 2026-11-21 |
+| [0057](0057-povtory-i-zapasnaya-model.md) | Повторы и запасная модель | accepted | 2026-11-21 |
+| [0058](0058-vozmozhnosti-modeli.md) | Возможности модели и глубина рассуждений | accepted | 2026-11-21 |
+| [0059](0059-git-potok.md) | Git-поток: защита веток, /commit, /review | accepted | 2026-11-21 |
+| [0060](0060-shemy-ipc.md) | Проверка данных IPC | accepted | 2026-11-21 |

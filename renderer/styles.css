@@ -442,6 +442,7 @@ button { cursor: pointer; }
 .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim); }
 .badge.ok { color: var(--green); border-color: rgba(52, 211, 153, 0.4); background: rgba(52, 211, 153, 0.08); }
 .badge.err { color: var(--red); border-color: rgba(248, 113, 113, 0.4); background: rgba(248, 113, 113, 0.08); }
+.badge.warn { color: #f59e0b; border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.08); }
 
 .approve-args {
   background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
@@ -633,6 +634,13 @@ button { cursor: pointer; }
 .msg-user.editing .bubble { outline: 2px dashed var(--accent); outline-offset: 2px; }
 .edit-banner { font-size: 12px; color: var(--accent-2); padding: 4px 8px; margin-bottom: 6px; border: 1px dashed var(--accent); border-radius: 8px; }
 
+/* ---------- пакеты (ADR 0037) ---------- */
+.packages-list { display: grid; gap: 8px; }
+.package-row { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.package-row.disabled { opacity: 0.55; }
+.package-info { flex: 1; }
+.package-parts { font-size: 12px; color: var(--text-dim); font-family: var(--mono); margin-top: 2px; }
+
 /* ---------- ревизор ---------- */
 .msg-review { display: flex; justify-content: center; }
 .review-card {
@@ -723,3 +731,71 @@ button { cursor: pointer; }
   .docs-shell { grid-template-columns: 190px minmax(0, 1fr); }
   .docs-toc { display: none; }
 }
+
+/* панель «Разрешения» (ADR 0038) */
+.perm-row { grid-template-columns: 56px 1fr auto auto; align-items: center; }
+.perm-kind { font-size: 11px; text-transform: uppercase; font-weight: 600; }
+.perm-deny { color: var(--danger, #d9534f); }
+.perm-ask { color: var(--warn, #c98a1b); }
+.perm-allow { color: var(--ok, #3c9a5f); }
+.perm-check { display: flex; gap: 8px; align-items: center; }
+.perm-check .perm-subject { flex: 1; }
+.perm-verdict[data-action='deny'] { color: var(--danger, #d9534f); }
+.perm-verdict[data-action='allow'] { color: var(--ok, #3c9a5f); }
+
+/* каталоги пакетов (ADR 0042) */
+.market { border: 1px solid var(--border, rgba(255,255,255,0.1)); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.market-head { display: flex; gap: 6px; align-items: center; }
+.market-head .btn { margin-left: auto; }
+.market-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 6px 0; border-top: 1px dashed var(--border, rgba(255,255,255,0.08)); }
+.market-url { flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; }
+.trash-row { grid-template-columns: 160px 1fr auto; align-items: center; }
+.trash-actions { display: flex; gap: 6px; }
+
+/* рабочие папки чата (ADR 0045) */
+.work-dirs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 8px; font-size: 12px; }
+.work-dir { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); }
+.work-dir.primary { opacity: 0.8; }
+.work-dir.missing { color: var(--text-faint); border-style: dashed; }
+.work-dir-remove { background: none; border: 0; color: var(--text-faint); cursor: pointer; padding: 0 2px; font-size: 13px; }
+
+/* «Код / Задача» (ADR 0046) */
+.kind-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.kind-btn { background: transparent; color: var(--text-faint); border: 0; padding: 3px 9px; font: inherit; font-size: 12px; cursor: pointer; }
+.kind-btn.active { background: var(--accent-soft, rgba(99, 102, 241, 0.18)); color: var(--text); }
+
+/* результаты задачи (ADR 0047) */
+.results-btn { background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer; }
+.results-list { display: grid; gap: 4px; max-height: 320px; overflow: auto; }
+.result-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; font-size: 13px; }
+.result-name { background: none; border: 0; color: var(--accent-2, var(--text)); text-align: left; cursor: pointer; font: inherit; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-row.status-deleted .result-name { text-decoration: line-through; color: var(--text-faint); }
+.result-actions { display: flex; gap: 6px; }
+.result-preview { max-height: 240px; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 12px; white-space: pre-wrap; }
+
+/* превью отправки (ADR 0048) */
+.approve-send { border: 1px solid rgba(248, 113, 113, 0.4); border-radius: 8px; padding: 6px 10px; margin: 6px 0; }
+.approve-send-title { font-size: 12px; color: var(--red, #f87171); margin-bottom: 4px; }
+.approve-send-body { white-space: pre-wrap; font-size: 13px; margin: 0; max-height: 260px; overflow: auto; }
+
+/* плановые задачи (ADR 0050) */
+.schedule-list { display: grid; gap: 6px; }
+.schedule-row { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: start; padding: 6px 0; border-bottom: 1px dashed var(--border); }
+.schedule-row.disabled { opacity: 0.6; }
+.schedule-prompt { font-size: 12px; color: var(--text-faint); white-space: pre-wrap; }
+.schedule-run-row { grid-template-columns: 150px 1fr auto; }
+
+/* прерванная работа (ADR 0051) */
+.run-banner { display: flex; gap: 10px; align-items: center; padding: 8px 14px; background: rgba(251, 191, 36, 0.1); border-bottom: 1px solid rgba(251, 191, 36, 0.35); font-size: 13px; }
+.run-banner span { flex: 1; }
+.todos-current { margin-left: 8px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* каталог коннекторов (ADR 0052) */
+.connectors { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.connector { border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: grid; gap: 6px; align-content: start; }
+.connector.installed { border-color: rgba(52, 211, 153, 0.45); }
+.connector-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.connector-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.connector-token { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12px; }
+.approve-injection { color: var(--amber, #fbbf24); }
+.effort-select { background: transparent; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 2px 6px; font: inherit; font-size: 12px; }

@@ -14,6 +14,8 @@
  * становится только при входе через Keycloak.
  */
 
+import { validateIpc } from './ipc-schemas.js';
+
 const ANY = 'any';
 const ADMIN = 'admin';
 const SELF = 'self';
@@ -68,6 +70,7 @@ export const IPC_PERMISSIONS = {
   'permissions:modes': ANY,
   'permissions:set': SELF,
   'permissions:rules': SELF,
+  'permissions:explain': ANY,
   'permissions:audit': ADMIN,
 
   // вложения: только внутри папки вложений проекта
@@ -96,6 +99,34 @@ export const IPC_PERMISSIONS = {
   'chat:compact': ANY,
   'hooks:list': ANY,
   'agents:defs': ANY,
+  // Пакет — исполняемый код: установка, удаление и включение — только admin.
+  'packages:list': ANY,
+  'packages:install': ADMIN,
+  'marketplace:list': ANY,
+  'trash:list': ANY,
+  'schedule:list': ANY,
+  'schedule:runs': ANY,
+  'schedule:save': ADMIN,
+  'schedule:remove': ADMIN,
+  'schedule:runNow': ADMIN,
+  'results:list': ANY,
+  'results:preview': ANY,
+  'results:open': ANY,
+  'results:show': ANY,
+  'session:dirs': ANY,
+  'models:caps': ANY,
+  'session:kind': ANY,
+  'session:setKind': ANY,
+  'session:addDir': ADMIN,
+  'session:removeDir': ANY,
+  'trash:restore': SELF,
+  'trash:purge': ADMIN,
+  'marketplace:add': ADMIN,
+  'marketplace:remove': ADMIN,
+  'marketplace:refresh': ADMIN,
+  'marketplace:install': ADMIN,
+  'packages:uninstall': ADMIN,
+  'packages:toggle': ADMIN,
   'context:stats': ANY,
   // Откат возвращает только файлы, которые правил агент в этом чате.
   'checkpoints:turns': ANY,
@@ -138,9 +169,16 @@ export const IPC_PERMISSIONS = {
   // MCP и плагины: запуск процессов и чужого кода
   'mcp:status': ANY,
   'mcp:configs': ANY,
+  'mcp:scopes': ANY,
+  'mcp:saveLocal': ADMIN,
   'mcp:sync': ADMIN,
   'mcp:connect': ADMIN,
   'mcp:remove': ADMIN,
+  'mcp:login': ADMIN,
+  'connectors:list': ANY,
+  'connectors:add': ADMIN,
+  'connectors:remove': ADMIN,
+  'mcp:logout': ADMIN,
   'plugins:list': ANY,
   'plugins:openFolder': ANY,
   'plugins:createExample': ADMIN,
@@ -230,12 +268,18 @@ export function permissionOf(channel) {
  * @param requireAdmin функция, которая бросает ошибку, если роль не admin
  * @param onUnknown вызывается для канала без записи в матрице
  */
-export function guardIpc(ipcMain, requireAdmin, { onUnknown } = {}) {
+export function guardIpc(ipcMain, requireAdmin, { onUnknown, onInvalid } = {}) {
   const original = ipcMain.handle.bind(ipcMain);
   ipcMain.handle = (channel, handler) => {
     if (!Object.hasOwn(IPC_PERMISSIONS, channel)) onUnknown?.(channel);
     const permission = permissionOf(channel);
-    return original(channel, (...args) => {
+    return original(channel, (event, ...args) => {
+      // Схема данных (Q7, ADR 0060): окно может прислать что угодно — проверяем до обработчика.
+      const invalid = validateIpc(channel, args);
+      if (invalid) {
+        onInvalid?.(channel, invalid);
+        return { ok: false, invalid: true, error: `Неверные данные для ${channel}: ${invalid}` };
+      }
       if (permission === ADMIN) {
         try {
           requireAdmin();
@@ -245,7 +289,7 @@ export function guardIpc(ipcMain, requireAdmin, { onUnknown } = {}) {
           return { ok: false, forbidden: true, error: err?.message || 'Недостаточно прав' };
         }
       }
-      return handler(...args);
+      return handler(event, ...args);
     });
   };
   return ipcMain;

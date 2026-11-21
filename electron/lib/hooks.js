@@ -56,9 +56,11 @@ export function readProjectHooks(projectDir) {
 }
 
 /** Глобальные хуки и хуки проекта (только для доверенной папки). */
-export function collectHooks({ settingsHooks, projectDir, trusted }) {
+export function collectHooks({ settingsHooks, projectDir, trusted, packageHooks = [] }) {
   const merged = {};
   const sources = [normalizeHooks(settingsHooks, 'global')];
+  // Хуки пакетов (ADR 0037): [{ source: 'package:<имя>', config }].
+  for (const pkg of packageHooks) sources.push(normalizeHooks(pkg.config, pkg.source));
   if (trusted && projectDir) sources.push(normalizeHooks(readProjectHooks(projectDir), 'project'));
   for (const config of sources) {
     for (const [event, groups] of Object.entries(config)) (merged[event] ||= []).push(...groups);

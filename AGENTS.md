@@ -47,7 +47,9 @@
    `scripts/hooks/pre-push` (`npm.cmd run hooks:install`), на GitHub включена
    защита ветки — push отклоняется даже с `--no-verify` и у администратора
    (`GH006: Changes must be made through a pull request`). Агент push в `main`
-   не делает ни при каких настройках. В `main` попадает только проверенное:
+   не делает ни при каких настройках; в MAI Code это проверяет хук
+   `.mai-code/hooks.json` → `examples/hooks/no-push-main.mjs`, а
+   `require-docs.mjs` не даёт закончить работу без CHANGELOG и ADR. В `main` попадает только проверенное:
    перед слиянием в `dev` прогнаны `npm.cmd test`, `npm.cmd run test:responses`,
    `npm.cmd run test:export`, `npm.cmd run docs:check` и затронутые сценарии
    (то же гоняет `.github/workflows/ci.yml`, и он обязателен для слияния).

@@ -122,6 +122,21 @@ ipcMain.handle('agents:defs', () => [
   { name: 'explore', description: 'Исследователь', tools: ['read_file'], source: 'builtin' },
   { name: 'reviewer', description: 'Ревьюер', tools: null, source: 'project' },
 ]);
+// Пакеты (раздел [25]).
+const packageCalls = [];
+ipcMain.handle('packages:list', () => ({
+  packages: [{ name: 'review-kit', version: '1.2.0', description: 'Ревью кода', source: 'global', enabled: true, executable: true, parts: { commands: 2, agents: 1, skills: 0, plugins: 1, hooks: true, mcp: 0 } }],
+  trusted: true,
+  globalDir: '/data/packages',
+}));
+ipcMain.handle('packages:install', (_e, payload) => {
+  packageCalls.push({ type: 'install', ...payload });
+  return { ok: true, package: { name: 'git-kit', parts: { commands: 1 } } };
+});
+ipcMain.handle('packages:toggle', (_e, payload) => {
+  packageCalls.push({ type: 'toggle', ...payload });
+  return { ok: true };
+});
 const answers = [];
 ipcMain.handle('chat:answer', (_e, payload) => {
   answers.push(payload);
@@ -141,6 +156,158 @@ ipcMain.handle('settings:get', () => ({
   models: [],
 }));
 ipcMain.handle('runtimes:list', () => ({}));
+// MCP с OAuth (раздел [28]).
+const mcpCalls = [];
+let mcpLogged = false;
+ipcMain.handle('mcp:status', () => [
+  { name: 'remote', status: mcpLogged ? 'ready' : 'needs_auth', error: '', tools: mcpLogged ? ['whoami'] : [], loggedIn: mcpLogged },
+  { name: 'local', status: 'ready', error: '', tools: ['ls'], loggedIn: false },
+]);
+ipcMain.handle('mcp:configs', () => ({ remote: { url: 'https://mcp.example.com/mcp' }, local: { command: 'node' } }));
+ipcMain.handle('mcp:scopes', () => ({ remote: 'global', local: 'local' }));
+ipcMain.handle('mcp:saveLocal', (_e, payload) => {
+  mcpCalls.push({ type: 'saveLocal', ...payload });
+  return { ok: true };
+});
+ipcMain.handle('mcp:login', (_e, name) => {
+  mcpCalls.push({ type: 'login', name });
+  mcpLogged = true;
+  return { ok: true, tools: ['whoami'] };
+});
+ipcMain.handle('mcp:logout', (_e, name) => {
+  mcpCalls.push({ type: 'logout', name });
+  mcpLogged = false;
+  return { ok: true };
+});
+// Каталоги пакетов (раздел [29]).
+const marketCalls = [];
+let marketState = [
+  {
+    name: 'team',
+    url: 'https://git.example.com/catalog.git',
+    description: 'Пакеты команды',
+    error: '',
+    packages: [
+      { name: 'review-kit', version: '1.3.0', description: 'Ревью', installedVersion: '1.2.0', updateAvailable: true },
+      { name: 'docs-kit', version: '0.1.0', description: 'Документация', installedVersion: null, updateAvailable: false },
+      { name: 'git-kit', version: '0.4.0', description: '', installedVersion: '0.4.0', updateAvailable: false },
+    ],
+  },
+];
+ipcMain.handle('marketplace:list', () => ({ marketplaces: marketState }));
+ipcMain.handle('marketplace:install', (_e, payload) => {
+  marketCalls.push({ type: 'install', ...payload });
+  const entry = marketState[0].packages.find((p) => p.name === payload.name);
+  entry.installedVersion = entry.version;
+  entry.updateAvailable = false;
+  return { ok: true, package: { name: entry.name, version: entry.version, parts: { commands: 1 } }, marketplaces: marketState };
+});
+ipcMain.handle('marketplace:add', (_e, payload) => {
+  marketCalls.push({ type: 'add', ...payload });
+  return { ok: true, marketplaces: marketState };
+});
+// Корзина (раздел [30]).
+const trashCalls = [];
+let trashItems = [
+  { id: '1700000000000-aaaaaaaa', name: 'old.js', original: '/p/src/old.js', deletedAt: '2026-11-21T10:00:00.000Z', bytes: 2048, files: 1, dir: false },
+  { id: '1700000000001-bbbbbbbb', name: 'build', original: '/p/build', deletedAt: '2026-11-21T11:00:00.000Z', bytes: 9000, files: 12, dir: true },
+];
+ipcMain.handle('trash:list', () => ({ items: trashItems, dir: '/data/trash' }));
+ipcMain.handle('trash:restore', (_e, payload) => {
+  trashCalls.push({ type: 'restore', ...payload });
+  trashItems = trashItems.filter((i) => i.id !== payload.id);
+  return { ok: true };
+});
+// Рабочие папки чата (раздел [31]).
+const dirCalls = [];
+let extraDirs = [{ name: 'Документы', dir: '/home/u/Документы', primary: false }];
+ipcMain.handle('session:dirs', (_e, sessionId) => {
+  dirCalls.push({ type: 'dirs', sessionId });
+  return { ok: true, roots: [{ name: 'proj', dir: '/p/proj', primary: true }, ...extraDirs], missing: ['/gone/old'] };
+});
+ipcMain.handle('session:addDir', (_e, sessionId) => {
+  dirCalls.push({ type: 'add', sessionId });
+  extraDirs = [...extraDirs, { name: 'Финансы', dir: '/home/u/Финансы', primary: false }];
+  return { ok: true };
+});
+ipcMain.handle('session:removeDir', (_e, payload) => {
+  dirCalls.push({ type: 'remove', ...payload });
+  extraDirs = extraDirs.filter((d) => d.dir !== payload.dir);
+  return { ok: true };
+});
+// «Код / Задача» (раздел [32]).
+const kindCalls = [];
+let kindNow = 'code';
+ipcMain.handle('session:kind', (_e, sessionId) => ({ kind: kindNow, sessionId }));
+ipcMain.handle('session:setKind', (_e, payload) => {
+  kindCalls.push(payload);
+  kindNow = payload.kind;
+  return { ok: true, kind: payload.kind, scope: payload.sessionId ? 'session' : 'default' };
+});
+// Результаты задачи (раздел [33]).
+const resultCalls = [];
+ipcMain.handle('results:list', (_e, sessionId) =>
+  sessionId === 's-dirs'
+    ? [
+        { file: '/p/отчёт.md', name: 'отчёт.md', status: 'created', size: 2048, turn: 2, openable: true, text: true },
+        { file: '/p/run.bat', name: 'run.bat', status: 'created', size: 10, turn: 2, openable: false, text: false },
+        { file: '/p/old.txt', name: 'old.txt', status: 'deleted', size: 0, turn: 1, openable: false, text: true },
+      ]
+    : [],
+);
+ipcMain.handle('results:preview', (_e, payload) => {
+  resultCalls.push({ type: 'preview', ...payload });
+  return { ok: true, preview: '# Отчёт за квартал' };
+});
+ipcMain.handle('results:open', (_e, payload) => {
+  resultCalls.push({ type: 'open', ...payload });
+  return { ok: true };
+});
+ipcMain.handle('results:show', (_e, payload) => {
+  resultCalls.push({ type: 'show', ...payload });
+  return { ok: true };
+});
+// Плановые задачи (раздел [35]).
+const schedCalls = [];
+let schedTasks = [{ id: 't1', title: 'Сводка', prompt: 'Собери сводку', projectDir: '/p', kind: 'task', enabled: true, description: 'по будням в 09:00', nextRun: '2026-11-23T06:00:00.000Z', lastRun: '2026-11-21T06:00:00.000Z', lastStatus: 'ok' }];
+ipcMain.handle('schedule:list', () => ({ tasks: schedTasks }));
+ipcMain.handle('schedule:save', (_e, payload) => {
+  schedCalls.push({ type: 'save', ...payload });
+  if (payload.id) schedTasks = schedTasks.map((t) => (t.id === payload.id ? { ...t, ...payload } : t));
+  else schedTasks = [...schedTasks, { ...payload, id: 't2', enabled: true, description: 'каждый день в 07:30' }];
+  return { ok: true, tasks: schedTasks };
+});
+ipcMain.handle('schedule:runNow', (_e, id) => {
+  schedCalls.push({ type: 'run', id });
+  return { ok: true, status: 'ok', sessionId: 's-sched' };
+});
+ipcMain.handle('schedule:runs', (_e, id) => [{ at: '2026-11-21T06:00:00.000Z', taskId: id, status: 'ok', reason: 'schedule', summary: 'Сводка готова', sessionId: 's-sched' }]);
+// Каталог коннекторов (раздел [37]).
+const connCalls = [];
+let connInstalled = new Set(['notion']);
+ipcMain.handle('connectors:list', () => [
+  { id: 'linear', name: 'Linear', category: 'Задачи', description: 'Задачи', url: 'https://mcp.linear.app/mcp', auth: 'oauth', docs: 'https://linear.app/docs/mcp', source: 'builtin', installed: connInstalled.has('linear'), status: connInstalled.has('linear') ? 'ready' : '' },
+  { id: 'github', name: 'GitHub', category: 'Код', description: 'Репозитории', url: 'https://api.githubcopilot.com/mcp/', auth: 'token', tokenHint: 'github_pat_…', tokenUrl: 'https://github.com/settings/tokens', source: 'builtin', installed: connInstalled.has('github'), status: '' },
+  { id: 'notion', name: 'Notion', category: 'Вики', description: 'Страницы', url: 'https://mcp.notion.com/mcp', auth: 'oauth', source: 'builtin', installed: connInstalled.has('notion'), status: 'needs_auth' },
+  { id: '1c', name: '1С', category: 'Учёт', description: 'Наш 1С', url: 'https://1c.corp/mcp', auth: 'token', source: 'managed', installed: false, status: '' },
+]);
+ipcMain.handle('connectors:add', (_e, payload) => {
+  connCalls.push({ type: 'add', ...payload });
+  connInstalled.add(payload.id);
+  return { ok: true, tools: ['a', 'b'] };
+});
+ipcMain.handle('connectors:remove', (_e, id) => {
+  connCalls.push({ type: 'remove', id });
+  connInstalled.delete(id);
+  return { ok: true };
+});
+// Глубина рассуждений (раздел [38]).
+ipcMain.handle('models:caps', (_e, key) => ({ id: key, tools: true, vision: false, reasoning: true, effort: ['low', 'medium', 'high'], temperature: false, transport: 'auto', context: null }));
+const savedSettings = [];
+ipcMain.handle('settings:save', (_e, patch) => {
+  savedSettings.push(patch);
+  return { projectDir: root, activeModel: 'test-model', permissionMode: 'manual', providers: { 'test-model': { name: 'Test', apiKeySet: true, models: [] } }, models: [], ...patch };
+});
 ipcMain.handle('auth:status', () => ({ authenticated: false, role: 'admin', mode: 'local' }));
 ipcMain.handle('models:list', () => []);
 // Сессия с ответом агента: нужна для проверки меню «Скачать» у сообщения.
@@ -164,7 +331,19 @@ ipcMain.handle('chat:start', (_e, payload) => {
   chatStarts.push(payload);
   return { ok: false, error: 'тест: без прогона' };
 });
-ipcMain.handle('sessions:get', (_e, id) => (id === TEST_SESSION.id ? TEST_SESSION : null));
+// Прерванная работа (раздел [36]).
+const INTERRUPTED = {
+  id: 's-int',
+  title: 'Сводка за неделю',
+  model: 'test-model',
+  run: { status: 'interrupted', startedAt: '2026-11-21T08:00:00.000Z', endedAt: '2026-11-21T08:05:00.000Z' },
+  messages: [
+    { role: 'user', content: 'Сделай сводку', display: 'Сделай сводку' },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'td1', type: 'function', function: { name: 'todo_write', arguments: JSON.stringify({ todos: [{ content: 'Прочитать', status: 'completed' }, { content: 'Свести', status: 'in_progress' }, { content: 'Сохранить', status: 'pending' }] }) } }] },
+    { role: 'tool', tool_call_id: 'td1', content: 'ok' },
+  ],
+};
+ipcMain.handle('sessions:get', (_e, id) => (id === TEST_SESSION.id ? TEST_SESSION : id === INTERRUPTED.id ? INTERRUPTED : null));
 
 // Экспорт: записываем вызовы, файл не пишем.
 const exportCalls = [];
@@ -176,7 +355,35 @@ ipcMain.handle('export:chat', (_e, payload) => {
   exportCalls.push({ channel: 'chat', format: payload?.format, messages: payload?.messages });
   return { ok: true, file: 'C:/tmp/chat.' + (payload?.format || 'md'), format: payload?.format };
 });
-ipcMain.handle('permissions:modes', () => ({ current: 'manual', fallback: 'manual', sessionId: null, modes: MODES }));
+// Уровни правил (раздел [26]).
+const permCalls = [];
+const permRules = {
+  managed: { allow: [], ask: [], deny: ['run_shell(curl *)'] },
+  global: { allow: ['run_shell(npm test)'], ask: [], deny: [] },
+  project: { allow: ['run_shell(npm run lint)'], ask: [], deny: [] },
+  local: { allow: ['run_shell(make)'], ask: [], deny: [] },
+  session: { allow: [], ask: [], deny: [] },
+};
+ipcMain.handle('permissions:modes', () => ({
+  current: 'manual',
+  fallback: 'manual',
+  sessionId: null,
+  role: 'admin',
+  trusted: true,
+  modes: MODES,
+  rules: permRules,
+  managed: { present: true, file: '/etc/mai-code/managed-settings.json', disableBypassMode: true },
+  files: { project: '/p/.mai-code/settings.json', local: '/p/.mai-code/settings.local.json' },
+}));
+ipcMain.handle('permissions:rules', (_e, payload) => {
+  permCalls.push({ type: 'rules', ...payload });
+  if (payload?.scope === 'local') permRules.local.allow = permRules.local.allow.filter((r) => !(payload.remove || []).includes(r));
+  return { ok: true };
+});
+ipcMain.handle('permissions:explain', (_e, payload) => {
+  permCalls.push({ type: 'explain', ...payload });
+  return { action: 'deny', rule: 'run_shell(curl *)', levels: ['managed'], reason: 'Запрещено правилом run_shell(curl *)' };
+});
 ipcMain.handle('permissions:set', (_e, payload) => ({ ok: true, mode: payload?.mode, scope: 'default' }));
 ipcMain.handle('attachments:list', () => []);
 ipcMain.handle('chat:onEvent', () => {});
@@ -681,6 +888,8 @@ app.whenReady().then(async () => {
     check('бейдж высокого риска', /risk-high/.test(modal1.risk), modal1.risk);
     check('три варианта ответа', modal1.options.length === 3, JSON.stringify(modal1.options));
     check('вариант 2 показывает правило', modal1.options.some((t) => t.includes('run_shell(git push*)')), JSON.stringify(modal1.options));
+    const scopes = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.approval-card .approve-scope option')].map((o) => o.value)`);
+    check('запомнить: чат, проект (только у меня), все чаты', scopes.join(',') === 'session,local,global', JSON.stringify(scopes));
 
     await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }))`);
     await new Promise((r) => setTimeout(r, 300));
@@ -692,8 +901,10 @@ app.whenReady().then(async () => {
       id: 'appr-2',
       tool: 'write_file',
       cls: 'write',
-      summary: 'Записать файл src/a.js',
+      summary: 'Записать файл ../a.js',
       risk: 'medium',
+      why: 'файл вне папки проекта',
+      decisionSource: 'classifier',
       recommended: 'allow',
       suggestions: [],
     });
@@ -707,6 +918,8 @@ app.whenReady().then(async () => {
     })()`);
     check('средний риск: рекомендовано «Да»', /^1Да/.test(modal2.recommended), JSON.stringify(modal2));
     check('без подсказки правила — два варианта', modal2.options === 2, JSON.stringify(modal2));
+    const why2 = await win.webContents.executeJavaScript(`document.querySelector('.approval-card .approve-why')?.textContent || ''`);
+    check('решение «Авто» видно в карточке', why2 === 'Авто спрашивает: файл вне папки проекта.', why2);
     await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true }))`);
     await new Promise((r) => setTimeout(r, 300));
     const a2 = approvals.find((a) => a.id === 'appr-2');
@@ -1157,6 +1370,287 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 300));
     const agentTitle = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.tool-head')].map((h) => h.querySelector('.tool-name').textContent + ' ' + h.querySelector('.tool-args').textContent)`);
     check('карточка вызова: «Agent explore найти конфиг»', agentTitle.includes('Agent explore найти конфиг'), JSON.stringify(agentTitle));
+
+    console.log('\n[25] Пакеты: /packages, включение, установка (ADR 0037)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/packages'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const pkgRow = await win.webContents.executeJavaScript(`document.querySelector('.package-row')?.textContent || ''`);
+    check('пакет с версией, источником и содержимым', /review-kit 1\.2\.0/.test(pkgRow) && /глобальный/.test(pkgRow) && /исполняемый код/.test(pkgRow) && /команд: 2/.test(pkgRow), pkgRow);
+    await win.webContents.executeJavaScript(`document.querySelector('.package-row input[type=checkbox]').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('флажок выключает пакет', packageCalls.some((c) => c.type === 'toggle' && c.name === 'review-kit' && c.enabled === false), JSON.stringify(packageCalls));
+    await win.webContents.executeJavaScript(`(() => { const m = document.querySelector('.modal'); const i = m.querySelector('input.package-source'); i.value = 'https://example.com/git-kit.git'; m.querySelector('.package-install').click(); })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('установка из git-URL уходит в main', packageCalls.some((c) => c.type === 'install' && c.from === 'https://example.com/git-kit.git'), JSON.stringify(packageCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[26] Разрешения: /permissions, уровни, проверка вызова (ADR 0038)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/permissions'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const permRows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.perm-row')].map((r) => r.dataset.level + ':' + r.dataset.kind + ':' + r.querySelector('code').textContent)`);
+    check('правила всех уровней в панели', ['managed:deny:run_shell(curl *)', 'global:allow:run_shell(npm test)', 'project:allow:run_shell(npm run lint)', 'local:allow:run_shell(make)'].every((r) => permRows.includes(r)), JSON.stringify(permRows));
+    const permText = await win.webContents.executeJavaScript(`document.querySelector('.modal')?.textContent || ''`);
+    check('файл организации и запрет «Без вопросов» показаны', /managed-settings\.json/.test(permText) && /Без вопросов» запрещён/.test(permText), permText.slice(0, 300));
+    const removable = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.perm-row')].filter((r) => r.querySelector('button')).map((r) => r.dataset.level)`);
+    check('правила организации и проекта (git) не убираются из панели', !removable.includes('managed') && !removable.includes('project') && removable.includes('local'), JSON.stringify(removable));
+    await win.webContents.executeJavaScript(`document.querySelector('.perm-row[data-level=local] button').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('«Убрать» уходит в main с уровнем local', permCalls.some((c) => c.type === 'rules' && c.scope === 'local' && c.remove?.[0] === 'run_shell(make)'), JSON.stringify(permCalls));
+    const localLeft = await win.webContents.executeJavaScript(`document.querySelectorAll('.perm-row[data-level=local]').length`);
+    check('список обновился после удаления', localLeft === 0, String(localLeft));
+    await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('.perm-subject'); s.value = 'curl https://x'; [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Проверить').click(); })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    const verdict = await win.webContents.executeJavaScript(`(() => { const v = document.querySelector('.perm-verdict'); return v.dataset.action + '|' + v.textContent; })()`);
+    check('проверка показывает решение, правило и уровень', /^deny\|запрещено — правило run_shell\(curl \*\) \(организация\)/.test(verdict), verdict);
+    check('проверка уходит с инструментом и командой', permCalls.some((c) => c.type === 'explain' && c.tool === 'run_shell' && c.subject === 'curl https://x'), JSON.stringify(permCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[27] Настройки: песочница команд агента (ADR 0040)');
+    await new Promise((r) => setTimeout(r, 200));
+    await win.webContents.executeJavaScript(`document.querySelector('#settings-btn').click()`);
+    await new Promise((r) => setTimeout(r, 600));
+    const box = await win.webContents.executeJavaScript(`(() => {
+      const d = document.querySelector('.shell-sandbox-docker');
+      if (!d) return { found: false };
+      const before = { docker: d.checked, network: document.querySelector('.shell-sandbox-network').value };
+      d.checked = true;
+      document.querySelector('.shell-sandbox-image').value = 'python:3.12-slim';
+      document.querySelector('.shell-sandbox-network').value = 'bridge';
+      document.querySelector('.shell-sandbox-host').value = 'git *\\n\\n  gh *  ';
+      [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Сохранить').click();
+      return { found: true, before };
+    })()`);
+    check('раздел «Команды агента» в настройках', box.found === true, JSON.stringify(box));
+    check('по умолчанию выключено, сеть выключена', box.before?.docker === false && box.before?.network === 'none', JSON.stringify(box));
+    await new Promise((r) => setTimeout(r, 400));
+    const sb = savedSettings.at(-1)?.shellSandbox;
+    check('сохраняется mode/image/network/hostCommands', sb?.mode === 'docker' && sb?.image === 'python:3.12-slim' && sb?.network === 'bridge' && sb?.hostCommands?.join('|') === 'git *|gh *', JSON.stringify(sb));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[28] MCP: вход OAuth (ADR 0041)');
+    await new Promise((r) => setTimeout(r, 200));
+    await win.webContents.executeJavaScript(`document.querySelector('[data-panel=mcp]').click()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const mcpView = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.modal .list-item')].map((i) => ({ title: i.querySelector('.title').textContent, login: i.querySelector('.mcp-login')?.textContent || '', primary: Boolean(i.querySelector('.mcp-login.primary')) }))`);
+    const remoteRow = mcpView.find((r) => r.title.startsWith('remote'));
+    const localRow = mcpView.find((r) => r.title.startsWith('local'));
+    check('HTTP-сервер: «нужен вход» и выделенная кнопка «Войти»', /нужен вход/.test(remoteRow?.title || '') && remoteRow?.login === 'Войти' && remoteRow?.primary, JSON.stringify(mcpView));
+    check('stdio-серверу кнопки входа нет', localRow && localRow.login === '', JSON.stringify(mcpView));
+    await win.webContents.executeJavaScript(`document.querySelector('.mcp-login').click()`);
+    await new Promise((r) => setTimeout(r, 600));
+    check('«Войти» уходит в main', mcpCalls.some((c) => c.type === 'login' && c.name === 'remote'), JSON.stringify(mcpCalls));
+    const afterLogin = await win.webContents.executeJavaScript(`document.querySelector('.mcp-login')?.textContent || ''`);
+    check('после входа — «Выйти»', afterLogin === 'Выйти', afterLogin);
+    await win.webContents.executeJavaScript(`document.querySelector('.mcp-login').click()`);
+    await new Promise((r) => setTimeout(r, 500));
+    check('«Выйти» уходит в main', mcpCalls.some((c) => c.type === 'logout' && c.name === 'remote'), JSON.stringify(mcpCalls));
+    const scopeText = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.mcp-scope')].map((e) => e.textContent).join('|')`);
+    check('область сервера видна', /глобальный/.test(scopeText) && /только у меня/.test(scopeText), scopeText);
+    await win.webContents.executeJavaScript(`(() => {
+      const m = document.querySelector('.modal');
+      const inputs = m.querySelectorAll('input');
+      const byPh = (ph) => [...inputs].find((i) => i.placeholder === ph);
+      byPh('filesystem').value = 'mine';
+      byPh('npx').value = 'node';
+      byPh('-y @modelcontextprotocol/server-filesystem C:\\\\project').value = 'srv.js --flag';
+      m.querySelector('.mcp-add-scope').value = 'local';
+      [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Добавить').click();
+    })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const saved = mcpCalls.find((c) => c.type === 'saveLocal');
+    check('«только у меня» уходит в mcp:saveLocal', saved?.name === 'mine' && saved?.config?.command === 'node' && saved?.config?.args?.join(' ') === 'srv.js --flag', JSON.stringify(saved));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[29] Каталоги пакетов: обновление и установка (ADR 0042)');
+    await new Promise((r) => setTimeout(r, 200));
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/packages'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const rows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.market-row')].map((r) => ({ name: r.dataset.package, text: r.textContent, button: r.querySelector('.market-install')?.textContent || '', primary: Boolean(r.querySelector('.market-install.primary')) }))`);
+    const row = (n) => rows.find((r) => r.name === n) || {};
+    check('каталог и его пакеты показаны', rows.length === 3 && /Пакеты команды/.test(await win.webContents.executeJavaScript(`document.querySelector('.market-head')?.textContent || ''`)), JSON.stringify(rows));
+    check('есть обновление — «Обновить» с установленной версией', row('review-kit').button === 'Обновить' && row('review-kit').primary && /установлена 1\.2\.0/.test(row('review-kit').text), JSON.stringify(row('review-kit')));
+    check('не установлен — «Установить»', row('docs-kit').button === 'Установить' && !row('docs-kit').primary, JSON.stringify(row('docs-kit')));
+    check('актуальный — без кнопки', row('git-kit').button === '' && /установлен/.test(row('git-kit').text), JSON.stringify(row('git-kit')));
+    await win.webContents.executeJavaScript(`document.querySelector('.market-row[data-package=review-kit] .market-install').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('«Обновить» — установка с заменой', marketCalls.some((c) => c.type === 'install' && c.marketplace === 'team' && c.name === 'review-kit' && c.replace === true), JSON.stringify(marketCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.market-row[data-package=docs-kit] .market-install').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('«Установить» — без замены', marketCalls.some((c) => c.type === 'install' && c.name === 'docs-kit' && c.replace === false), JSON.stringify(marketCalls));
+    const updated = await win.webContents.executeJavaScript(`document.querySelectorAll('.market-install').length`);
+    check('после установки кнопок не осталось', updated === 0, String(updated));
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('.market-url'); i.value = 'https://git.example.com/other.git'; [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Добавить').click(); })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('каталог добавляется по адресу', marketCalls.some((c) => c.type === 'add' && c.url === 'https://git.example.com/other.git'), JSON.stringify(marketCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[30] Корзина: /trash и восстановление (ADR 0044)');
+    await new Promise((r) => setTimeout(r, 200));
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/trash'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const trashRows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.trash-row')].map((r) => r.textContent)`);
+    check('удалённое в списке с путём и размером', trashRows.length === 2 && /\/p\/src\/old\.js/.test(trashRows[0]) && /2\.0 КБ/.test(trashRows[0]) && /файлов: 12/.test(trashRows[1]), JSON.stringify(trashRows));
+    await win.webContents.executeJavaScript(`document.querySelector('.trash-row[data-id="1700000000000-aaaaaaaa"] .trash-restore').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('«Восстановить» уходит в main', trashCalls.some((c) => c.type === 'restore' && c.id === '1700000000000-aaaaaaaa' && c.overwrite === false), JSON.stringify(trashCalls));
+    check('список обновился', (await win.webContents.executeJavaScript(`document.querySelectorAll('.trash-row').length`)) === 1);
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[31] Рабочие папки чата (ADR 0045)');
+    win.webContents.send('chat:event', { type: 'saved', sessionId: 's-dirs' });
+    win.webContents.send('chat:event', { type: 'done', sessionId: 's-dirs', messages: [] });
+    await new Promise((r) => setTimeout(r, 500));
+    const bar = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector('#work-dirs'); return { hidden: b.hidden, text: b.textContent, chips: [...b.querySelectorAll('.work-dir')].map((c) => c.textContent) }; })()`);
+    check('строка папок видна у чата', bar.hidden === false && dirCalls.some((c) => c.type === 'dirs' && c.sessionId === 's-dirs'), JSON.stringify(bar));
+    check('проект, @Документы и пропавшая папка', bar.chips[0] === 'proj' && bar.chips.some((c) => c.startsWith('@Документы')) && bar.chips.some((c) => /old \(нет на диске\)/.test(c)), JSON.stringify(bar.chips));
+    await win.webContents.executeJavaScript(`document.querySelector('.work-dir-add').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const afterAdd = await win.webContents.executeJavaScript(`[...document.querySelectorAll('#work-dirs .work-dir')].map((c) => c.textContent)`);
+    check('«＋ папка» — выбор в main и обновление', dirCalls.some((c) => c.type === 'add' && c.sessionId === 's-dirs') && afterAdd.some((c) => c.startsWith('@Финансы')), JSON.stringify(afterAdd));
+    await win.webContents.executeJavaScript(`document.querySelector('.work-dir[data-dir="/home/u/Документы"] .work-dir-remove').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const afterRemove = await win.webContents.executeJavaScript(`[...document.querySelectorAll('#work-dirs .work-dir')].map((c) => c.textContent)`);
+    check('× убирает доступ', dirCalls.some((c) => c.type === 'remove' && c.dir === '/home/u/Документы') && !afterRemove.some((c) => c.startsWith('@Документы')), JSON.stringify(afterRemove));
+
+    console.log('\n[32] «Код / Задача» (ADR 0046)');
+    const kindState = () => win.webContents.executeJavaScript(`({ active: document.querySelector('#kind-toggle .kind-btn.active')?.dataset.kind, placeholder: document.querySelector('#input').placeholder })`);
+    let k = await kindState();
+    check('по умолчанию — «Код»', k.active === 'code', JSON.stringify(k));
+    await win.webContents.executeJavaScript(`document.querySelector('#kind-toggle [data-kind=task]').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    k = await kindState();
+    check('«Задача»: кнопка активна, подсказка про документы', k.active === 'task' && /документами/.test(k.placeholder), JSON.stringify(k));
+    check('выбор уходит в main для текущего чата', kindCalls.some((c) => c.kind === 'task' && c.sessionId === 's-dirs'), JSON.stringify(kindCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('#kind-toggle [data-kind=code]').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('обратно в «Код»', (await kindState()).active === 'code');
+
+    console.log('\n[33] Результаты чата (ADR 0047)');
+    win.webContents.send('chat:event', { type: 'done', sessionId: 's-dirs', messages: [] });
+    await new Promise((r) => setTimeout(r, 500));
+    const resBtn = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector('#results-btn'); return { hidden: b.hidden, text: b.textContent }; })()`);
+    check('кнопка «Результаты · 3»', resBtn.hidden === false && resBtn.text === '📄 Результаты · 3', JSON.stringify(resBtn));
+    await win.webContents.executeJavaScript(`document.querySelector('#results-btn').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const rrows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.result-row')].map((r) => ({ name: r.querySelector('.result-name').textContent, text: r.textContent, open: Boolean(r.querySelector('.result-open')) }))`);
+    check('статусы и размер', /создан · 2\.0 КБ/.test(rrows[0]?.text) && /удалён · в корзине/.test(rrows[2]?.text), JSON.stringify(rrows));
+    check('«Открыть» только у документа', rrows[0].open && !rrows[1].open && !rrows[2].open, JSON.stringify(rrows));
+    await win.webContents.executeJavaScript(`document.querySelector('.result-row .result-name').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('превью текста', (await win.webContents.executeJavaScript(`document.querySelector('.result-preview').textContent`)) === '# Отчёт за квартал');
+    await win.webContents.executeJavaScript(`document.querySelector('.result-open').click(); document.querySelectorAll('.result-show')[1].click();`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('«Открыть» и «В папке» уходят в main с чатом и путём', resultCalls.some((c) => c.type === 'open' && c.file === '/p/отчёт.md' && c.sessionId === 's-dirs') && resultCalls.some((c) => c.type === 'show' && c.file === '/p/run.bat'), JSON.stringify(resultCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[34] Отправка через коннектор: превью (ADR 0048)');
+    win.webContents.send('chat:event', {
+      type: 'approval',
+      id: 'appr-send',
+      tool: 'mcp__gmail__send_email',
+      name: 'mcp__gmail__send_email',
+      cls: 'send',
+      summary: 'Отправка через mcp__gmail__send_email',
+      args: JSON.stringify({ to: 'boss@example.com', subject: 'Отчёт', body: 'Добрый день!\nОтчёт во вложении.' }, null, 2),
+      risk: 'high',
+      why: 'отправка от вашего имени спрашивается всегда',
+      recommended: 'deny',
+      suggestions: [],
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const sendCard = await win.webContents.executeJavaScript(`(() => { const c = document.querySelector('.approval-card'); return { body: c?.querySelector('.approve-send-body')?.textContent || '', options: c ? c.querySelectorAll('.approve-option').length : 0, rec: c?.querySelector('.approve-option.recommended')?.textContent || '', cls: c?.querySelector('.approve-class')?.textContent || '' }; })()`);
+    check('что уйдёт — открыто, по полям', /to: boss@example\.com/.test(sendCard.body) && /subject: Отчёт/.test(sendCard.body) && /Отчёт во вложении/.test(sendCard.body), JSON.stringify(sendCard));
+    check('«Да, и не спрашивать» нет; рекомендуется «Нет»', sendCard.options === 2 && /Нет/.test(sendCard.rec), JSON.stringify(sendCard));
+    check('класс — отправка от вашего имени', sendCard.cls === 'отправка от вашего имени', sendCard.cls);
+    await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('Esc — отказ', approvals.some((a) => a.id === 'appr-send' && a.allow === false), JSON.stringify(approvals.filter((a) => a.id === 'appr-send')));
+
+    console.log('\n[35] Плановые задачи: /schedule (ADR 0050)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/schedule'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const srow = await win.webContents.executeJavaScript(`document.querySelector('.schedule-row')?.textContent || ''`);
+    check('задача с расписанием и последним запуском', /Сводка/.test(srow) && /по будням в 09:00/.test(srow) && /готово/.test(srow), srow);
+    await win.webContents.executeJavaScript(`document.querySelector('.schedule-row .schedule-run').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('«Запустить» — в main', schedCalls.some((c) => c.type === 'run' && c.id === 't1'), JSON.stringify(schedCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.schedule-row input[type=checkbox]').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('флажок выключает задачу', schedCalls.some((c) => c.type === 'save' && c.id === 't1' && c.enabled === false), JSON.stringify(schedCalls));
+    await win.webContents.executeJavaScript(`[...document.querySelectorAll('.schedule-row button')].find((b) => b.textContent === 'Журнал').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('журнал запусков', /Сводка готова/.test(await win.webContents.executeJavaScript(`document.querySelector('.schedule-log')?.textContent || ''`)));
+    await win.webContents.executeJavaScript(`(() => {
+      document.querySelector('.schedule-title').value = 'Почта';
+      document.querySelector('.schedule-prompt-input').value = 'Разбери входящие';
+      document.querySelector('.schedule-type').value = 'daily';
+      document.querySelector('.schedule-time').value = '07:30';
+      document.querySelector('.schedule-add').click();
+    })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const added = schedCalls.find((c) => c.type === 'save' && c.title === 'Почта');
+    check('новая задача: каждый день в 07:30, вид «Задача»', added?.schedule?.type === 'daily' && added.schedule.time === '07:30' && added.schedule.days.length === 7 && added.kind === 'task' && added.prompt === 'Разбери входящие', JSON.stringify(added));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[36] Прерванная работа: «Продолжить» (ADR 0051)');
+    await win.webContents.executeJavaScript(`loadSession('s-int')`).catch(() => null);
+    await new Promise((r) => setTimeout(r, 500));
+    let banner = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector('#run-banner'); return { hidden: b.hidden, text: b.textContent }; })()`);
+    if (banner.hidden) {
+      // loadSession не в глобальной области — открываем через событие уведомления.
+      win.webContents.send('chat:event', { type: 'scheduled:open', sessionId: 's-int' });
+      await new Promise((r) => setTimeout(r, 500));
+      banner = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector('#run-banner'); return { hidden: b.hidden, text: b.textContent }; })()`);
+    }
+    check('плашка «Работа прервалась» с прогрессом задач', banner.hidden === false && /Работа прервалась/.test(banner.text) && /сделано 1 из 3 задач/.test(banner.text), JSON.stringify(banner));
+    const startsBefore = chatStarts.length;
+    await win.webContents.executeJavaScript(`document.querySelector('.run-continue').click()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const cont = chatStarts.slice(startsBefore)[0];
+    check('«Продолжить» отправляет агенту просьбу продолжить без повторов', cont && /Продолжи с того места/.test(cont.text) && /не повторяй выполненные шаги/.test(cont.text) && cont.displayText === 'Продолжить прерванную работу' && cont.sessionId === 's-int', JSON.stringify(cont));
+    check('текущий шаг в заголовке задач', /сейчас: Свести/.test(await win.webContents.executeJavaScript(`document.querySelector('.todos-head')?.textContent || ''`)));
+    check('плашка скрыта после продолжения', await win.webContents.executeJavaScript(`document.querySelector('#run-banner').hidden`));
+
+    console.log('\n[37] Каталог коннекторов (ADR 0052)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/connectors'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const cards = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.connector')].map((c) => ({ id: c.dataset.id, text: c.textContent, token: Boolean(c.querySelector('.connector-token')), add: Boolean(c.querySelector('.connector-add')), remove: Boolean(c.querySelector('.connector-remove')) }))`);
+    const connCard = (id) => cards.find((c) => c.id === id) || {};
+    check('карточки каталога', cards.length === 4 && /Вход через браузер/.test(connCard('linear').text) && connCard('linear').add, JSON.stringify(cards));
+    check('токен — поле только у токенных', connCard('github').token && !connCard('linear').token);
+    check('подключённый — «нужен вход» и «Отключить»', /нужен вход/.test(connCard('notion').text) && connCard('notion').remove && !connCard('notion').add);
+    check('коннектор организации помечен', /от организации/.test(connCard('1c').text));
+    await win.webContents.executeJavaScript(`(() => { const c = document.querySelector('.connector[data-id=github]'); c.querySelector('.connector-token').value = 'ghp_x'; c.querySelector('.connector-add').click(); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    check('токен уходит в main при подключении', connCalls.some((c) => c.type === 'add' && c.id === 'github' && c.token === 'ghp_x'), JSON.stringify(connCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.connector[data-id=linear] .connector-add').click()`);
+    await new Promise((r) => setTimeout(r, 500));
+    check('OAuth-коннектор подключается без токена', connCalls.some((c) => c.type === 'add' && c.id === 'linear' && !c.token));
+    const linearAfter = await win.webContents.executeJavaScript(`document.querySelector('.connector[data-id=linear]').textContent`);
+    check('после подключения — «подключён»', /подключён/.test(linearAfter), linearAfter);
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[38] Глубина рассуждений в поле ввода (ADR 0058)');
+    win.webContents.send('chat:event', { type: 'done', sessionId: 's-dirs', messages: [] });
+    await new Promise((r) => setTimeout(r, 400));
+    const eff = await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('#effort-select'); return { hidden: s.hidden, options: [...s.options].filter((o) => !o.hidden).map((o) => o.value) }; })()`);
+    check('переключатель виден у модели с глубиной', eff.hidden === false && eff.options.join() === ',low,medium,high', JSON.stringify(eff));
+    await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('#effort-select'); s.value = 'high'; s.dispatchEvent(new Event('change')); const i = document.querySelector('#input'); i.value = 'подумай глубоко'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    check('глубина уходит с запросом', chatStarts.at(-1)?.effort === 'high', JSON.stringify(chatStarts.at(-1)));
+
+    console.log('\n[39] /commit и /review (ADR 0059)');
+    const slash = async (text) => {
+      await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+      await new Promise((r) => setTimeout(r, 400));
+      return chatStarts.at(-1);
+    };
+    const commit = await slash('/commit только тесты');
+    check('/commit: смотреть diff, без push и секретов, подтверждение', /git diff/.test(commit?.text) && /Не делай `git push`/.test(commit?.text) && /секретами/.test(commit?.text) && /только тесты/.test(commit?.text) && commit?.displayText === '/commit только тесты', JSON.stringify(commit)?.slice(0, 300));
+    const review = await slash('/review 42');
+    check('/review 42: gh pr diff 42, только чтение, файл:строка', /gh pr diff 42/.test(review?.text) && /файлы не меняй/.test(review?.text) && /`файл:строка`/.test(review?.text));
+    const local = await slash('/review');
+    check('/review без номера — git diff HEAD', /git diff HEAD/.test(local?.text));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

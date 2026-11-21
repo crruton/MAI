@@ -1,11 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isSecretPath } from '../guardrails.js';
+import { moveToTrash } from '../trash.js';
+import { normalizeRoots, resolveIn } from '../workroots.js';
+import { IMAGE_LIMITS } from '../vision.js';
+import { extractPdf } from '../attachments.js';
+
+const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 
 const MAX_READ_BYTES = 400_000;
 const MAX_OUTPUT = 20_000;
 
-function assertNotSecret(ctx, file, action = 'чтение') {
+export function assertNotSecret(ctx, file, action = 'чтение') {
   const guardrails = ctx.guardrails || {};
   if (guardrails.protectSecrets === false || guardrails.allowSecrets) return;
   if (isSecretPath(file)) {
@@ -18,18 +24,96 @@ function assertNotSecret(ctx, file, action = 'чтение') {
 
 const PREVIEW_BYTES = 1024 * 1024;
 
-function resolveInside(ctx, target) {
-  const base = ctx.projectDir || process.cwd();
-  const resolved = path.resolve(base, target || '.');
-  if (!ctx.allowOutsideProject) {
-    const relative = path.relative(base, resolved);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
-      throw new Error(
-        `Путь вне проекта запрещён: ${resolved}. Включите «Разрешить файлы вне проекта» в настройках.`,
-      );
-    }
+/** Путь внутри рабочих папок чата (ADR 0045): папка проекта и добавленные `@имя`. */
+export function resolveInside(ctx, target) {
+  const roots = ctx.roots || normalizeRoots(ctx.projectDir || process.cwd());
+  return resolveIn(roots, target || '.', { allowOutside: Boolean(ctx.allowOutsideProject) });
+}
+
+function isRootDir(ctx, file) {
+  const roots = ctx.roots || normalizeRoots(ctx.projectDir || process.cwd());
+  return roots.some((r) => path.resolve(r.dir) === path.resolve(file));
+}
+
+/* ---------- чтение перед правкой и план правок (CC1.2) ---------- */
+
+/** Отметка «агент видел файл в этом виде». ctx.readFiles — Map путь → mtime, общий на прогон. */
+export function markRead(ctx, file) {
+  if (!ctx?.readFiles) return;
+  try {
+    ctx.readFiles.set(path.resolve(file), fs.statSync(file).mtimeMs);
+  } catch {
+    /* файла нет — нечего отмечать */
   }
-  return resolved;
+}
+
+/** Ошибка, если существующий файл меняют вслепую или он изменился после чтения. */
+function readGuard(ctx, file) {
+  if (!ctx?.readFiles || !fs.existsSync(file)) return null;
+  const seen = ctx.readFiles.get(path.resolve(file));
+  if (seen === undefined) return `Сначала прочитай файл read_file: ${file} — правка без чтения запрещена`;
+  if (fs.statSync(file).mtimeMs !== seen) return `Файл изменился после чтения: ${file} — прочитай его заново`;
+  return null;
+}
+
+const toCrlf = (text) => String(text).replace(/\r?\n/g, '\r\n');
+
+/** План правки: { file, before, after, edits, replaced } или текст ошибки. */
+function planEdits(ctx, args) {
+  const file = resolveInside(ctx, args.path);
+  assertNotSecret(ctx, file, 'изменение');
+  if (!fs.existsSync(file)) return `Файл не найден: ${file}`;
+  const guard = readGuard(ctx, file);
+  if (guard) return guard;
+  const edits = Array.isArray(args.edits) && args.edits.length ? args.edits : [{ old_string: args.old_string, new_string: args.new_string, replace_all: args.replace_all }];
+  const before = fs.readFileSync(file, 'utf8');
+  const crlf = before.includes('\r\n');
+  let text = before;
+  let replaced = 0;
+  for (const [i, raw] of edits.entries()) {
+    const label = edits.length > 1 ? ` (правка ${i + 1})` : '';
+    let oldText = String(raw?.old_string ?? '');
+    let newText = String(raw?.new_string ?? '');
+    if (!oldText) return `Пустой old_string${label}`;
+    if (oldText === newText) return `old_string и new_string совпадают${label}`;
+    // Файл с CRLF, а фрагмент с LF — приводим к переводам строк файла.
+    if (crlf && !text.includes(oldText) && text.includes(toCrlf(oldText))) {
+      oldText = toCrlf(oldText);
+      newText = toCrlf(newText);
+    }
+    const count = text.split(oldText).length - 1;
+    if (count === 0) return `Фрагмент не найден в ${file}${label}`;
+    if (count > 1 && !raw?.replace_all) return `Фрагмент встречается ${count} раз в ${file}${label} — уточните old_string или replace_all: true`;
+    text = raw?.replace_all ? text.split(oldText).join(newText) : text.replace(oldText, () => newText);
+    replaced += raw?.replace_all ? count : 1;
+  }
+  return { file, before, after: text, edits, replaced };
+}
+
+/* ---------- glob (CC1.1) ---------- */
+
+/** Маска → RegExp: ** — любые папки, * — без /, ?, {a,b}. */
+export function globToRegExp(pattern) {
+  let re = '';
+  const text = String(pattern).replace(/\\/g, '/');
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '*' && text[i + 1] === '*') {
+      const slash = text[i + 2] === '/';
+      re += slash ? '(?:.*/)?' : '.*';
+      i += slash ? 2 : 1;
+    } else if (c === '*') re += '[^/]*';
+    else if (c === '?') re += '[^/]';
+    else if (c === '{') {
+      const close = text.indexOf('}', i);
+      if (close < 0) re += '\\{';
+      else {
+        re += `(?:${text.slice(i + 1, close).split(',').map((p) => p.replace(/[.+^$()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*')).join('|')})`;
+        i = close;
+      }
+    } else re += c.replace(/[.+^$()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`, process.platform === 'win32' ? 'i' : '');
 }
 
 function lineNumbers(text, offset = 1) {
@@ -67,8 +151,29 @@ export const fsTools = [
       const file = resolveInside(ctx, args.path);
       assertNotSecret(ctx, file, 'чтение');
       const stat = fs.statSync(file);
-      if (stat.size > MAX_READ_BYTES) throw new Error(`Файл слишком большой: ${stat.size} байт`);
-      const text = fs.readFileSync(file, 'utf8');
+      if (stat.isDirectory()) return `Это папка: ${file} — используй list_files или glob`;
+      const ext = path.extname(file).toLowerCase();
+      // Картинка (CC1.3): модель со зрением получит её следующим сообщением.
+      if (IMAGE_EXT.has(ext)) {
+        if (stat.size > IMAGE_LIMITS.perImageBytes) return `Изображение слишком большое для модели: ${file} (${stat.size} байт, предел ${IMAGE_LIMITS.perImageBytes})`;
+        if (typeof ctx.vision === 'function' && !ctx.vision()) return `Текущая модель не принимает изображения: ${file}. Текст на картинке можно распознать OCR или выбрать модель со зрением.`;
+        return `Изображение ${file} (${stat.size} байт) — показано модели следующим сообщением.`;
+      }
+      if (ext === '.docx' || ext === '.xlsx') return `Документ ${path.basename(file)} читай инструментом read_document — он покажет текст и таблицы.`;
+      if (ext === '.pdf') {
+        if (stat.size > 50 * 1024 * 1024) throw new Error(`PDF слишком большой: ${stat.size} байт`);
+        const text = extractPdf(fs.readFileSync(file));
+        if (!text.trim()) return `PDF ${file}: текст не извлечён — похоже на скан. Распознать можно OCR.`;
+        const lines = text.split(/\r?\n/);
+        const start = Math.max(0, (args.offset || 1) - 1);
+        const end = args.limit ? start + args.limit : lines.length;
+        return truncate(`[Текст из PDF, строк: ${lines.length}]\n${lineNumbers(lines.slice(start, end).join('\n'), start + 1)}`);
+      }
+      if (stat.size > MAX_READ_BYTES) throw new Error(`Файл слишком большой: ${stat.size} байт — читай частями (offset, limit) или ищи grep`);
+      const raw = fs.readFileSync(file);
+      if (raw.subarray(0, 8000).includes(0)) return `Двоичный файл: ${file} (${stat.size} байт) — текстом не читается.`;
+      const text = raw.toString('utf8');
+      markRead(ctx, file);
       const lines = text.split(/\r?\n/);
       const start = Math.max(0, (args.offset || 1) - 1);
       const end = args.limit ? start + args.limit : lines.length;
@@ -114,6 +219,63 @@ export const fsTools = [
       };
       walk(root, '', 1);
       return truncate(out.join('\n') || '(пусто)');
+    },
+  },
+  {
+    schema: {
+      type: 'function',
+      function: {
+        name: 'glob',
+        description: 'Найти файлы по маске: "**/*.ts", "src/**/*.{js,jsx}", "@Документы/**/*.docx". Новые — первыми. Пропускает node_modules и .git.',
+        parameters: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'Маска относительно path' },
+            path: { type: 'string', description: 'Где искать, по умолчанию корень проекта' },
+          },
+          required: ['pattern'],
+        },
+      },
+    },
+    async run(ctx, args) {
+      const root = resolveInside(ctx, args.path || '.');
+      const re = globToRegExp(String(args.pattern || '**/*'));
+      const explicit = /node_modules|\.git\b/.test(String(args.pattern));
+      const skip = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.venv', 'venv']);
+      const found = [];
+      let scanned = 0;
+      const walk = (dir) => {
+        if (scanned > 50_000) return;
+        let entries = [];
+        try {
+          entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const entry of entries) {
+          scanned += 1;
+          if (!explicit && skip.has(entry.name)) continue;
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory()) walk(full);
+          else if (entry.isFile()) {
+            const rel = path.relative(root, full).split(path.sep).join('/');
+            if (re.test(rel)) {
+              let mtime = 0;
+              try {
+                mtime = fs.statSync(full).mtimeMs;
+              } catch {
+                /* файл исчез */
+              }
+              found.push({ rel, mtime });
+            }
+          }
+        }
+      };
+      walk(root);
+      if (!found.length) return 'Файлов по маске нет';
+      found.sort((a, b) => b.mtime - a.mtime);
+      const shown = found.slice(0, 500).map((f) => f.rel);
+      return truncate(`${shown.join('\n')}${found.length > 500 ? `\n… и ещё ${found.length - 500}` : ''}`);
     },
   },
   {
@@ -203,7 +365,8 @@ export const fsTools = [
     precheck(ctx, args) {
       const file = resolveInside(ctx, args.path);
       assertNotSecret(ctx, file, 'запись');
-      return null;
+      // Перезапись существующего файла — только после чтения (CC1.2).
+      return readGuard(ctx, file);
     },
     /** Было/стало для diff в запросе разрешения (CC7.3). Большие файлы не сравниваем. */
     preview(ctx, args) {
@@ -218,6 +381,7 @@ export const fsTools = [
       ctx.beforeWrite?.(file);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, args.content ?? '', 'utf8');
+      markRead(ctx, file);
       return `Записано: ${file} (${(args.content || '').length} символов)`;
     },
   },
@@ -226,50 +390,83 @@ export const fsTools = [
       type: 'function',
       function: {
         name: 'edit_file',
-        description: 'Заменить точный фрагмент текста в файле. Подтверждение зависит от режима разрешений.',
+        description:
+          'Заменить точный фрагмент текста в файле. Файл нужно сначала прочитать read_file. old_string должен встречаться ровно один раз ' +
+          '(или replace_all: true — заменить все). Несколько правок одного файла — массивом edits, применяются по порядку и атомарно. ' +
+          'Переводы строк Windows (CRLF) учитываются сами.',
         parameters: {
           type: 'object',
           properties: {
             path: { type: 'string' },
-            old_string: { type: 'string', description: 'Что заменить (должно встречаться ровно один раз)' },
+            old_string: { type: 'string', description: 'Что заменить' },
             new_string: { type: 'string', description: 'На что заменить' },
+            replace_all: { type: 'boolean', description: 'Заменить все вхождения' },
+            edits: {
+              type: 'array',
+              description: 'Несколько правок по порядку (вместо old_string/new_string)',
+              items: {
+                type: 'object',
+                properties: { old_string: { type: 'string' }, new_string: { type: 'string' }, replace_all: { type: 'boolean' } },
+                required: ['old_string', 'new_string'],
+              },
+            },
           },
-          required: ['path', 'old_string', 'new_string'],
+          required: ['path'],
         },
       },
     },
-    /**
-     * Проверка до запроса разрешения: если фрагмента нет, пользователя не
-     * спрашивают зря. Возвращает текст ошибки или null.
-     */
+    /** До запроса разрешения: если правку не применить, пользователя не спрашивают зря. */
     precheck(ctx, args) {
-      const file = resolveInside(ctx, args.path);
-      assertNotSecret(ctx, file, 'изменение');
-      if (!fs.existsSync(file)) return `Файл не найден: ${file}`;
-      const text = fs.readFileSync(file, 'utf8');
-      const count = text.split(args.old_string).length - 1;
-      if (count === 0) return `Фрагмент не найден в ${file}`;
-      if (count > 1) return `Фрагмент встречается ${count} раз — уточните old_string`;
-      return null;
+      const plan = planEdits(ctx, args);
+      return typeof plan === 'string' ? plan : null;
     },
     preview(ctx, args) {
+      const plan = planEdits(ctx, args);
+      if (typeof plan === 'string') return { before: '', after: '' };
+      if (plan.before.length > PREVIEW_BYTES) return { before: plan.edits.map((e) => e.old_string).join('\n…\n'), after: plan.edits.map((e) => e.new_string).join('\n…\n') };
+      return { before: plan.before, after: plan.after };
+    },
+    async run(ctx, args) {
+      const plan = planEdits(ctx, args);
+      if (typeof plan === 'string') return plan;
+      ctx.beforeWrite?.(plan.file);
+      fs.writeFileSync(plan.file, plan.after, 'utf8');
+      markRead(ctx, plan.file);
+      return `Изменено: ${plan.file} (правок: ${plan.edits.length}, замен: ${plan.replaced})`;
+    },
+  },
+  {
+    schema: {
+      type: 'function',
+      function: {
+        name: 'delete_file',
+        description:
+          'Удалить файл или папку: переносится в корзину приложения, пользователь может восстановить. ' +
+          'Подтверждение спрашивается всегда, кроме режима «Без вопросов». Не удаляй через run_shell (rm, del) — используй этот инструмент.',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+        },
+      },
+    },
+    precheck(ctx, args) {
       const file = resolveInside(ctx, args.path);
-      if (fs.statSync(file).size > PREVIEW_BYTES) {
-        return { before: String(args.old_string ?? ''), after: String(args.new_string ?? '') };
-      }
-      const before = fs.readFileSync(file, 'utf8');
-      return { before, after: before.replace(args.old_string, () => args.new_string) };
+      assertNotSecret(ctx, file, 'удаление');
+      if (!fs.existsSync(file)) return `Не найдено: ${file}`;
+      if (isRootDir(ctx, file)) return 'Нельзя удалить рабочую папку целиком';
+      if (!ctx.trashDir) return 'Корзина недоступна — удаление отключено';
+      return null;
     },
     async run(ctx, args) {
       const file = resolveInside(ctx, args.path);
-      assertNotSecret(ctx, file, 'изменение');
-      const text = fs.readFileSync(file, 'utf8');
-      const count = text.split(args.old_string).length - 1;
-      if (count === 0) return `Фрагмент не найден в ${file}`;
-      if (count > 1) return `Фрагмент встречается ${count} раз — уточните old_string`;
-      ctx.beforeWrite?.(file);
-      fs.writeFileSync(file, text.replace(args.old_string, () => args.new_string), 'utf8');
-      return `Изменено: ${file}`;
+      assertNotSecret(ctx, file, 'удаление');
+      if (!ctx.trashDir) return 'Ошибка: корзина недоступна — удаление отключено';
+      if (isRootDir(ctx, file)) return 'Ошибка: нельзя удалить рабочую папку целиком';
+      // Файл — ещё и в чекпоинт: «откат к сообщению» вернёт его (CC6.1).
+      if (fs.existsSync(file) && fs.statSync(file).isFile()) ctx.beforeWrite?.(file);
+      const meta = moveToTrash(file, ctx.trashDir, { projectDir: ctx.projectDir || '' });
+      return `Перемещено в корзину: ${file}${meta.dir ? ` (папка, файлов: ${meta.files})` : ''}. Восстановить — /trash.`;
     },
   },
 ];
