@@ -53,6 +53,9 @@ export function readManaged(file = managedSettingsPath()) {
     permissions: cleanRules(data?.permissions),
     hooks: data?.hooks && typeof data.hooks === 'object' ? data.hooks : null,
     disableBypassMode: data?.disableBypassMode === true || data?.permissions?.disableBypassMode === true,
+    // Каталог коннекторов организации (ADR 0052).
+    connectors: Array.isArray(data?.connectors) ? data.connectors : [],
+    onlyManagedConnectors: data?.onlyManagedConnectors === true,
   };
 }
 

@@ -789,3 +789,11 @@ button { cursor: pointer; }
 .run-banner { display: flex; gap: 10px; align-items: center; padding: 8px 14px; background: rgba(251, 191, 36, 0.1); border-bottom: 1px solid rgba(251, 191, 36, 0.35); font-size: 13px; }
 .run-banner span { flex: 1; }
 .todos-current { margin-left: 8px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* каталог коннекторов (ADR 0052) */
+.connectors { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.connector { border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: grid; gap: 6px; align-content: start; }
+.connector.installed { border-color: rgba(52, 211, 153, 0.45); }
+.connector-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.connector-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.connector-token { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12px; }

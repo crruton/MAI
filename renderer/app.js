@@ -1833,6 +1833,10 @@ async function runSlash(text) {
       clear();
       await openSchedule();
       return;
+    case 'connectors':
+      clear();
+      await openConnectors();
+      return;
     case 'agents':
       clear();
       await openSubagents();
@@ -1881,6 +1885,74 @@ async function openHooks() {
       }),
     ],
   });
+}
+
+/* ---------- каталог коннекторов (CW3.1, ADR 0052) ---------- */
+
+async function openConnectors() {
+  const grid = el('div', { class: 'connectors' });
+  const render = async () => {
+    const list = await api.mcp.connectors();
+    grid.replaceChildren(
+      ...list.map((c) => {
+        const token = c.auth === 'token' && !c.installed ? el('input', { class: 'connector-token', type: 'password', placeholder: c.tokenHint || 'токен', autocomplete: 'off' }) : null;
+        const label = c.installed ? (c.status === 'ready' ? 'подключён' : c.status === 'needs_auth' ? 'нужен вход' : c.status) : '';
+        return el('div', { class: `connector${c.installed ? ' installed' : ''}`, 'data-id': c.id }, [
+          el('div', { class: 'connector-head' }, [
+            el('b', { text: c.name }),
+            el('span', { class: 'hint-text', text: ` · ${c.category}${c.source === 'managed' ? ' · от организации' : ''}` }),
+            label ? el('span', { class: `badge ${c.status === 'ready' ? 'ok' : c.status === 'needs_auth' ? 'warn' : ''}`, text: label }) : null,
+          ]),
+          el('div', { class: 'hint-text', text: c.description }),
+          el('div', { class: 'hint-text connector-auth', text: c.auth === 'oauth' ? 'Вход через браузер' : c.auth === 'token' ? 'Нужен токен — хранится зашифрованным' : 'Без входа' }),
+          token,
+          c.auth === 'token' && c.tokenUrl && !c.installed
+            ? el('button', { class: 'btn ghost small', type: 'button', text: 'Где взять токен', onclick: () => api.openExternal(c.tokenUrl) })
+            : null,
+          el('div', { class: 'connector-actions' }, [
+            c.installed
+              ? el('button', {
+                  class: 'btn ghost small connector-remove',
+                  type: 'button',
+                  text: 'Отключить',
+                  onclick: async () => {
+                    if (!window.confirm(`Отключить ${c.name}? Вход и токен будут удалены.`)) return;
+                    await api.mcp.removeConnector(c.id);
+                    render();
+                  },
+                })
+              : el('button', {
+                  class: 'btn primary small connector-add',
+                  type: 'button',
+                  text: 'Подключить',
+                  onclick: async (e) => {
+                    const button = e.currentTarget;
+                    button.disabled = true;
+                    button.textContent = c.auth === 'oauth' ? 'Ждём браузер…' : 'Подключаем…';
+                    const r = await api.mcp.addConnector(c.id, token?.value || '');
+                    if (r?.ok === false) toast(r.error, 'err');
+                    else toast(`${c.name} подключён: инструментов ${r.tools?.length || 0}`, 'ok');
+                    state.settings = await api.settings.get();
+                    render();
+                  },
+                }),
+            c.docs ? el('button', { class: 'btn ghost small', type: 'button', text: 'Описание', onclick: () => api.openExternal(c.docs) }) : null,
+          ]),
+        ]);
+      }),
+    );
+  };
+  openModal({
+    title: 'Коннекторы',
+    body: [
+      grid,
+      el('p', {
+        class: 'hint-text',
+        text: 'Коннектор — удалённый MCP-сервер сервиса. Отправка писем, сообщений и публикаций через него всегда спрашивается, даже в «Без вопросов». Свои коннекторы организация задаёт в managed-settings.json (поле connectors). Подключение — роль admin.',
+      }),
+    ],
+  });
+  await render();
 }
 
 /* ---------- плановые задачи (CW5.1, ADR 0050) ---------- */
@@ -4644,6 +4716,15 @@ async function openMcp() {
   const modal = openModal({
     title: 'MCP-серверы',
     body: [
+      el('button', {
+        class: 'btn small open-connectors',
+        type: 'button',
+        text: '🔌 Каталог коннекторов',
+        onclick: () => {
+          modal.close();
+          openConnectors();
+        },
+      }),
       list,
       el('hr', { style: 'border:0;border-top:1px solid var(--border-soft)' }),
       el('div', { class: 'row' }, [field('Имя', name), field('Команда', command)]),

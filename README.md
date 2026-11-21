@@ -488,6 +488,10 @@ export default {
 
 Добавляется через панель «MCP» (имя + команда + аргументы) или правится в `settings.json`.
 
+Готовые подключения — `/connectors`: Linear, Notion, GitHub, Sentry; свои —
+полем `connectors` в `managed-settings.json` (ADR 0052). Токены в `headers` и
+`env` хранятся зашифрованными.
+
 Удалённый сервер — `{ "url": "https://mcp.example.com/mcp" }`. Если он требует
 OAuth, в панели «MCP» появится «нужен вход» и кнопка **Войти**: вход идёт в
 браузере, токены хранятся зашифрованными в `mcp-oauth.json` и обновляются сами

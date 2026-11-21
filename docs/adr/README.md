@@ -67,3 +67,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0049](0049-dokumenty-docx-xlsx.md) | Документы: создание и чтение DOCX и XLSX | accepted | 2026-11-21 |
 | [0050](0050-planovye-zadachi.md) | Плановые задачи | accepted | 2026-11-21 |
 | [0051](0051-dlinnye-zadachi.md) | Длинные задачи и прогресс | accepted | 2026-11-21 |
+| [0052](0052-katalog-konnektorov.md) | Каталог коннекторов и токены MCP | accepted | 2026-11-21 |

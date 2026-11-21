@@ -20,6 +20,7 @@ import { normalizeShellSandbox } from './lib/shell-sandbox.js';
 import { createOAuthStore } from './lib/mcp-oauth.js';
 import { listTrash, restoreFromTrash, purgeTrash } from './lib/trash.js';
 import { normalizeRoots } from './lib/workroots.js';
+import { listConnectors, connectorServerConfig } from './lib/connectors.js';
 import { sessionResults, previewResult, resultFile } from './lib/results.js';
 import { createScheduleStore, isDue, nextRunAt, describeSchedule } from './lib/scheduler.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
@@ -2122,6 +2123,53 @@ ipcMain.handle('mcp:login', async (_e, name, projectDir) => {
   return result;
 });
 ipcMain.handle('mcp:logout', (_e, name) => mcp.logout(name));
+
+/* ---------- каталог коннекторов (CW3.1, ADR 0052) ---------- */
+
+function connectorCatalog() {
+  const org = managed();
+  return listConnectors({ managed: org.connectors, onlyManaged: org.onlyManagedConnectors });
+}
+
+ipcMain.handle('connectors:list', () => {
+  const servers = loadSettings().mcpServers || {};
+  const status = mcp.status();
+  return connectorCatalog().map((c) => {
+    const name = Object.keys(servers).find((n) => servers[n]?.connector === c.id);
+    const st = name ? status.find((s) => s.name === name) : null;
+    return { ...c, installed: Boolean(name), server: name || null, status: st?.status || (name ? 'не подключён' : ''), loggedIn: Boolean(st?.loggedIn) };
+  });
+});
+
+/** Подключить из каталога: запись в mcpServers, для OAuth — сразу вход в браузере. Только admin. */
+ipcMain.handle('connectors:add', async (_e, payload = {}) => {
+  const connector = connectorCatalog().find((c) => c.id === payload.id);
+  if (!connector) return { ok: false, error: 'Нет такого коннектора в каталоге' };
+  let config;
+  try {
+    config = connectorServerConfig(connector, { token: payload.token });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  const settings = loadSettings();
+  saveSettings({ mcpServers: { ...(settings.mcpServers || {}), [connector.id]: config } });
+  audit({ at: new Date().toISOString(), tool: 'connectors:add', source: 'user', cls: 'external', subject: `${connector.id} ← ${connector.url}`, decision: 'allow' });
+  const fresh = mcpConfigs(settings.projectDir)[connector.id] || config;
+  let result = await mcp.connect(connector.id, fresh);
+  if (!result.ok && result.needsAuth && connector.auth === 'oauth') result = await mcp.login(connector.id, fresh);
+  return result.ok ? { ok: true, tools: result.tools } : { ok: false, error: result.error, saved: true };
+});
+
+ipcMain.handle('connectors:remove', async (_e, id) => {
+  const settings = loadSettings();
+  const servers = { ...(settings.mcpServers || {}) };
+  const name = Object.keys(servers).find((n) => servers[n]?.connector === id);
+  if (!name) return { ok: false, error: 'Коннектор не подключён' };
+  delete servers[name];
+  saveSettings({ mcpServers: servers });
+  await mcp.logout(name);
+  return { ok: true };
+});
 ipcMain.handle('mcp:remove', async (_e, name, projectDir) => {
   const settings = loadSettings();
   const dir = projectDir || settings.projectDir;

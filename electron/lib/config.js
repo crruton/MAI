@@ -325,6 +325,19 @@ export function saveSettings(patch) {
     }
   }
 
+  // Окно видит заголовки и env MCP как «***»: при сохранении такие значения не затирают настоящие.
+  if (patch.mcpServers) {
+    const keep = (value, previous) => (value === '***' ? previous : value);
+    next.mcpServers = Object.fromEntries(
+      Object.entries(patch.mcpServers).map(([name, server]) => {
+        const old = current.mcpServers?.[name] || {};
+        const restore = (field) =>
+          server?.[field] ? { [field]: Object.fromEntries(Object.entries(server[field]).map(([k, v]) => [k, keep(v, old[field]?.[k])]).filter(([, v]) => v !== undefined)) } : {};
+        return [name, { ...server, ...restore('headers'), ...restore('env') }];
+      }),
+    );
+  }
+
   if (patch.repowise) {
     next.repowise = { ...(current.repowise || {}), ...patch.repowise };
   }
@@ -385,6 +398,17 @@ export function publicSettings() {
     token: s.mas?.token ? '***' : '',
     tokenSet: Boolean(s.mas?.token),
   };
+  // Заголовки и env MCP-серверов — наружу только факт наличия (ADR 0052).
+  safe.mcpServers = Object.fromEntries(
+    Object.entries(s.mcpServers || {}).map(([name, server]) => [
+      name,
+      {
+        ...server,
+        ...(server?.headers ? { headers: Object.fromEntries(Object.keys(server.headers).map((k) => [k, '***'])) } : {}),
+        ...(server?.env ? { env: Object.fromEntries(Object.keys(server.env).map((k) => [k, '***'])) } : {}),
+      },
+    ]),
+  );
   const secrets = secretsStatus();
   safe.secretsProtection = secrets.protection;
   safe.secretsPlaintext = secrets.plaintext.length;

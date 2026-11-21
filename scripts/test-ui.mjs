@@ -282,6 +282,25 @@ ipcMain.handle('schedule:runNow', (_e, id) => {
   return { ok: true, status: 'ok', sessionId: 's-sched' };
 });
 ipcMain.handle('schedule:runs', (_e, id) => [{ at: '2026-11-21T06:00:00.000Z', taskId: id, status: 'ok', reason: 'schedule', summary: 'Сводка готова', sessionId: 's-sched' }]);
+// Каталог коннекторов (раздел [37]).
+const connCalls = [];
+let connInstalled = new Set(['notion']);
+ipcMain.handle('connectors:list', () => [
+  { id: 'linear', name: 'Linear', category: 'Задачи', description: 'Задачи', url: 'https://mcp.linear.app/mcp', auth: 'oauth', docs: 'https://linear.app/docs/mcp', source: 'builtin', installed: connInstalled.has('linear'), status: connInstalled.has('linear') ? 'ready' : '' },
+  { id: 'github', name: 'GitHub', category: 'Код', description: 'Репозитории', url: 'https://api.githubcopilot.com/mcp/', auth: 'token', tokenHint: 'github_pat_…', tokenUrl: 'https://github.com/settings/tokens', source: 'builtin', installed: connInstalled.has('github'), status: '' },
+  { id: 'notion', name: 'Notion', category: 'Вики', description: 'Страницы', url: 'https://mcp.notion.com/mcp', auth: 'oauth', source: 'builtin', installed: connInstalled.has('notion'), status: 'needs_auth' },
+  { id: '1c', name: '1С', category: 'Учёт', description: 'Наш 1С', url: 'https://1c.corp/mcp', auth: 'token', source: 'managed', installed: false, status: '' },
+]);
+ipcMain.handle('connectors:add', (_e, payload) => {
+  connCalls.push({ type: 'add', ...payload });
+  connInstalled.add(payload.id);
+  return { ok: true, tools: ['a', 'b'] };
+});
+ipcMain.handle('connectors:remove', (_e, id) => {
+  connCalls.push({ type: 'remove', id });
+  connInstalled.delete(id);
+  return { ok: true };
+});
 const savedSettings = [];
 ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
@@ -1589,6 +1608,25 @@ app.whenReady().then(async () => {
     check('«Продолжить» отправляет агенту просьбу продолжить без повторов', cont && /Продолжи с того места/.test(cont.text) && /не повторяй выполненные шаги/.test(cont.text) && cont.displayText === 'Продолжить прерванную работу' && cont.sessionId === 's-int', JSON.stringify(cont));
     check('текущий шаг в заголовке задач', /сейчас: Свести/.test(await win.webContents.executeJavaScript(`document.querySelector('.todos-head')?.textContent || ''`)));
     check('плашка скрыта после продолжения', await win.webContents.executeJavaScript(`document.querySelector('#run-banner').hidden`));
+
+    console.log('\n[37] Каталог коннекторов (ADR 0052)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/connectors'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const cards = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.connector')].map((c) => ({ id: c.dataset.id, text: c.textContent, token: Boolean(c.querySelector('.connector-token')), add: Boolean(c.querySelector('.connector-add')), remove: Boolean(c.querySelector('.connector-remove')) }))`);
+    const connCard = (id) => cards.find((c) => c.id === id) || {};
+    check('карточки каталога', cards.length === 4 && /Вход через браузер/.test(connCard('linear').text) && connCard('linear').add, JSON.stringify(cards));
+    check('токен — поле только у токенных', connCard('github').token && !connCard('linear').token);
+    check('подключённый — «нужен вход» и «Отключить»', /нужен вход/.test(connCard('notion').text) && connCard('notion').remove && !connCard('notion').add);
+    check('коннектор организации помечен', /от организации/.test(connCard('1c').text));
+    await win.webContents.executeJavaScript(`(() => { const c = document.querySelector('.connector[data-id=github]'); c.querySelector('.connector-token').value = 'ghp_x'; c.querySelector('.connector-add').click(); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    check('токен уходит в main при подключении', connCalls.some((c) => c.type === 'add' && c.id === 'github' && c.token === 'ghp_x'), JSON.stringify(connCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.connector[data-id=linear] .connector-add').click()`);
+    await new Promise((r) => setTimeout(r, 500));
+    check('OAuth-коннектор подключается без токена', connCalls.some((c) => c.type === 'add' && c.id === 'linear' && !c.token));
+    const linearAfter = await win.webContents.executeJavaScript(`document.querySelector('.connector[data-id=linear]').textContent`);
+    check('после подключения — «подключён»', /подключён/.test(linearAfter), linearAfter);
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);
