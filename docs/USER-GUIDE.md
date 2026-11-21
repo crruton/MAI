@@ -303,6 +303,14 @@ review-kit/
 пример и протокол — [README](../README.md#хуки), решение — ADR 0035. Хук не
 может разрешить то, что запретили guardrails, правило `deny` или режим «План».
 
+Готовые хуки лежат в `examples/hooks/` — скопируйте папку в свой проект и
+`hooks.json` в `.mai-code/hooks.json`:
+
+| Хук | Что делает |
+|---|---|
+| `no-push-main.mjs main release` | агент не сможет запушить в `main` и `release` — получит отказ «работайте в dev и выкатывайте через pull request» |
+| `require-docs.mjs electron renderer` | если изменён код в этих папках, а CHANGELOG.md и ADR — нет, агент не закончит работу, пока их не добавит |
+
 ## 11. Внешние агенты (OpenCode, Claude Code, Codex, Gemini)
 
 Выбираются в списке рядом с моделью. Режим разрешений чата действует и на них:
