@@ -1785,6 +1785,10 @@ async function runSlash(text) {
       clear();
       await openTrash();
       return;
+    case 'schedule':
+      clear();
+      await openSchedule();
+      return;
     case 'agents':
       clear();
       await openSubagents();
@@ -1833,6 +1837,132 @@ async function openHooks() {
       }),
     ],
   });
+}
+
+/* ---------- плановые задачи (CW5.1, ADR 0050) ---------- */
+
+const RUN_STATUS = { ok: 'готово', error: 'ошибка', busy: 'папка занята — повтор позже' };
+
+async function openSchedule() {
+  const list = el('div', { class: 'schedule-list' });
+  const log = el('div', { class: 'schedule-log' });
+  const render = (view) => {
+    const tasks = view?.tasks || [];
+    list.replaceChildren(
+      ...(tasks.length
+        ? tasks.map((t) =>
+            el('div', { class: `schedule-row${t.enabled ? '' : ' disabled'}`, 'data-id': t.id }, [
+              el('label', { class: 'package-toggle', title: t.enabled ? 'Выключить' : 'Включить' }, [
+                el('input', {
+                  type: 'checkbox',
+                  checked: t.enabled ? 'checked' : null,
+                  onchange: async (e) => {
+                    const r = await api.chat.saveSchedule({ id: t.id, enabled: e.target.checked });
+                    if (r?.ok === false) toast(r.error, 'err');
+                    render(r?.ok === false ? await api.chat.schedule() : r);
+                  },
+                }),
+              ]),
+              el('div', { class: 'package-info' }, [
+                el('b', { text: t.title }),
+                el('span', { class: 'hint-text schedule-when', text: ` · ${t.description}${t.nextRun ? ` · следующий: ${new Date(t.nextRun).toLocaleString()}` : ''}` }),
+                el('div', { class: 'hint-text', text: `${t.kind === 'code' ? 'Код' : 'Задача'} · ${t.projectDir}${t.lastRun ? ` · последний: ${new Date(t.lastRun).toLocaleString()} — ${RUN_STATUS[t.lastStatus] || t.lastStatus}` : ''}${t.running ? ' · выполняется…' : ''}` }),
+                el('div', { class: 'schedule-prompt', text: t.prompt.slice(0, 200) }),
+              ]),
+              el('span', { class: 'trash-actions' }, [
+                el('button', {
+                  class: 'btn small schedule-run',
+                  type: 'button',
+                  text: 'Запустить',
+                  onclick: async (e) => {
+                    e.currentTarget.disabled = true;
+                    toast(`«${t.title}» запущена`, 'ok');
+                    const r = await api.chat.runSchedule(t.id);
+                    toast(r?.ok ? `«${t.title}»: готово` : `«${t.title}»: ${r?.error || 'ошибка'}`, r?.ok ? 'ok' : 'err');
+                    render(await api.chat.schedule());
+                    refreshSessions();
+                  },
+                }),
+                el('button', { class: 'btn ghost small', type: 'button', text: 'Журнал', onclick: () => showLog(t.id) }),
+                el('button', {
+                  class: 'btn ghost small',
+                  type: 'button',
+                  text: 'Удалить',
+                  onclick: async () => {
+                    if (!window.confirm(`Удалить задачу «${t.title}»?`)) return;
+                    render(await api.chat.removeSchedule(t.id));
+                  },
+                }),
+              ]),
+            ]),
+          )
+        : [el('p', { class: 'hint-text', text: 'Плановых задач нет.' })]),
+    );
+  };
+  const showLog = async (id) => {
+    const runs = await api.chat.scheduleRuns(id);
+    log.replaceChildren(
+      el('div', { class: 'docs-group-title', text: 'Журнал запусков' }),
+      ...(runs.length
+        ? runs.map((r) =>
+            el('div', { class: 'help-row schedule-run-row' }, [
+              el('code', { text: new Date(r.at).toLocaleString() }),
+              el('span', { text: `${RUN_STATUS[r.status] || r.status}${r.reason === 'manual' ? ' (вручную)' : ''}${r.error ? `: ${r.error}` : ''}${r.summary ? ` — ${r.summary.slice(0, 160)}` : ''}` }),
+              r.sessionId
+                ? el('button', {
+                    class: 'btn ghost small',
+                    type: 'button',
+                    text: 'Открыть чат',
+                    onclick: () => {
+                      modal.close();
+                      loadSession(r.sessionId);
+                    },
+                  })
+                : el('span'),
+            ]),
+          )
+        : [el('p', { class: 'hint-text', text: 'Запусков ещё не было.' })]),
+    );
+  };
+
+  const title = el('input', { class: 'schedule-title', placeholder: 'Утренняя сводка' });
+  const prompt = el('textarea', { class: 'schedule-prompt-input', rows: '3', placeholder: 'Что сделать: «Прочитай новые файлы в @Входящие и сделай сводку в сводка.md»' });
+  const when = el('select', { class: 'schedule-type' }, [
+    el('option', { value: 'weekdays', text: 'по будням' }),
+    el('option', { value: 'daily', text: 'каждый день' }),
+    el('option', { value: 'interval', text: 'каждые N минут' }),
+  ]);
+  const time = el('input', { class: 'schedule-time', type: 'time', value: '09:00' });
+  const every = el('input', { class: 'schedule-every', type: 'number', min: '15', value: '60', title: 'Минут, не меньше 15' });
+  const kind = el('select', { class: 'schedule-kind' }, [el('option', { value: 'task', text: 'Задача' }), el('option', { value: 'code', text: 'Код' })]);
+  const add = async () => {
+    const schedule =
+      when.value === 'interval'
+        ? { type: 'interval', everyMinutes: Number(every.value) }
+        : { type: 'daily', time: time.value, days: when.value === 'weekdays' ? [1, 2, 3, 4, 5] : [1, 2, 3, 4, 5, 6, 7] };
+    const r = await api.chat.saveSchedule({ title: title.value, prompt: prompt.value, schedule, kind: kind.value, projectDir: state.projectDir, model: state.model });
+    if (r?.ok === false) return toast(r.error, 'err');
+    title.value = '';
+    prompt.value = '';
+    render(r);
+  };
+  const modal = openModal({
+    title: 'Плановые задачи',
+    body: [
+      list,
+      log,
+      el('div', { class: 'docs-group-title', text: 'Новая задача (в текущей папке)' }),
+      field('Название', title),
+      field('Что сделать', prompt),
+      el('div', { class: 'row' }, [field('Когда', when), field('Время', time), field('Каждые, мин', every), field('Вид', kind)]),
+      el('button', { class: 'btn primary small schedule-add', type: 'button', text: 'Добавить', onclick: add }),
+      el('p', {
+        class: 'hint-text',
+        text: 'Задача выполняется, пока открыто приложение, в режиме «Только разрешённое»: спросить некого, поэтому выполняется только то, что разрешено правилами (/permissions). Пропущенный запуск (приложение было закрыто) выполнится один раз после старта, если прошло меньше суток. Результат — новый чат «⏰ …» и уведомление.',
+      }),
+    ],
+  });
+  render(await api.chat.schedule());
 }
 
 /* ---------- корзина (CW1.4, ADR 0044) ---------- */
@@ -2939,6 +3069,12 @@ function handleEvent(event) {
       setRunning(false);
       renderAll();
       refreshSessions();
+      break;
+    case 'scheduled:run':
+      refreshSessions();
+      break;
+    case 'scheduled:open':
+      if (event.sessionId) loadSession(event.sessionId);
       break;
     case 'saved':
       if (event.sessionId) state.sessionId = event.sessionId;

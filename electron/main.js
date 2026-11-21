@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, clipboard } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, Notification } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -21,6 +21,7 @@ import { createOAuthStore } from './lib/mcp-oauth.js';
 import { listTrash, restoreFromTrash, purgeTrash } from './lib/trash.js';
 import { normalizeRoots } from './lib/workroots.js';
 import { sessionResults, previewResult, resultFile } from './lib/results.js';
+import { createScheduleStore, isDue, nextRunAt, describeSchedule } from './lib/scheduler.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
@@ -383,6 +384,7 @@ app.whenReady().then(async () => {
   const settings = loadSettings();
   emitLog('MAI Code запущен', { attributes: { platform: process.platform, version: app.getVersion() } });
   mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
+  startScheduler();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -1284,6 +1286,159 @@ ipcMain.handle('chat:start', async (event, payload) => {
   })();
 
   return { ok: true, sessionId: session.id, title: session.title };
+});
+
+/* ---------- плановые задачи (CW5.1, ADR 0050) ---------- */
+
+let scheduleStoreInstance = null;
+const scheduleStore = () => (scheduleStoreInstance ||= createScheduleStore(dataDir()));
+const scheduledRunning = new Set();
+
+function anyWindow() {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : BrowserWindow.getAllWindows().find((w) => !w.isDestroyed()) || null;
+}
+
+/**
+ * Запуск плановой задачи без окна: новый чат «⏰ …», режим «Только
+ * разрешённое» (вопросов задать некому), результат — уведомление и журнал.
+ */
+async function runScheduled(task, { reason = 'schedule' } = {}) {
+  const store = scheduleStore();
+  if (scheduledRunning.has(task.id)) return { ok: false, error: 'Задача уже выполняется' };
+  const settings = loadSettings();
+  const projectDir = task.projectDir || settings.projectDir;
+  const finish = (status, extra = {}) => {
+    store.markRun(task.id, { lastRun: new Date().toISOString(), lastStatus: status, ...(extra.sessionId ? { lastSessionId: extra.sessionId } : {}) });
+    store.log({ taskId: task.id, title: task.title, reason, status, ...extra });
+    return { ok: status === 'ok', status, ...extra };
+  };
+  if (!projectDir || !fs.existsSync(projectDir)) return finish('error', { error: 'папка задачи не найдена' });
+  if (!isTrusted(projectDir)) return finish('error', { error: 'папка не доверена — плановая задача не запускается' });
+  let resolved;
+  try {
+    resolved = resolveModel(settings, task.model || settings.activeModel);
+    if (!resolved.provider.apiKey) throw new Error(`не задан ключ провайдера «${resolved.provider.name}»`);
+  } catch (err) {
+    return finish('error', { error: err.message });
+  }
+  const lock = acquireProject(projectDir, { label: `плановая задача «${task.title}»` });
+  if (!lock.ok) {
+    store.log({ taskId: task.id, title: task.title, reason, status: 'busy', error: lock.error });
+    return { ok: false, busy: true, error: lock.error };
+  }
+  scheduledRunning.add(task.id);
+  const stamp = new Date().toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+  const session = createSession({ title: `⏰ ${task.title} — ${stamp}`, model: task.model || settings.activeModel, projectDir, permissionMode: 'dontAsk', kind: task.kind });
+  session.messages.push({ role: 'user', content: task.prompt, display: task.prompt });
+  session.scheduledTaskId = task.id;
+  saveSession(session);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30 * 60_000);
+  try {
+    const plugins = await loadPluginsFor(projectDir);
+    const history = await runAgent({
+      settings: agentSettings(settings),
+      provider: resolved.provider,
+      projectDir,
+      model: resolved.modelId,
+      messages: session.messages,
+      signal: controller.signal,
+      mcp,
+      pluginTools: plugins.tools,
+      transforms: plugins.transforms,
+      reviewer: null,
+      permissionMode: 'dontAsk',
+      policy: { ...policyFor(session.id, projectDir), getMode: () => 'dontAsk' },
+      audit,
+      trusted: true,
+      contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+      checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
+      hooks: hookRunnerFor(null, { projectDir, sessionId: session.id, trusted: true }),
+      agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: true, extraDirs: packageDirs(packagesFor(projectDir), 'agents') }),
+      skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
+      kind: task.kind,
+      onHistory: (h) => {
+        session.messages = h;
+        saveSession(session);
+      },
+      emit: () => {},
+      approve: async () => ({ allow: false, message: 'Плановая задача: спросить некого' }),
+      ask: null,
+    });
+    session.messages = history;
+    saveSession(session);
+    if (controller.signal.aborted) throw new Error('превышено время выполнения (30 мин)');
+    const answer = [...history].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+    notifyScheduled(task, answer.slice(0, 200) || 'готово', session.id);
+    return finish('ok', { sessionId: session.id, summary: answer.slice(0, 500) });
+  } catch (err) {
+    saveSession(session);
+    notifyScheduled(task, `Ошибка: ${err?.message || err}`, session.id);
+    return finish('error', { sessionId: session.id, error: err?.message || String(err) });
+  } finally {
+    clearTimeout(timeout);
+    scheduledRunning.delete(task.id);
+    lock.release();
+    send(anyWindow(), { type: 'scheduled:run', taskId: task.id });
+  }
+}
+
+function notifyScheduled(task, body, sessionId) {
+  try {
+    if (!Notification.isSupported()) return;
+    const n = new Notification({ title: `⏰ ${task.title}`, body });
+    n.on('click', () => send(anyWindow(), { type: 'scheduled:open', sessionId }));
+    n.show();
+  } catch {
+    /* уведомления недоступны — результат есть в журнале и чате */
+  }
+}
+
+let schedulerTimer = null;
+function startScheduler() {
+  if (schedulerTimer) return;
+  const tick = () => {
+    const now = new Date();
+    for (const task of scheduleStore().list()) {
+      if (isDue(task, now) && !scheduledRunning.has(task.id)) runScheduled(task).catch(() => {});
+    }
+  };
+  // Пропущенные запуски (приложение было закрыто) — через минуту после старта.
+  setTimeout(tick, Number(process.env.MAI_SCHEDULER_DELAY_MS) || 60_000);
+  schedulerTimer = setInterval(tick, 30_000);
+}
+
+function scheduleView() {
+  const now = new Date();
+  return {
+    tasks: scheduleStore()
+      .list()
+      .map((t) => ({ ...t, description: describeSchedule(t.schedule), nextRun: t.enabled ? nextRunAt(t.schedule, now, t.lastRun)?.toISOString() || null : null, running: scheduledRunning.has(t.id) })),
+  };
+}
+
+ipcMain.handle('schedule:list', () => scheduleView());
+ipcMain.handle('schedule:runs', (_e, id) => scheduleStore().runs(id || null, 30));
+/** Создать или изменить задачу. Задача работает без пользователя — только admin. */
+ipcMain.handle('schedule:save', (_e, payload = {}) => {
+  try {
+    const projectDir = payload.projectDir || loadSettings().projectDir;
+    if (!projectDir || !isTrusted(projectDir)) throw new Error('Плановая задача — только в доверенной папке');
+    const task = scheduleStore().save({ ...payload, projectDir });
+    audit({ at: new Date().toISOString(), tool: 'schedule:save', source: 'user', cls: 'external', subject: `${task.title} · ${describeSchedule(task.schedule)}`, decision: 'allow' });
+    return { ok: true, task, ...scheduleView() };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+ipcMain.handle('schedule:remove', (_e, id) => {
+  scheduleStore().remove(String(id));
+  return { ok: true, ...scheduleView() };
+});
+ipcMain.handle('schedule:runNow', async (_e, id) => {
+  const task = scheduleStore().get(String(id));
+  if (!task) return { ok: false, error: 'Задача не найдена' };
+  return runScheduled(task, { reason: 'manual' });
 });
 
 const audit = (record) => auditLog()(record);

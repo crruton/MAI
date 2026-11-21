@@ -306,6 +306,17 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
 
+### Плановые задачи
+
+ADR 0050. `electron/lib/scheduler.js`: `normalizeSchedule`, `nextRunAt`,
+`previousRunAt`, `isDue` (пропущенный — один раз в пределах суток),
+`describeSchedule`, `createScheduleStore(dataDir)` (`scheduled.json`, журнал
+`scheduled-runs.jsonl`). В main: `startScheduler` (проверка раз в 30 с, первая —
+через `MAI_SCHEDULER_DELAY_MS` или минуту), `runScheduled(task)` — новый чат,
+`runAgent` с `policy.getMode = 'dontAsk'`, `ask: null`, без окна;
+уведомление `Notification`. IPC `schedule:list | runs` (any),
+`schedule:save | remove | runNow` (admin).
+
 ### Документы
 
 ADR 0049. `electron/lib/documents.js`: `buildDocx`, `buildXlsx` (`sheetsToXlsx` в

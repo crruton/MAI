@@ -267,6 +267,21 @@ ipcMain.handle('results:show', (_e, payload) => {
   resultCalls.push({ type: 'show', ...payload });
   return { ok: true };
 });
+// Плановые задачи (раздел [35]).
+const schedCalls = [];
+let schedTasks = [{ id: 't1', title: 'Сводка', prompt: 'Собери сводку', projectDir: '/p', kind: 'task', enabled: true, description: 'по будням в 09:00', nextRun: '2026-11-23T06:00:00.000Z', lastRun: '2026-11-21T06:00:00.000Z', lastStatus: 'ok' }];
+ipcMain.handle('schedule:list', () => ({ tasks: schedTasks }));
+ipcMain.handle('schedule:save', (_e, payload) => {
+  schedCalls.push({ type: 'save', ...payload });
+  if (payload.id) schedTasks = schedTasks.map((t) => (t.id === payload.id ? { ...t, ...payload } : t));
+  else schedTasks = [...schedTasks, { ...payload, id: 't2', enabled: true, description: 'каждый день в 07:30' }];
+  return { ok: true, tasks: schedTasks };
+});
+ipcMain.handle('schedule:runNow', (_e, id) => {
+  schedCalls.push({ type: 'run', id });
+  return { ok: true, status: 'ok', sessionId: 's-sched' };
+});
+ipcMain.handle('schedule:runs', (_e, id) => [{ at: '2026-11-21T06:00:00.000Z', taskId: id, status: 'ok', reason: 'schedule', summary: 'Сводка готова', sessionId: 's-sched' }]);
 const savedSettings = [];
 ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
@@ -1517,6 +1532,32 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
     await new Promise((r) => setTimeout(r, 300));
     check('Esc — отказ', approvals.some((a) => a.id === 'appr-send' && a.allow === false), JSON.stringify(approvals.filter((a) => a.id === 'appr-send')));
+
+    console.log('\n[35] Плановые задачи: /schedule (ADR 0050)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/schedule'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const srow = await win.webContents.executeJavaScript(`document.querySelector('.schedule-row')?.textContent || ''`);
+    check('задача с расписанием и последним запуском', /Сводка/.test(srow) && /по будням в 09:00/.test(srow) && /готово/.test(srow), srow);
+    await win.webContents.executeJavaScript(`document.querySelector('.schedule-row .schedule-run').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('«Запустить» — в main', schedCalls.some((c) => c.type === 'run' && c.id === 't1'), JSON.stringify(schedCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.schedule-row input[type=checkbox]').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('флажок выключает задачу', schedCalls.some((c) => c.type === 'save' && c.id === 't1' && c.enabled === false), JSON.stringify(schedCalls));
+    await win.webContents.executeJavaScript(`[...document.querySelectorAll('.schedule-row button')].find((b) => b.textContent === 'Журнал').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('журнал запусков', /Сводка готова/.test(await win.webContents.executeJavaScript(`document.querySelector('.schedule-log')?.textContent || ''`)));
+    await win.webContents.executeJavaScript(`(() => {
+      document.querySelector('.schedule-title').value = 'Почта';
+      document.querySelector('.schedule-prompt-input').value = 'Разбери входящие';
+      document.querySelector('.schedule-type').value = 'daily';
+      document.querySelector('.schedule-time').value = '07:30';
+      document.querySelector('.schedule-add').click();
+    })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const added = schedCalls.find((c) => c.type === 'save' && c.title === 'Почта');
+    check('новая задача: каждый день в 07:30, вид «Задача»', added?.schedule?.type === 'daily' && added.schedule.time === '07:30' && added.schedule.days.length === 7 && added.kind === 'task' && added.prompt === 'Разбери входящие', JSON.stringify(added));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);
