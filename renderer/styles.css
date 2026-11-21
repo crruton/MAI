@@ -742,3 +742,10 @@ button { cursor: pointer; }
 .perm-check .perm-subject { flex: 1; }
 .perm-verdict[data-action='deny'] { color: var(--danger, #d9534f); }
 .perm-verdict[data-action='allow'] { color: var(--ok, #3c9a5f); }
+
+/* каталоги пакетов (ADR 0042) */
+.market { border: 1px solid var(--border, rgba(255,255,255,0.1)); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+.market-head { display: flex; gap: 6px; align-items: center; }
+.market-head .btn { margin-left: auto; }
+.market-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 6px 0; border-top: 1px dashed var(--border, rgba(255,255,255,0.08)); }
+.market-url { flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; }

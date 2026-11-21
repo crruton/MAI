@@ -99,6 +99,11 @@ contextBridge.exposeInMainWorld('mai', {
     // Пакеты плагинов (ADR 0037).
     packages: (projectDir) => invoke('packages:list', projectDir),
     installPackage: (from, replace = false) => invoke('packages:install', { from, replace }),
+    marketplaces: () => invoke('marketplace:list'),
+    addMarketplace: (url, name) => invoke('marketplace:add', { url, name }),
+    removeMarketplace: (name) => invoke('marketplace:remove', name),
+    refreshMarketplaces: () => invoke('marketplace:refresh'),
+    installFromMarketplace: (marketplace, name, replace = false) => invoke('marketplace:install', { marketplace, name, replace }),
     uninstallPackage: (name) => invoke('packages:uninstall', name),
     togglePackage: (name, enabled) => invoke('packages:toggle', { name, enabled }),
     context: (payload) => invoke('context:stats', payload),

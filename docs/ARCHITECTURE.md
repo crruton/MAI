@@ -288,6 +288,15 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
 
+### Маркетплейс пакетов
+
+ADR 0042. `electron/lib/marketplace.js`: `normalizeMarketplace`,
+`refreshMarketplace` (клон в `<данные>/marketplaces/<имя>`, замена кеша только
+при успехе), `readCatalog` (записи без выхода из каталога), `listMarketplaces`
+(с `installedVersion`, `updateAvailable` по `compareVersions`),
+`installFromMarketplace` → `installPackage({ from, ref, expect })`. IPC:
+`marketplace:list` (any), `marketplace:add | remove | refresh | install` (admin).
+
 ### Песочница для команд
 
 ADR 0040. `electron/lib/shell-sandbox.js`: `normalizeShellSandbox` (в

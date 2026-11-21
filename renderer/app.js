@@ -1801,7 +1801,7 @@ function packageParts(parts = {}) {
 
 async function openPackages() {
   const box = el('div', { class: 'packages-list' });
-  const source = el('input', { class: 'sessions-search', placeholder: 'Папка с mai-package.json или git-URL (https://…)' });
+  const source = el('input', { class: 'sessions-search package-source', placeholder: 'Папка с mai-package.json или git-URL (https://…)' });
   const render = async () => {
     const info = await api.chat.packages(state.projectDir);
     box.replaceChildren(
@@ -1860,12 +1860,93 @@ async function openPackages() {
     state.commands = null;
     render();
   };
+  // Каталоги (маркетплейс, ADR 0042).
+  const market = el('div', { class: 'market-list' });
+  const marketUrl = el('input', { class: 'market-url', placeholder: 'Каталог: git-URL или папка с mai-marketplace.json' });
+  const renderMarket = (data) => {
+    const list = data?.marketplaces || [];
+    market.replaceChildren(
+      ...(list.length
+        ? list.map((m) =>
+            el('div', { class: 'market', 'data-market': m.name }, [
+              el('div', { class: 'market-head' }, [
+                el('b', { text: m.name }),
+                el('span', { class: 'hint-text', text: ` · ${m.url}${m.description ? ` · ${m.description}` : ''}` }),
+                el('button', {
+                  class: 'btn ghost small',
+                  type: 'button',
+                  text: 'Убрать',
+                  onclick: async () => renderMarket(await api.chat.removeMarketplace(m.name)),
+                }),
+              ]),
+              m.error ? el('p', { class: 'hint-text', text: m.error }) : null,
+              ...m.packages.map((p) =>
+                el('div', { class: 'market-row', 'data-package': p.name }, [
+                  el('div', { class: 'package-info' }, [
+                    el('b', { text: `${p.name}${p.version ? ` ${p.version}` : ''}` }),
+                    el('span', {
+                      class: 'hint-text market-state',
+                      text: p.installedVersion === null ? '' : p.updateAvailable ? ` · установлена ${p.installedVersion || 'без версии'}` : ' · установлен',
+                    }),
+                    p.description ? el('div', { class: 'hint-text', text: p.description }) : null,
+                  ]),
+                  p.installedVersion !== null && !p.updateAvailable
+                    ? el('span')
+                    : el('button', {
+                        class: `btn small ${p.updateAvailable ? 'primary' : 'ghost'} market-install`,
+                        type: 'button',
+                        text: p.updateAvailable ? 'Обновить' : 'Установить',
+                        onclick: async (e) => {
+                          e.currentTarget.disabled = true;
+                          const r = await api.chat.installFromMarketplace(m.name, p.name, p.installedVersion !== null);
+                          if (r?.ok === false) {
+                            toast(r.error || 'Пакет не установлен', 'err');
+                            e.currentTarget.disabled = false;
+                            return;
+                          }
+                          toast(`${p.updateAvailable ? 'Обновлён' : 'Установлен'} ${r.package.name} ${r.package.version || ''}: ${packageParts(r.package.parts)}`, 'ok');
+                          state.commands = null;
+                          renderMarket(r);
+                          render();
+                        },
+                      }),
+                ]),
+              ),
+            ]),
+          )
+        : [el('p', { class: 'hint-text', text: 'Каталогов нет. Добавьте git-репозиторий или папку с mai-marketplace.json.' })]),
+    );
+  };
+  const addMarket = async () => {
+    const url = marketUrl.value.trim();
+    if (!url) return;
+    const r = await api.chat.addMarketplace(url);
+    if (r?.ok === false) return toast(r.error || 'Каталог не добавлен', 'err');
+    marketUrl.value = '';
+    renderMarket(r);
+  };
   openModal({
     title: 'Пакеты плагинов',
     body: [
       box,
+      el('div', { class: 'docs-group-title', text: 'Каталоги' }),
+      market,
+      el('div', { class: 'row' }, [
+        marketUrl,
+        el('button', { class: 'btn small', type: 'button', text: 'Добавить', onclick: addMarket }),
+        el('button', {
+          class: 'btn ghost small',
+          type: 'button',
+          text: 'Обновить каталоги',
+          onclick: async () => {
+            const r = await api.chat.refreshMarketplaces();
+            if (r?.errors?.length) toast(r.errors.join('; '), 'err');
+            renderMarket(r);
+          },
+        }),
+      ]),
       el('div', { class: 'docs-group-title', text: 'Установить' }),
-      el('div', { class: 'row' }, [source, el('button', { class: 'btn primary small', type: 'button', text: 'Установить', onclick: () => install(false) })]),
+      el('div', { class: 'row' }, [source, el('button', { class: 'btn primary small package-install', type: 'button', text: 'Установить', onclick: () => install(false) })]),
       el('p', {
         class: 'hint-text',
         text: 'Пакет — папка с mai-package.json и папками commands/, agents/, skills/, plugins/, файлами hooks.json и mcp.json. Плагины, хуки и MCP пакета — исполняемый код: ставьте только проверенные пакеты. Установка, удаление и включение — роль admin.',
@@ -1873,6 +1954,11 @@ async function openPackages() {
     ],
   });
   await render();
+  try {
+    renderMarket(await api.chat.marketplaces());
+  } catch {
+    renderMarket(null);
+  }
 }
 
 /* ---------- быстрая запись в память (CC4.3) ---------- */

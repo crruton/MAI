@@ -17,6 +17,7 @@ import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
 import { listAgentDefs } from './lib/agent-defs.js';
 import { normalizeShellSandbox } from './lib/shell-sandbox.js';
 import { createOAuthStore } from './lib/mcp-oauth.js';
+import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
@@ -441,7 +442,7 @@ ipcMain.handle('ocr:recognize', async (_e, payload) => {
 
 ipcMain.handle('settings:save', async (_e, patch) => {
   // Настройки, которые расширяют права агента или меняют изоляцию, — только admin.
-  if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth || patch.guardrails || patch.telemetry) {
+  if (patch.projectDir || patch.providers || patch.infra || patch.repowise || patch.runtimes || patch.auth || patch.guardrails || patch.telemetry || patch.marketplaces) {
     requireAdmin();
   }
   const current = loadSettings();
@@ -1485,6 +1486,71 @@ ipcMain.handle('packages:toggle', async (_e, payload = {}) => {
   retirePluginHosts();
   await mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
   return { ok: true };
+});
+
+/* ---------- маркетплейс пакетов (CC10.2, ADR 0042) ---------- */
+
+function marketplaces() {
+  const list = loadSettings().marketplaces;
+  return Array.isArray(list) ? list.filter((m) => m && m.name && m.url) : [];
+}
+
+function marketplaceView() {
+  const settings = loadSettings();
+  const installed = listPackages(settings.projectDir, dataDir(), { includeProject: false, settings: settings.packages || {} });
+  return { marketplaces: listMarketplaces(marketplaces(), dataDir(), installed) };
+}
+
+ipcMain.handle('marketplace:list', () => marketplaceView());
+
+ipcMain.handle('marketplace:add', (_e, payload = {}) => {
+  try {
+    const market = normalizeMarketplace(payload);
+    const list = marketplaces().filter((m) => m.name !== market.name);
+    refreshMarketplace(market, dataDir());
+    saveSettings({ marketplaces: [...list, market] });
+    audit({ at: new Date().toISOString(), tool: 'marketplace:add', source: 'user', cls: 'external', subject: `${market.name} ← ${market.url.slice(0, 300)}`, decision: 'allow' });
+    return { ok: true, ...marketplaceView() };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('marketplace:remove', (_e, name) => {
+  saveSettings({ marketplaces: marketplaces().filter((m) => m.name !== name) });
+  fs.rmSync(path.join(dataDir(), 'marketplaces', String(name).replace(/[^a-z0-9._-]/gi, '')), { recursive: true, force: true });
+  return { ok: true, ...marketplaceView() };
+});
+
+ipcMain.handle('marketplace:refresh', () => {
+  const errors = [];
+  for (const market of marketplaces()) {
+    try {
+      refreshMarketplace(market, dataDir());
+    } catch (err) {
+      errors.push(err?.message || String(err));
+    }
+  }
+  return { ok: !errors.length, errors, ...marketplaceView() };
+});
+
+/** Установка и обновление из каталога. Пакет — исполняемый код: только admin, в журнал. */
+ipcMain.handle('marketplace:install', async (_e, payload = {}) => {
+  try {
+    const market = marketplaces().find((m) => m.name === payload.marketplace);
+    if (!market) throw new Error(`Каталог «${payload.marketplace}» не подключён`);
+    const { package: pkg, origin } = installFromMarketplace({ market, name: String(payload.name || ''), dataDir: dataDir(), replace: payload.replace === true });
+    const settings = loadSettings();
+    const packages = { ...(settings.packages || {}) };
+    packages[pkg.name] = { ...(packages[pkg.name] || {}), origin };
+    saveSettings({ packages });
+    retirePluginHosts();
+    await mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
+    audit({ at: new Date().toISOString(), tool: 'package:install', source: 'user', cls: 'external', subject: `${pkg.name} ${pkg.version} ← каталог ${market.name}`, decision: 'allow' });
+    return { ok: true, package: pkg, ...marketplaceView() };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
 });
 
 /** Типы субагентов для `/agents` (CC8.2). */

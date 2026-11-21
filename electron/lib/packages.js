@@ -21,10 +21,10 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 export const MANIFEST = 'mai-package.json';
-const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
+export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 const PARTS = ['commands', 'agents', 'skills', 'plugins'];
 
-function readJson(file) {
+export function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
@@ -137,16 +137,17 @@ function copyPackage(from, to) {
  * (`https://…`, `git@…`, `…\.git`). Уже стоящий пакет с тем же именем
  * заменяется только при `replace: true`.
  */
-export function installPackage({ from, dataDir, replace = false, git = 'git' }) {
+export function installPackage({ from, dataDir, replace = false, git = 'git', ref = '', expect = null }) {
   const source = String(from || '').trim();
   if (!source) throw new Error('Не указан источник пакета');
+  if (ref && !/^[\w][\w./-]{0,127}$/.test(ref)) throw new Error(`Неверная ссылка git: ${ref}`);
   const isGit = /^(https?:\/\/|git@|ssh:\/\/)/.test(source) || /\.git$/.test(source);
   let tempDir = '';
   let dir = source;
   try {
     if (isGit) {
       tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-package-'));
-      const result = spawnSync(git, ['clone', '--depth', '1', '--', source, path.join(tempDir, 'src')], {
+      const result = spawnSync(git, ['clone', '--depth', '1', ...(ref ? ['--branch', ref] : []), '--', source, path.join(tempDir, 'src')], {
         encoding: 'utf8',
         timeout: 120_000,
         windowsHide: true,
@@ -156,6 +157,11 @@ export function installPackage({ from, dataDir, replace = false, git = 'git' }) 
     }
     const pkg = readPackage(dir, 'global');
     if (!pkg) throw new Error(`В ${source} нет ${MANIFEST} с полем name (буквы, цифры, . _ -)`);
+    // Из каталога (ADR 0042): пакет должен быть тем, что обещает каталог.
+    if (expect?.name && pkg.name !== expect.name) throw new Error(`Каталог обещал «${expect.name}», а в источнике «${pkg.name}»`);
+    if (expect?.version && pkg.version !== expect.version) {
+      throw new Error(`Каталог обещал ${expect.name} ${expect.version}, а в источнике версия ${pkg.version || 'не указана'}`);
+    }
     const target = path.join(dataDir, 'packages', pkg.name);
     if (fs.existsSync(target)) {
       if (!replace) throw new Error(`Пакет «${pkg.name}» уже установлен`);

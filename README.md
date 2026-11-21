@@ -69,7 +69,8 @@
   включается в «Настройки» → «Команды агента» (ADR 0040).
 - **Пакеты плагинов** — команды, агенты, навыки, плагины, хуки и MCP в одной
   папке с `mai-package.json`; установка из папки или git, выключение без
-  удаления, `/packages` (ADR 0037).
+  удаления, `/packages` (ADR 0037). Каталоги пакетов из git с версиями и
+  обновлениями (ADR 0042).
 - **Субагенты** — агент поручает подзадачу субагенту со своим контекстом
   (`explore`, `plan`, `general` или свой тип из `.mai-code/agents/<имя>.md`) и
   получает только итог; разрешения — те же, что у чата. `/agents` — список.
@@ -186,6 +187,7 @@ AGENTROUTER_API_KEY=sk-...
 | Хуки проекта | `<проект>/.mai-code/hooks.json` |
 | Правила разрешений проекта | `<проект>/.mai-code/settings.json` (в git), `settings.local.json` (только у вас) |
 | Входы в MCP-серверы (OAuth) | `%APPDATA%\mai-code\mcp-oauth.json` (зашифровано) |
+| Каталоги пакетов (кеш) | `%APPDATA%\mai-code\marketplaces\` |
 | Песочница команд агента | поле `shellSandbox` в `settings.json` (ADR 0040) |
 | Настройки организации | `%ProgramData%\mai-code\managed-settings.json`, `/etc/mai-code/…`, `/Library/Application Support/mai-code/…` (или `MAI_MANAGED_SETTINGS`) |
 | Пакеты плагинов | `%APPDATA%\mai-code\packages\`, `<проект>/.mai-code/packages\` |
@@ -402,6 +404,19 @@ review-kit/
 
 Установка: `/packages` → путь к папке или git-URL. Порядок при одинаковых
 именах: проект → пакеты → глобальные.
+
+Каталог пакетов — репозиторий с `mai-marketplace.json` (ADR 0042):
+
+```json
+{ "name": "team", "packages": [
+  { "name": "review-kit", "version": "1.3.0", "source": "packages/review-kit" },
+  { "name": "git-kit", "version": "0.4.0", "source": "https://git.example.com/git-kit.git", "ref": "v0.4.0" }
+] }
+```
+
+`/packages` → «Каталоги» → адрес репозитория → «Добавить». Новая версия в
+каталоге — кнопка «Обновить» у пакета; «Обновить каталоги» скачивает свежий
+список.
 
 ## Плагин: пример
 

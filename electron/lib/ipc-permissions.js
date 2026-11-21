@@ -100,6 +100,11 @@ export const IPC_PERMISSIONS = {
   // Пакет — исполняемый код: установка, удаление и включение — только admin.
   'packages:list': ANY,
   'packages:install': ADMIN,
+  'marketplace:list': ANY,
+  'marketplace:add': ADMIN,
+  'marketplace:remove': ADMIN,
+  'marketplace:refresh': ADMIN,
+  'marketplace:install': ADMIN,
   'packages:uninstall': ADMIN,
   'packages:toggle': ADMIN,
   'context:stats': ANY,

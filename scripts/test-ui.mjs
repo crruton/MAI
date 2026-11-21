@@ -174,6 +174,33 @@ ipcMain.handle('mcp:logout', (_e, name) => {
   mcpLogged = false;
   return { ok: true };
 });
+// Каталоги пакетов (раздел [29]).
+const marketCalls = [];
+let marketState = [
+  {
+    name: 'team',
+    url: 'https://git.example.com/catalog.git',
+    description: 'Пакеты команды',
+    error: '',
+    packages: [
+      { name: 'review-kit', version: '1.3.0', description: 'Ревью', installedVersion: '1.2.0', updateAvailable: true },
+      { name: 'docs-kit', version: '0.1.0', description: 'Документация', installedVersion: null, updateAvailable: false },
+      { name: 'git-kit', version: '0.4.0', description: '', installedVersion: '0.4.0', updateAvailable: false },
+    ],
+  },
+];
+ipcMain.handle('marketplace:list', () => ({ marketplaces: marketState }));
+ipcMain.handle('marketplace:install', (_e, payload) => {
+  marketCalls.push({ type: 'install', ...payload });
+  const entry = marketState[0].packages.find((p) => p.name === payload.name);
+  entry.installedVersion = entry.version;
+  entry.updateAvailable = false;
+  return { ok: true, package: { name: entry.name, version: entry.version, parts: { commands: 1 } }, marketplaces: marketState };
+});
+ipcMain.handle('marketplace:add', (_e, payload) => {
+  marketCalls.push({ type: 'add', ...payload });
+  return { ok: true, marketplaces: marketState };
+});
 const savedSettings = [];
 ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
@@ -1238,7 +1265,7 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`document.querySelector('.package-row input[type=checkbox]').click()`);
     await new Promise((r) => setTimeout(r, 300));
     check('флажок выключает пакет', packageCalls.some((c) => c.type === 'toggle' && c.name === 'review-kit' && c.enabled === false), JSON.stringify(packageCalls));
-    await win.webContents.executeJavaScript(`(() => { const m = document.querySelector('.modal'); const i = m.querySelector('input.sessions-search'); i.value = 'https://example.com/git-kit.git'; [...m.querySelectorAll('button')].find((b) => b.textContent === 'Установить').click(); })()`);
+    await win.webContents.executeJavaScript(`(() => { const m = document.querySelector('.modal'); const i = m.querySelector('input.package-source'); i.value = 'https://example.com/git-kit.git'; m.querySelector('.package-install').click(); })()`);
     await new Promise((r) => setTimeout(r, 300));
     check('установка из git-URL уходит в main', packageCalls.some((c) => c.type === 'install' && c.from === 'https://example.com/git-kit.git'), JSON.stringify(packageCalls));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
@@ -1303,6 +1330,29 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`document.querySelector('.mcp-login').click()`);
     await new Promise((r) => setTimeout(r, 500));
     check('«Выйти» уходит в main', mcpCalls.some((c) => c.type === 'logout' && c.name === 'remote'), JSON.stringify(mcpCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[29] Каталоги пакетов: обновление и установка (ADR 0042)');
+    await new Promise((r) => setTimeout(r, 200));
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/packages'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const rows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.market-row')].map((r) => ({ name: r.dataset.package, text: r.textContent, button: r.querySelector('.market-install')?.textContent || '', primary: Boolean(r.querySelector('.market-install.primary')) }))`);
+    const row = (n) => rows.find((r) => r.name === n) || {};
+    check('каталог и его пакеты показаны', rows.length === 3 && /Пакеты команды/.test(await win.webContents.executeJavaScript(`document.querySelector('.market-head')?.textContent || ''`)), JSON.stringify(rows));
+    check('есть обновление — «Обновить» с установленной версией', row('review-kit').button === 'Обновить' && row('review-kit').primary && /установлена 1\.2\.0/.test(row('review-kit').text), JSON.stringify(row('review-kit')));
+    check('не установлен — «Установить»', row('docs-kit').button === 'Установить' && !row('docs-kit').primary, JSON.stringify(row('docs-kit')));
+    check('актуальный — без кнопки', row('git-kit').button === '' && /установлен/.test(row('git-kit').text), JSON.stringify(row('git-kit')));
+    await win.webContents.executeJavaScript(`document.querySelector('.market-row[data-package=review-kit] .market-install').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('«Обновить» — установка с заменой', marketCalls.some((c) => c.type === 'install' && c.marketplace === 'team' && c.name === 'review-kit' && c.replace === true), JSON.stringify(marketCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.market-row[data-package=docs-kit] .market-install').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('«Установить» — без замены', marketCalls.some((c) => c.type === 'install' && c.name === 'docs-kit' && c.replace === false), JSON.stringify(marketCalls));
+    const updated = await win.webContents.executeJavaScript(`document.querySelectorAll('.market-install').length`);
+    check('после установки кнопок не осталось', updated === 0, String(updated));
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('.market-url'); i.value = 'https://git.example.com/other.git'; [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Добавить').click(); })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('каталог добавляется по адресу', marketCalls.some((c) => c.type === 'add' && c.url === 'https://git.example.com/other.git'), JSON.stringify(marketCalls));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;
