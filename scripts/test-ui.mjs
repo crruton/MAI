@@ -164,6 +164,11 @@ ipcMain.handle('mcp:status', () => [
   { name: 'local', status: 'ready', error: '', tools: ['ls'], loggedIn: false },
 ]);
 ipcMain.handle('mcp:configs', () => ({ remote: { url: 'https://mcp.example.com/mcp' }, local: { command: 'node' } }));
+ipcMain.handle('mcp:scopes', () => ({ remote: 'global', local: 'local' }));
+ipcMain.handle('mcp:saveLocal', (_e, payload) => {
+  mcpCalls.push({ type: 'saveLocal', ...payload });
+  return { ok: true };
+});
 ipcMain.handle('mcp:login', (_e, name) => {
   mcpCalls.push({ type: 'login', name });
   mcpLogged = true;
@@ -1330,6 +1335,21 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`document.querySelector('.mcp-login').click()`);
     await new Promise((r) => setTimeout(r, 500));
     check('«Выйти» уходит в main', mcpCalls.some((c) => c.type === 'logout' && c.name === 'remote'), JSON.stringify(mcpCalls));
+    const scopeText = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.mcp-scope')].map((e) => e.textContent).join('|')`);
+    check('область сервера видна', /глобальный/.test(scopeText) && /только у меня/.test(scopeText), scopeText);
+    await win.webContents.executeJavaScript(`(() => {
+      const m = document.querySelector('.modal');
+      const inputs = m.querySelectorAll('input');
+      const byPh = (ph) => [...inputs].find((i) => i.placeholder === ph);
+      byPh('filesystem').value = 'mine';
+      byPh('npx').value = 'node';
+      byPh('-y @modelcontextprotocol/server-filesystem C:\\\\project').value = 'srv.js --flag';
+      m.querySelector('.mcp-add-scope').value = 'local';
+      [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Добавить').click();
+    })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const saved = mcpCalls.find((c) => c.type === 'saveLocal');
+    check('«только у меня» уходит в mcp:saveLocal', saved?.name === 'mine' && saved?.config?.command === 'node' && saved?.config?.args?.join(' ') === 'srv.js --flag', JSON.stringify(saved));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
 
     console.log('\n[29] Каталоги пакетов: обновление и установка (ADR 0042)');

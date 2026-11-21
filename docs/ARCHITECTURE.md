@@ -112,6 +112,12 @@ OAuth (ADR 0041): `new McpManager({ oauth: { store, openBrowser, callbackPort } 
 Хранилище — `createOAuthStore(<данные>/mcp-oauth.json, secretBox)`. IPC:
 `mcp:login`, `mcp:logout` (admin); `mcp:status` отдаёт `loggedIn`.
 
+Области (CC9.5): `mcpSources(dir)` в main собирает `global → package → project →
+local` (`.mai-code/mcp.local.json`, только доверенная папка) с полем `scope`;
+`mcpConfigs` — их слияние. IPC `mcp:scopes`, `mcp:saveLocal` (через
+`updateLocalMcp` из `settings-levels.js`), `mcp:remove(name, projectDir)` удаляет и
+локальную запись.
+
 ## Плагины
 
 Плагины исполняются в отдельном процессе (ADR 0030). `loadPlugins(projectDir)`

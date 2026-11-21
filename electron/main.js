@@ -18,7 +18,7 @@ import { listAgentDefs } from './lib/agent-defs.js';
 import { normalizeShellSandbox } from './lib/shell-sandbox.js';
 import { createOAuthStore } from './lib/mcp-oauth.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
-import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles } from './lib/settings-levels.js';
+import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
@@ -125,10 +125,10 @@ guardIpc(ipcMain, requireAdmin, {
  * MCP-серверы проекта лежат в <проект>/.mai-code/mcp.json и дополняют
  * глобальные настройки. Проектные записи имеют приоритет.
  */
-function projectMcpConfig(projectDir) {
+function projectMcpConfig(projectDir, file = 'mcp.json') {
   if (!projectDir) return {};
   try {
-    const file = path.join(projectDir, '.mai-code', 'mcp.json');
+    file = path.join(projectDir, '.mai-code', file);
     const data = JSON.parse(fs.readFileSync(file, 'utf8'));
     return data.mcpServers || data || {};
   } catch {
@@ -163,8 +163,28 @@ function mcpConfigs(projectDir) {
   const settings = loadSettings();
   const dir = projectDir || settings.projectDir;
   // MCP проекта запускает процессы из чужого репозитория — только после доверия.
-  // Порядок: глобальные → пакеты → проект (последний сильнее).
-  return { ...(settings.mcpServers || {}), ...packageMcpServers(packagesFor(dir)), ...(isTrusted(dir) ? projectMcpConfig(dir) : {}) };
+  // Порядок: глобальные → пакеты → проект → локальные (последний сильнее, CC9.5).
+  return Object.fromEntries(mcpSources(dir).map(({ name, config }) => [name, config]));
+}
+
+/** MCP-серверы с областью: global | package | project | local. Позднее сильнее. */
+function mcpSources(projectDir) {
+  const settings = loadSettings();
+  const dir = projectDir || settings.projectDir;
+  const trusted = isTrusted(dir);
+  const layers = [
+    ['global', settings.mcpServers || {}],
+    ['package', packageMcpServers(packagesFor(dir))],
+    ['project', trusted ? projectMcpConfig(dir) : {}],
+    ['local', trusted ? projectMcpConfig(dir, 'mcp.local.json') : {}],
+  ];
+  const merged = new Map();
+  for (const [scope, servers] of layers) {
+    for (const [name, config] of Object.entries(servers || {})) {
+      if (config && typeof config === 'object') merged.set(name, { name, scope, config });
+    }
+  }
+  return [...merged.values()];
 }
 
 /** Управляемые настройки организации (ADR 0038): читаются при каждом решении — правка файла действует сразу. */
@@ -1790,6 +1810,17 @@ ipcMain.handle('docs:search', (_e, query) => searchDocs(query));
 
 ipcMain.handle('mcp:status', () => mcp.status());
 ipcMain.handle('mcp:configs', (_e, projectDir) => mcpConfigs(projectDir));
+ipcMain.handle('mcp:scopes', (_e, projectDir) => Object.fromEntries(mcpSources(projectDir).map(({ name, scope }) => [name, scope])));
+/** Личный MCP-сервер проекта (CC9.5): .mai-code/mcp.local.json, только доверенная папка. */
+ipcMain.handle('mcp:saveLocal', async (_e, payload = {}) => {
+  const dir = payload.projectDir || loadSettings().projectDir;
+  const name = String(payload.name || '').trim();
+  if (!dir || !isTrusted(dir)) return { ok: false, error: 'Папка не доверена — локальные MCP-серверы не сохраняются' };
+  if (!/^[\w.-]{1,64}$/.test(name)) return { ok: false, error: 'Неверное имя сервера' };
+  updateLocalMcp(dir, name, payload.config || null);
+  const result = payload.config ? await mcp.connect(name, payload.config) : (await mcp.disconnect(name), { ok: true });
+  return { ok: true, connect: result };
+});
 ipcMain.handle('mcp:sync', async (_e, projectDir) => {
   const settings = loadSettings();
   return mcp.sync(mcpConfigs(projectDir || settings.projectDir));
@@ -1807,8 +1838,10 @@ ipcMain.handle('mcp:login', async (_e, name, projectDir) => {
   return result;
 });
 ipcMain.handle('mcp:logout', (_e, name) => mcp.logout(name));
-ipcMain.handle('mcp:remove', async (_e, name) => {
+ipcMain.handle('mcp:remove', async (_e, name, projectDir) => {
   const settings = loadSettings();
+  const dir = projectDir || settings.projectDir;
+  if (dir && isTrusted(dir) && projectMcpConfig(dir, 'mcp.local.json')[name]) updateLocalMcp(dir, name, null);
   const servers = { ...(settings.mcpServers || {}) };
   delete servers[name];
   saveSettings({ mcpServers: servers });

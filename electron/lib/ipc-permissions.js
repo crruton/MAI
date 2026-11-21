@@ -149,6 +149,8 @@ export const IPC_PERMISSIONS = {
   // MCP и плагины: запуск процессов и чужого кода
   'mcp:status': ANY,
   'mcp:configs': ANY,
+  'mcp:scopes': ANY,
+  'mcp:saveLocal': ADMIN,
   'mcp:sync': ADMIN,
   'mcp:connect': ADMIN,
   'mcp:remove': ADMIN,

@@ -183,7 +183,7 @@ AGENTROUTER_API_KEY=sk-...
 | Журнал решений о разрешениях и хуках | `%APPDATA%\mai-code\audit.jsonl` |
 | Доверие к папкам | `%APPDATA%\mai-code\trust.json` |
 | Чекпоинты для отката | `%APPDATA%\mai-code\checkpoints\` |
-| MCP проекта | `<проект>/.mai-code/mcp.json` |
+| MCP проекта | `<проект>/.mai-code/mcp.json` (в git), `mcp.local.json` (только у вас) |
 | Хуки проекта | `<проект>/.mai-code/hooks.json` |
 | Правила разрешений проекта | `<проект>/.mai-code/settings.json` (в git), `settings.local.json` (только у вас) |
 | Входы в MCP-серверы (OAuth) | `%APPDATA%\mai-code\mcp-oauth.json` (зашифровано) |

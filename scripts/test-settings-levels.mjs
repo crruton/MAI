@@ -12,6 +12,7 @@ import {
   readProjectLevels,
   mergeLevels,
   updateLocalRules,
+  updateLocalMcp,
 } from '../electron/lib/settings-levels.js';
 import { evaluate, classifyTool } from '../electron/lib/policy.js';
 import { collectHooks } from '../electron/lib/hooks.js';
@@ -111,6 +112,19 @@ check('временных файлов не осталось', fs.readdirSync(pa
 check('settings.local.json в .gitignore', fs.readFileSync(path.join(fresh, '.mai-code', '.gitignore'), 'utf8') === 'settings.local.json\n');
 updateLocalRules(fresh, { kind: 'deny', add: ['run_shell(rm -rf *)'] });
 check('строка в .gitignore не дублируется', fs.readFileSync(path.join(fresh, '.mai-code', '.gitignore'), 'utf8') === 'settings.local.json\n');
+
+console.log('[7] личные MCP-серверы проекта (CC9.5)');
+const mcpDir = path.join(tmp, 'mcp-proj');
+updateLocalMcp(mcpDir, 'mine', { command: 'node', args: ['srv.js'] });
+updateLocalMcp(mcpDir, 'other', { url: 'https://x/mcp' });
+const mcpFile = JSON.parse(fs.readFileSync(path.join(mcpDir, '.mai-code', 'mcp.local.json'), 'utf8'));
+check('серверы записаны', mcpFile.mcpServers.mine.command === 'node' && mcpFile.mcpServers.other.url === 'https://x/mcp');
+check('mcp.local.json в .gitignore', fs.readFileSync(path.join(mcpDir, '.mai-code', '.gitignore'), 'utf8').split('\n').includes('mcp.local.json'));
+updateLocalMcp(mcpDir, 'mine', null);
+check('удаление', !JSON.parse(fs.readFileSync(path.join(mcpDir, '.mai-code', 'mcp.local.json'), 'utf8')).mcpServers.mine);
+updateLocalRules(mcpDir, { add: ['run_shell(make)'] });
+const gi = fs.readFileSync(path.join(mcpDir, '.mai-code', '.gitignore'), 'utf8').split('\n').filter(Boolean);
+check('.gitignore: обе строки, без дублей', gi.length === 2 && gi.includes('settings.local.json') && gi.includes('mcp.local.json'), gi.join(','));
 
 console.log('[6] хуки организации');
 const hooks = collectHooks({ settingsHooks: {}, projectDir: project, trusted: false, packageHooks: [{ source: 'managed', config: org.hooks }] });

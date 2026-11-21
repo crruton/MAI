@@ -4122,6 +4122,14 @@ async function openDocs(start = 'README.md') {
 async function openMcp() {
   const status = await api.mcp.status();
   const servers = (await api.mcp.configs(state.projectDir)) || {};
+  // Область каждого сервера (CC9.5): глобальный, пакет, проект (git), только у меня.
+  let scopes = {};
+  try {
+    scopes = (await api.mcp.scopes(state.projectDir)) || {};
+  } catch {
+    scopes = {};
+  }
+  const SCOPE_LABEL = { global: 'глобальный', package: 'из пакета', project: 'проект (git)', local: 'проект (только у меня)' };
   const list = el('div', { class: 'list' });
   const names = new Set([...Object.keys(servers), ...status.map((s) => s.name)]);
   if (!names.size) list.append(el('p', { class: 'hint-text', text: 'MCP-серверы не настроены.' }));
@@ -4158,7 +4166,7 @@ async function openMcp() {
     list.append(
       el('div', { class: 'list-item' }, [
         el('div', {}, [
-          el('div', { class: 'title' }, [name, ' ', badge]),
+          el('div', { class: 'title' }, [name, ' ', badge, scopes[name] ? el('span', { class: 'hint-text mcp-scope', text: ` · ${SCOPE_LABEL[scopes[name]] || scopes[name]}` }) : null]),
           el('div', {
             class: 'sub',
             text: info?.tools?.length ? `инструменты: ${info.tools.join(', ')}` : servers[name]?.url || servers[name]?.command || '',
@@ -4183,7 +4191,7 @@ async function openMcp() {
             type: 'button',
             text: 'Удалить',
             onclick: async () => {
-              await api.mcp.remove(name);
+              await api.mcp.remove(name, state.projectDir);
               state.settings = await api.settings.get();
               modal.close();
               openMcp();
@@ -4198,6 +4206,10 @@ async function openMcp() {
   const command = el('input', { placeholder: 'npx' });
   const args = el('input', { placeholder: '-y @modelcontextprotocol/server-filesystem C:\\project' });
   const url = el('input', { placeholder: 'https://… (для HTTP-сервера)' });
+  const scope = el('select', { class: 'mcp-add-scope' }, [
+    el('option', { value: 'global', text: 'для всех проектов' }),
+    el('option', { value: 'local', text: 'в этом проекте (только у меня)' }),
+  ]);
 
   const modal = openModal({
     title: 'MCP-серверы',
@@ -4207,7 +4219,11 @@ async function openMcp() {
       el('div', { class: 'row' }, [field('Имя', name), field('Команда', command)]),
       field('Аргументы (через пробел)', args),
       field('или URL', url),
-      el('p', { class: 'hint-text', text: 'Локальный сервер: команда + аргументы. Удалённый: URL (streamable HTTP).' }),
+      field('Где', scope),
+      el('p', {
+        class: 'hint-text',
+        text: 'Локальный сервер: команда + аргументы. Удалённый: URL (streamable HTTP). «Только у меня» — .mai-code/mcp.local.json, не попадает в git; общий для команды — .mai-code/mcp.json.',
+      }),
     ],
     footer: [
       el('button', {
@@ -4220,6 +4236,13 @@ async function openMcp() {
             ? { url: url.value.trim() }
             : { command: command.value.trim(), args: args.value.trim().split(/\s+/).filter(Boolean) };
           if (!config.url && !config.command) return toast('Нужна команда или URL', 'err');
+          if (scope.value === 'local') {
+            const r = await api.mcp.saveLocal({ projectDir: state.projectDir, name: name.value.trim(), config });
+            if (r?.ok === false) return toast(r.error, 'err');
+            modal.close();
+            openMcp();
+            return;
+          }
           const serversNext = { ...(state.settings.mcpServers || {}), [name.value.trim()]: config };
           state.settings = await api.settings.save({ mcpServers: serversNext });
           await api.mcp.sync(state.projectDir);

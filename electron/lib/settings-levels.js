@@ -95,7 +95,7 @@ export function mergeLevels(sources) {
 }
 
 /** Личный файл не должен попасть в git: строка в `.mai-code/.gitignore`. */
-function ignoreLocal(dir) {
+export function ignoreLocal(dir, name = 'settings.local.json') {
   const file = path.join(dir, '.gitignore');
   let text = '';
   try {
@@ -103,8 +103,28 @@ function ignoreLocal(dir) {
   } catch {
     /* файла нет */
   }
-  if (text.split(/\r?\n/).some((line) => line.trim() === 'settings.local.json')) return;
-  fs.writeFileSync(file, `${text}${text && !text.endsWith('\n') ? '\n' : ''}settings.local.json\n`, 'utf8');
+  if (text.split(/\r?\n/).some((line) => line.trim() === name)) return;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, `${text}${text && !text.endsWith('\n') ? '\n' : ''}${name}\n`, 'utf8');
+}
+
+/**
+ * Личные MCP-серверы проекта (CC9.5): `.mai-code/mcp.local.json`, не для git.
+ * `config: null` удаляет сервер.
+ */
+export function updateLocalMcp(projectDir, name, config) {
+  const dir = path.join(projectDir, '.mai-code');
+  const file = path.join(dir, 'mcp.local.json');
+  const data = readJson(file) || {};
+  const servers = { ...(data.mcpServers || {}) };
+  if (config) servers[name] = config;
+  else delete servers[name];
+  fs.mkdirSync(dir, { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, `${JSON.stringify({ ...data, mcpServers: servers }, null, 2)}\n`, 'utf8');
+  fs.renameSync(temp, file);
+  ignoreLocal(dir, 'mcp.local.json');
+  return servers;
 }
 
 /** Добавляет или убирает правила в settings.local.json проекта (личные правила). */
