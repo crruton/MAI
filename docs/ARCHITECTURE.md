@@ -344,6 +344,14 @@ ADR 0054. `tools/fs.js`: `glob` (`globToRegExp`), `edit_file` через
 `spillOutput` в `tool-runner.js` (`MAX_TOOL_OUTPUT`, папка `ctx.outputDir`,
 подключена в `roots` как `@вывод`).
 
+### Повторы и запасная модель
+
+ADR 0057. `electron/lib/retry.js`: `isTransient`, `needsFallback`, `retryDelay`
+(Retry-After), `sleep(ms, signal)`. В `runAgent` шаг (`attempt`) обёрнут в цикл
+повторов; `fallback` ({ provider, model, label } из `fallbackFor` в main)
+заменяет `client`, `model`, `provider` до конца прогона. `clientOptions` — `maxRetries: 0`
+для шагов, 2 — для компакции и ревизора.
+
 ### Веб
 
 ADR 0056. `electron/lib/web.js`: `isPrivateAddress`, `fetchPage` (проверка

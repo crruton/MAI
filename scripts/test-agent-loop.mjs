@@ -913,6 +913,66 @@ console.log('\n[22] read_file картинки: изображение уход�
   check('в истории чата лишнего сообщения нет, путь — у результата', history.filter((m) => m.role === 'user').length === 1 && history.find((m) => m.role === 'tool')?.images?.[0]?.endsWith('shot.png'));
 }
 
+console.log('\n[23] Повторы и запасная модель (CC13.2, CC13.3)');
+{
+  const transient = () => Object.assign(new Error('Service Unavailable'), { status: 503, headers: { 'retry-after': '0.01' } });
+  // A: два сбоя, затем ответ.
+  let fails = 2;
+  const events = [];
+  const flaky = () => ({
+    chat: {
+      completions: {
+        create: async () => {
+          if (fails > 0) {
+            fails -= 1;
+            throw transient();
+          }
+          return stream({ text: 'после повторов' });
+        },
+      },
+    },
+  });
+  let history = await runAgent(base({ messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), emit: (e) => events.push(e), clientFactory: flaky, policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('временный сбой — повтор и ответ', history.at(-1)?.content === 'после повторов', JSON.stringify(history.at(-1)));
+  check('повторы видны пользователю', events.filter((e) => e.type === 'notice' && /503.*повтор через/.test(e.text)).length === 2, JSON.stringify(events.filter((e) => e.type === 'notice')));
+  // B: основная модель лежит — запасная.
+  const used = [];
+  const factory = (options) => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          used.push(`${options.baseURL}|${body.model}`);
+          if (options.baseURL === 'http://fake') throw transient();
+          return stream({ text: 'ответ запасной' });
+        },
+      },
+    },
+  });
+  const events2 = [];
+  history = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'x' }],
+      mcp: fakeMcp(),
+      emit: (e) => events2.push(e),
+      clientFactory: factory,
+      fallback: { provider: { baseURL: 'http://backup', apiKey: 'k2', name: 'backup' }, model: 'backup-model', label: 'backup/backup-model' },
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  check('после трёх повторов — запасная модель', history.at(-1)?.content === 'ответ запасной' && used.filter((u) => u.startsWith('http://fake')).length === 4 && used.at(-1) === 'http://backup|backup-model', JSON.stringify(used));
+  check('переход на запасную виден', events2.some((e) => e.type === 'model:fallback' && e.to === 'backup/backup-model') && events2.some((e) => /запасная модель backup\/backup-model/.test(e.text || '')));
+  // C: не временная ошибка без запасной — сразу ошибка, без повторов.
+  let calls = 0;
+  const bad = () => ({ chat: { completions: { create: async () => { calls += 1; throw Object.assign(new Error('Bad request'), { status: 400 }); } } } });
+  let error = '';
+  try {
+    await runAgent(base({ messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), clientFactory: bad, policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  } catch (e) {
+    error = e.message;
+  }
+  check('400 — без повторов', calls === 1 && /Bad request/.test(error), `${calls} ${error}`);
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

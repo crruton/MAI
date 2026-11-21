@@ -25,6 +25,7 @@ import { reviewAnswer } from './reviewer.js';
 import { modePrompt } from './permissions.js';
 import { effectiveMode, mergeRules } from './policy.js';
 import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
+import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DELAYS } from './retry.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
 import { runToolCall, toolEntry } from './tool-runner.js';
 import { attachImages, attachToolImages, isImageRejected, supportsVision, isImageFile } from './vision.js';
@@ -172,9 +173,11 @@ export function trimMessages(messages, limit = 320_000) {
 }
 
 /** Клиент провайдера с нужным User-Agent: общий для агента, ревизора и компакции. */
-function clientOptions(prov) {
+function clientOptions(prov, { maxRetries = 0 } = {}) {
   const ua = providerUserAgent('', prov);
-  return { apiKey: prov.apiKey, baseURL: prov.baseURL, maxRetries: 1, ...(ua ? { defaultHeaders: { 'User-Agent': ua } } : {}) };
+  // Шаги агента повторяет сам цикл — с уведомлением и запасной моделью (ADR 0057);
+  // разовые вызовы (компакция, ревизор) полагаются на повторы SDK.
+  return { apiKey: prov.apiKey, baseURL: prov.baseURL, maxRetries, ...(ua ? { defaultHeaders: { 'User-Agent': ua } } : {}) };
 }
 
 /** Один ответ модели без потока: chat.completions, при отказе — Responses API. */
@@ -225,7 +228,7 @@ export async function compactHistory({ client, model, history, instructions = ''
 
 /** Ручная компакция сессии из окна (`/compact`): тот же код, свой клиент. */
 export async function compactSession({ provider, model, messages, instructions = '', signal, clientFactory = null }) {
-  const client = (clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider));
+  const client = (clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider, { maxRetries: 2 }));
   const history = [...messages];
   const marker = await compactHistory({ client, model, history, instructions, signal });
   return { marker, history };
@@ -279,16 +282,18 @@ export async function runAgent({
   onHistory = null,
   clientFactory = null,
   contextWindow = DEFAULT_CONTEXT,
+  fallback = null,
 }) {
+  let usingFallback = false;
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
   if (!provider.apiKey) throw new Error(`Не задан API-ключ провайдера «${provider.name || 'unknown'}»`);
 
   // defaultHeaders собираем отдельно для каждого провайдера: User-Agent
   // основного не должен перетекать в клиент ревизора.
   const makeClient = clientFactory || ((options) => new OpenAI(options));
-  const client = makeClient(clientOptions(provider));
+  let client = makeClient(clientOptions(provider));
   const reviewerClient = reviewer?.provider?.baseURL && reviewer?.provider?.apiKey
-    ? makeClient(clientOptions(reviewer.provider))
+    ? makeClient(clientOptions(reviewer.provider, { maxRetries: 2 }))
     : null;
   // Часть моделей (gpt-5.6-sol, gpt-6.1-sol на AgentRouter) не принимает
   // /v1/chat/completions. Запоминаем выбор транспорта на всю сессию,
@@ -379,6 +384,7 @@ export async function runAgent({
       skillDirs,
       extraDirs,
       kind,
+      fallback: usingFallback ? null : fallback,
       subagent: { def },
     });
     const final = [...subHistory].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '(субагент не вернул текст)';
@@ -593,17 +599,56 @@ export async function runAgent({
       }
     };
 
-    try {
-      await runTurn(buildRequest(useImages));
-    } catch (err) {
-      // Шлюз не принял изображение — повторяем шаг без картинок, один раз на прогон.
-      if (signal.aborted || !useImages || !isImageRejected(err)) throw err;
-      useImages = false;
+    const resetTurn = () => {
       content = '';
       reasoning = '';
       validCalls = [];
-      emit({ type: 'notice', text: `${model} не принял изображение — продолжаю без картинок (путь к файлу и OCR в тексте запроса).` });
-      await runTurn(buildRequest(false));
+      turnUsage = null;
+    };
+    const attempt = async () => {
+      try {
+        await runTurn(buildRequest(useImages));
+      } catch (err) {
+        // Шлюз не принял изображение — повторяем шаг без картинок, один раз на прогон.
+        if (signal.aborted || !useImages || !isImageRejected(err)) throw err;
+        useImages = false;
+        resetTurn();
+        emit({ type: 'notice', text: `${model} не принял изображение — продолжаю без картинок (путь к файлу и OCR в тексте запроса).` });
+        await runTurn(buildRequest(false));
+      }
+    };
+    // Повторы при временных сбоях (CC13.3) и запасная модель (CC13.2), ADR 0057.
+    for (let retry = 0; ; retry += 1) {
+      try {
+        await attempt();
+        break;
+      } catch (err) {
+        if (signal.aborted) throw err;
+        // Повторяем, только если модель ещё ничего не показала: иначе текст в ленте задвоится.
+        const clean = !content && !reasoning && !validCalls.length;
+        if (clean && isTransient(err) && retry < RETRY_DELAYS.length) {
+          const wait = retryDelay(err, retry);
+          emit({ type: 'notice', level: 'warn', text: `${model}: ${describeError(err)} — повтор через ${Math.round(wait / 1000)} с (${retry + 1} из ${RETRY_DELAYS.length})` });
+          await sleep(wait, signal);
+          resetTurn();
+          continue;
+        }
+        if (clean && fallback?.provider && !usingFallback && needsFallback(err)) {
+          usingFallback = true;
+          const failed = model;
+          client = makeClient(clientOptions(fallback.provider));
+          model = fallback.model;
+          provider = fallback.provider;
+          useResponses = false;
+          useImages = supportsVision(model, provider);
+          resetTurn();
+          retry = -1;
+          emit({ type: 'notice', level: 'warn', text: `${failed} недоступна (${describeError(err)}) — дальше отвечает запасная модель ${fallback.label || model}` });
+          emit({ type: 'model:fallback', from: failed, to: fallback.label || model });
+          continue;
+        }
+        throw err;
+      }
     }
 
     const assistantMessage = { role: 'assistant', content: content || null, model };

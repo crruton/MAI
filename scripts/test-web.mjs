@@ -110,6 +110,11 @@ if (process.env.MAI_LIVE_WEB === '1') {
   try {
     const found = await webSearch('Node.js fs module documentation');
     console.log(`  —    DuckDuckGo: результатов ${found.length}${found[0] ? `, первый ${found[0].url}` : ''} (не проверка: поисковик может отвечать капчей)`);
+    if (!found.length) {
+      const res = await fetch('https://html.duckduckgo.com/html/?q=nodejs', { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MAI-Code/1.0)' } });
+      const body = await res.text();
+      console.log(`  —    диагностика: ${res.status}, ${body.length} байт, классы: ${[...new Set(body.match(/class="[^"]{3,40}"/g) || [])].slice(0, 25).join(' ')}`);
+    }
   } catch (e) {
     console.log(`  —    DuckDuckGo недоступен: ${e.message} (не проверка)`);
   }

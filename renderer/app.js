@@ -3409,6 +3409,8 @@ async function openSettings() {
   const settings = state.settings;
   const temperature = el('input', { type: 'number', step: '0.1', min: '0', max: '2', value: settings.temperature });
   const maxIterations = el('input', { type: 'number', min: '1', max: '100', value: settings.maxIterations });
+  // Запасная модель (ADR 0057): на неё агент переходит, если основная недоступна.
+  const fallbackModel = el('input', { class: 'fallback-model', placeholder: 'провайдер/модель, например openai/gpt-5-mini', value: settings.fallbackModel || '' });
   const outside = el('input', { type: 'checkbox' });
   outside.checked = Boolean(settings.allowOutsideProject);
   const reviewerEnabled = el('input', { type: 'checkbox' });
@@ -3538,6 +3540,7 @@ async function openSettings() {
       el('div', { class: 'row' }, [
         field('Температура', temperature),
         field('Максимум шагов агента', maxIterations),
+        field('Запасная модель', fallbackModel),
       ]),
       el('label', { class: 'field' }, [
         el('span', { text: 'Доступ к файлам вне проекта' }),
@@ -3636,6 +3639,7 @@ async function openSettings() {
           state.settings = await api.settings.save({
             temperature: Number(temperature.value),
             maxIterations: Number(maxIterations.value),
+            fallbackModel: fallbackModel.value.trim(),
             allowOutsideProject: outside.checked,
             reviewer: {
               enabled: reviewerEnabled.checked,

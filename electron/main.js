@@ -1254,6 +1254,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
         trusted,
         // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Запасная модель при сбое основной (ADR 0057).
+        fallback: fallbackFor(settings, activeKey),
         // Чекпоинты правок для отката (CC6.1).
         checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
         hooks,
@@ -1311,6 +1313,19 @@ ipcMain.handle('chat:start', async (event, payload) => {
 let scheduleStoreInstance = null;
 const scheduleStore = () => (scheduleStoreInstance ||= createScheduleStore(dataDir()));
 const scheduledRunning = new Set();
+
+/** Запасная модель (ADR 0057): settings.fallbackModel = «провайдер/модель», с ключом и не та же, что основная. */
+function fallbackFor(settings, primaryKey) {
+  const key = String(settings.fallbackModel || '').trim();
+  if (!key || key === primaryKey) return null;
+  try {
+    const resolved = resolveModel(settings, key);
+    if (!resolved.provider?.apiKey || !resolved.provider?.baseURL) return null;
+    return { provider: resolved.provider, model: resolved.modelId, label: key };
+  } catch {
+    return null;
+  }
+}
 
 function anyWindow() {
   return mainWindow && !mainWindow.isDestroyed() ? mainWindow : BrowserWindow.getAllWindows().find((w) => !w.isDestroyed()) || null;
@@ -1371,6 +1386,8 @@ async function runScheduled(task, { reason = 'schedule' } = {}) {
       audit,
       trusted: true,
       contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+      // Запасная модель при сбое основной (ADR 0057).
+      fallback: fallbackFor(settings, task.model || settings.activeModel),
       checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
       hooks: hookRunnerFor(null, { projectDir, sessionId: session.id, trusted: true }),
       agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: true, extraDirs: packageDirs(packagesFor(projectDir), 'agents') }),
@@ -2559,6 +2576,8 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         trusted,
         // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Запасная модель при сбое основной (ADR 0057).
+        fallback: fallbackFor(settings, payload.model || settings.activeModel),
         // Чекпоинты правок для отката (CC6.1).
         checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
         extraDirs: (getSession(session.id)?.extraDirs || []).filter((d) => fs.existsSync(d)),
