@@ -26,6 +26,7 @@ import { modePrompt } from './permissions.js';
 import { effectiveMode, mergeRules } from './policy.js';
 import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
 import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DELAYS } from './retry.js';
+import { modelCapabilities, requestOptions } from './capabilities.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
 import { runToolCall, toolEntry } from './tool-runner.js';
 import { attachImages, attachToolImages, isImageRejected, supportsVision, isImageFile } from './vision.js';
@@ -283,6 +284,8 @@ export async function runAgent({
   clientFactory = null,
   contextWindow = DEFAULT_CONTEXT,
   fallback = null,
+  // Глубина рассуждений (CC7.11): '' — по умолчанию модели, low | medium | high.
+  effort = '',
 }) {
   let usingFallback = false;
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
@@ -298,9 +301,13 @@ export async function runAgent({
   // Часть моделей (gpt-5.6-sol, gpt-6.1-sol на AgentRouter) не принимает
   // /v1/chat/completions. Запоминаем выбор транспорта на всю сессию,
   // чтобы не ловить 400 на каждой итерации.
-  let useResponses = false;
+  // Возможности модели (CC13.1): транспорт, зрение, temperature, глубина рассуждений.
+  let caps = modelCapabilities(model, provider);
+  let useResponses = caps.transport === 'responses';
+  let effortSupported = true;
+  let toolsNoticeShown = false;
   // Изображения из вложений — только моделям, которые их принимают (бэклог F1).
-  let useImages = supportsVision(model, provider);
+  let useImages = caps.vision;
   let imageNoticeShown = false;
   // usage в потоке chat.completions приходит только с stream_options (A3.8).
   // Шлюз, который этот параметр не знает, отвечает 400 — тогда выключаем.
@@ -385,6 +392,7 @@ export async function runAgent({
       extraDirs,
       kind,
       fallback: usingFallback ? null : fallback,
+      effort,
       subagent: { def },
     });
     const final = [...subHistory].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '(субагент не вернул текст)';
@@ -530,8 +538,9 @@ export async function runAgent({
           model,
           instructions,
           input: toInput(rest.map(toApiMessage)),
-          tools: toResponseTools(tools),
-          temperature: settings.temperature ?? 0.3,
+          tools: caps.tools ? toResponseTools(tools) : [],
+          temperature: caps.temperature ? settings.temperature ?? 0.3 : null,
+          effort: effortSupported && caps.effort.includes(effort) ? effort : '',
           signal,
           emit,
         });
@@ -544,11 +553,15 @@ export async function runAgent({
         await runViaResponses();
       } else {
         try {
+          if (!caps.tools && !toolsNoticeShown) {
+            toolsNoticeShown = true;
+            emit({ type: 'notice', level: 'warn', text: `${model} не вызывает инструменты — агент только отвечает текстом` });
+          }
           const body = {
             model,
             messages: requestMessages,
-            tools: tools.map((t) => t.schema),
-            ...(supportsTemperature(model) ? { temperature: settings.temperature ?? 0.3 } : {}),
+            ...(caps.tools ? { tools: tools.map((t) => t.schema) } : {}),
+            ...requestOptions(caps, { temperature: settings.temperature ?? 0.3, effort: effortSupported ? effort : '' }),
             stream: true,
           };
           let stream;
@@ -558,9 +571,17 @@ export async function runAgent({
               { signal },
             );
           } catch (err) {
-            if (!streamUsage || !isStreamOptionsRejected(err)) throw err;
-            streamUsage = false;
-            stream = await client.chat.completions.create(body, { signal });
+            // Шлюз не знает reasoning_effort — повторяем без него и больше не шлём (CC7.11).
+            if (body.reasoning_effort && /reasoning_effort|reasoning|unrecognized|unknown param|extra.?(inputs|fields)/i.test(String(err?.message || ''))) {
+              effortSupported = false;
+              delete body.reasoning_effort;
+              emit({ type: 'notice', text: `${model}: шлюз не принимает глубину рассуждений — без неё` });
+              stream = await client.chat.completions.create(streamUsage ? { ...body, stream_options: { include_usage: true } } : body, { signal });
+            } else {
+              if (!streamUsage || !isStreamOptionsRejected(err)) throw err;
+              streamUsage = false;
+              stream = await client.chat.completions.create(body, { signal });
+            }
           }
 
           const calls = [];
@@ -639,8 +660,9 @@ export async function runAgent({
           client = makeClient(clientOptions(fallback.provider));
           model = fallback.model;
           provider = fallback.provider;
-          useResponses = false;
-          useImages = supportsVision(model, provider);
+          caps = modelCapabilities(model, provider);
+          useResponses = caps.transport === 'responses';
+          useImages = caps.vision;
           resetTurn();
           retry = -1;
           emit({ type: 'notice', level: 'warn', text: `${failed} недоступна (${describeError(err)}) — дальше отвечает запасная модель ${fallback.label || model}` });

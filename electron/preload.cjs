@@ -111,6 +111,7 @@ contextBridge.exposeInMainWorld('mai', {
     openResult: (sessionId, file) => invoke('results:open', { sessionId, file }),
     showResult: (sessionId, file) => invoke('results:show', { sessionId, file }),
     dirs: (sessionId) => invoke('session:dirs', sessionId),
+    caps: (model) => invoke('models:caps', model),
     kind: (sessionId) => invoke('session:kind', sessionId),
     setKind: (sessionId, kind) => invoke('session:setKind', { sessionId, kind }),
     addDir: (sessionId) => invoke('session:addDir', sessionId),

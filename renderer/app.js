@@ -695,6 +695,19 @@ function renderRunBanner() {
 let kindFor = undefined;
 function paintKind() {
   $('#results-btn')?.addEventListener('click', openResults);
+  $('#effort-select')?.addEventListener('change', (e) => {
+    state.effort = e.target.value;
+    try {
+      localStorage.setItem('mai.effort', state.effort);
+    } catch {
+      /* хранилище недоступно */
+    }
+  });
+  try {
+    state.effort = localStorage.getItem('mai.effort') || '';
+  } catch {
+    state.effort = '';
+  }
   for (const button of document.querySelectorAll('#kind-toggle .kind-btn')) {
     button.classList.toggle('active', button.dataset.kind === (state.kind || 'code'));
   }
@@ -792,8 +805,30 @@ async function openResults() {
   });
 }
 
+/* ---------- глубина рассуждений (CC7.11, ADR 0058) ---------- */
+
+let capsFor = undefined;
+async function refreshEffort() {
+  const select = $('#effort-select');
+  if (!select || capsFor === state.model) return;
+  capsFor = state.model;
+  let caps = null;
+  try {
+    caps = await api.chat.caps(state.model);
+  } catch {
+    caps = null;
+  }
+  state.caps = caps;
+  const levels = caps?.effort || [];
+  for (const option of select.options) option.hidden = Boolean(option.value) && !levels.includes(option.value);
+  select.hidden = !levels.length;
+  if (!levels.includes(state.effort)) state.effort = '';
+  select.value = state.effort || '';
+}
+
 function renderAll() {
   syncKind();
+  refreshEffort();
   if (!state.running) refreshResults();
   renderWorkDirs();
   const box = $('#messages');
@@ -1600,6 +1635,7 @@ async function send(override = null) {
       projectDir: state.projectDir,
       permissionMode: state.permissionMode,
       kind: state.kind || 'code',
+      effort: state.effort || '',
       images,
     }),
   );

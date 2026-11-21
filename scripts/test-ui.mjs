@@ -301,6 +301,8 @@ ipcMain.handle('connectors:remove', (_e, id) => {
   connInstalled.delete(id);
   return { ok: true };
 });
+// Глубина рассуждений (раздел [38]).
+ipcMain.handle('models:caps', (_e, key) => ({ id: key, tools: true, vision: false, reasoning: true, effort: ['low', 'medium', 'high'], temperature: false, transport: 'auto', context: null }));
 const savedSettings = [];
 ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
@@ -1627,6 +1629,15 @@ app.whenReady().then(async () => {
     const linearAfter = await win.webContents.executeJavaScript(`document.querySelector('.connector[data-id=linear]').textContent`);
     check('после подключения — «подключён»', /подключён/.test(linearAfter), linearAfter);
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[38] Глубина рассуждений в поле ввода (ADR 0058)');
+    win.webContents.send('chat:event', { type: 'done', sessionId: 's-dirs', messages: [] });
+    await new Promise((r) => setTimeout(r, 400));
+    const eff = await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('#effort-select'); return { hidden: s.hidden, options: [...s.options].filter((o) => !o.hidden).map((o) => o.value) }; })()`);
+    check('переключатель виден у модели с глубиной', eff.hidden === false && eff.options.join() === ',low,medium,high', JSON.stringify(eff));
+    await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('#effort-select'); s.value = 'high'; s.dispatchEvent(new Event('change')); const i = document.querySelector('#input'); i.value = 'подумай глубоко'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    check('глубина уходит с запросом', chatStarts.at(-1)?.effort === 'high', JSON.stringify(chatStarts.at(-1)));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

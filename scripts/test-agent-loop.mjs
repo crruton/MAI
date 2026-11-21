@@ -973,6 +973,39 @@ console.log('\n[23] Повторы и запасная модель (CC13.2, CC1
   check('400 — без повторов', calls === 1 && /Bad request/.test(error), `${calls} ${error}`);
 }
 
+console.log('\n[24] Возможности модели и глубина рассуждений (CC13.1, CC7.11)');
+{
+  const bodies = [];
+  await runAgent(base({ model: 'gpt-5', effort: 'high', messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'ок' }], bodies), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('gpt-5: reasoning_effort, без temperature', bodies[0].reasoning_effort === 'high' && bodies[0].temperature === undefined, JSON.stringify({ e: bodies[0].reasoning_effort, t: bodies[0].temperature }));
+  const bodies2 = [];
+  await runAgent(base({ model: 'gpt-4o', effort: 'high', messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'ок' }], bodies2), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('gpt-4o: глубина не шлётся, temperature шлётся', bodies2[0].reasoning_effort === undefined && typeof bodies2[0].temperature === 'number');
+  // Шлюз не знает reasoning_effort — повтор без него.
+  const sent = [];
+  let rejected = false;
+  const picky = () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          sent.push(JSON.parse(JSON.stringify(body)));
+          if (body.reasoning_effort) {
+            rejected = true;
+            throw Object.assign(new Error('Unrecognized request argument supplied: reasoning_effort'), { status: 400 });
+          }
+          return stream({ text: 'ок' });
+        },
+      },
+    },
+  });
+  const history = await runAgent(base({ model: 'gpt-5', effort: 'low', messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), clientFactory: picky, policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('шлюз не принял глубину — ответ без неё', rejected && sent.length === 2 && sent[1].reasoning_effort === undefined && history.at(-1)?.content === 'ок', JSON.stringify(sent.map((b) => b.reasoning_effort)));
+  const bodies3 = [];
+  const events = [];
+  await runAgent(base({ provider: { baseURL: 'http://fake', apiKey: 'k', name: 'fake', models: [{ id: 'plain', tools: false }] }, model: 'plain', messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), emit: (e) => events.push(e), clientFactory: fakeClient([{ text: 'ок' }], bodies3), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('модель без инструментов — запрос без tools и уведомление', bodies3[0].tools === undefined && events.some((e) => /не вызывает инструменты/.test(e.text || '')));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

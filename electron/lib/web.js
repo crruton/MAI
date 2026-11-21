@@ -194,7 +194,12 @@ export async function webSearch(query, config = {}, { fetchImpl = fetch, limit =
     results = ((await res.json()).web?.results || []).map((r) => ({ title: r.title, url: r.url, snippet: htmlToText(r.description || '') }));
   } else {
     const res = await get(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`);
-    results = parseDuckDuckGo(await res.text());
+    const html = await res.text();
+    // С адресов дата-центров DuckDuckGo отвечает проверкой на робота (найдено в CI).
+    if (/anomaly-modal|challenge-form/.test(html)) {
+      throw new Error('DuckDuckGo попросил пройти проверку «не робот» — настройте свой SearXNG или Brave Search («Настройки» → «Поиск в интернете»)');
+    }
+    results = parseDuckDuckGo(html);
   }
   return results.filter((r) => r.url).slice(0, limit);
 }

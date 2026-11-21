@@ -344,6 +344,14 @@ ADR 0054. `tools/fs.js`: `glob` (`globToRegExp`), `edit_file` через
 `spillOutput` в `tool-runner.js` (`MAX_TOOL_OUTPUT`, папка `ctx.outputDir`,
 подключена в `roots` как `@вывод`).
 
+### Возможности модели
+
+ADR 0058. `modelCapabilities(model, provider)` в `capabilities.js` — флаги
+`tools`, `vision`, `reasoning`, `effort`, `temperature`, `transport`, `context`;
+`requestOptions(caps, { temperature, effort })` — поля запроса. В `runAgent`:
+`caps` определяют транспорт, картинки, `tools` в запросе и `effort`
+(параметр прогона из `chat:start`). IPC `models:caps`.
+
 ### Повторы и запасная модель
 
 ADR 0057. `electron/lib/retry.js`: `isTransient`, `needsFallback`, `retryDelay`

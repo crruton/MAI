@@ -112,6 +112,7 @@ export const IPC_PERMISSIONS = {
   'results:open': ANY,
   'results:show': ANY,
   'session:dirs': ANY,
+  'models:caps': ANY,
   'session:kind': ANY,
   'session:setKind': ANY,
   'session:addDir': ADMIN,

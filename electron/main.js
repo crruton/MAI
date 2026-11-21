@@ -24,6 +24,7 @@ import { normalizeRoots } from './lib/workroots.js';
 import { listConnectors, connectorServerConfig } from './lib/connectors.js';
 import { sessionResults, previewResult, resultFile } from './lib/results.js';
 import { createScheduleStore, isDue, nextRunAt, describeSchedule } from './lib/scheduler.js';
+import { modelCapabilities } from './lib/capabilities.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
@@ -1256,6 +1257,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
         // Запасная модель при сбое основной (ADR 0057).
         fallback: fallbackFor(settings, activeKey),
+        // Глубина рассуждений из поля ввода (CC7.11).
+        effort: ['low', 'medium', 'high'].includes(payload.effort) ? payload.effort : '',
         // Чекпоинты правок для отката (CC6.1).
         checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
         hooks,
@@ -1728,6 +1731,17 @@ function sessionDirsView(sessionId) {
 }
 
 ipcMain.handle('session:dirs', (_e, sessionId) => sessionDirsView(sessionId));
+
+/** Возможности модели для окна (CC13.1): показывать ли переключатель глубины, зрение и т. п. */
+ipcMain.handle('models:caps', (_e, key) => {
+  try {
+    const settings = loadSettings();
+    const resolved = resolveModel(settings, key || settings.activeModel);
+    return modelCapabilities(resolved.modelId, resolved.provider);
+  } catch {
+    return null;
+  }
+});
 
 /** «Код / Задача» (CW1.1, ADR 0046). Без чата — значение по умолчанию для новых. */
 ipcMain.handle('session:setKind', (_e, payload = {}) => {

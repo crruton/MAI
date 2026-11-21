@@ -82,6 +82,7 @@ let braveHeaders = null;
 await webSearch('x', { provider: 'brave', apiKey: 'K' }, { fetchImpl: async (_u, o) => ((braveHeaders = o.headers), { ok: true, json: async () => ({ web: { results: [] } }) }) });
 check('Brave: ключ в заголовке', braveHeaders['X-Subscription-Token'] === 'K');
 check('Brave без ключа — ошибка', /нужен ключ/.test(await err(webSearch('x', { provider: 'brave' }))));
+check('капча DuckDuckGo — понятная ошибка с подсказкой', /проверку «не робот».*SearXNG/.test(await err(webSearch('x', {}, { fetchImpl: async () => ({ ok: true, status: 202, text: async () => '<div class="anomaly-modal__mask"></div>' }) }))));
 check('пустой запрос — ошибка', /Пустой/.test(await err(webSearch(' '))));
 check('ошибка поисковика', /ответил 503/.test(await err(webSearch('x', {}, { fetchImpl: async () => ({ ok: false, status: 503 }) }))));
 void fakeFetch;
