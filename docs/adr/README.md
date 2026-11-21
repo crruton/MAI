@@ -59,3 +59,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0041](0041-oauth-dlya-mcp.md) | OAuth для удалённых MCP-серверов | accepted | 2026-11-20 |
 | [0042](0042-marketpleys-paketov.md) | Маркетплейс пакетов | accepted | 2026-11-21 |
 | [0043](0043-navyki-fajly-i-razresheniya.md) | Навыки: файлы и allowed-tools | accepted | 2026-11-21 |
+| [0044](0044-zashchita-ot-udaleniya.md) | Защита от удаления и корзина | accepted | 2026-11-21 |

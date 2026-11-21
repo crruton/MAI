@@ -749,3 +749,5 @@ button { cursor: pointer; }
 .market-head .btn { margin-left: auto; }
 .market-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 6px 0; border-top: 1px dashed var(--border, rgba(255,255,255,0.08)); }
 .market-url { flex: 1; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12px; }
+.trash-row { grid-template-columns: 160px 1fr auto; align-items: center; }
+.trash-actions { display: flex; gap: 6px; }

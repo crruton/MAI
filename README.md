@@ -50,6 +50,8 @@
   Guardrails и правила `deny` действуют во всех режимах. На запрос можно ответить
   «Да», «Да, и не спрашивать» (правило на чат, на проект только для себя или
   всегда) или «Нет» с пояснением для агента. Рекомендованный ответ подсвечен.
+  Удаление — только `delete_file`, в корзину приложения (`/trash`), с вопросом
+  во всех режимах, кроме «Без вопросов» (ADR 0044).
   Правила складываются с пяти уровней: организация (`managed-settings.json`,
   может запретить «Без вопросов»), пользователь, проект (`.mai-code/settings.json`
   в git), «только у меня» (`.mai-code/settings.local.json`), чат; `deny` с любого
@@ -189,6 +191,7 @@ AGENTROUTER_API_KEY=sk-...
 | Хуки проекта | `<проект>/.mai-code/hooks.json` |
 | Правила разрешений проекта | `<проект>/.mai-code/settings.json` (в git), `settings.local.json` (только у вас) |
 | Входы в MCP-серверы (OAuth) | `%APPDATA%\mai-code\mcp-oauth.json` (зашифровано) |
+| Корзина (удалённое агентом, 30 дней) | `%APPDATA%\mai-code\trash\` |
 | Каталоги пакетов (кеш) | `%APPDATA%\mai-code\marketplaces\` |
 | Песочница команд агента | поле `shellSandbox` в `settings.json` (ADR 0040) |
 | Настройки организации | `%ProgramData%\mai-code\managed-settings.json`, `/etc/mai-code/…`, `/Library/Application Support/mai-code/…` (или `MAI_MANAGED_SETTINGS`) |

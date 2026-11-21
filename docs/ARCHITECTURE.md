@@ -167,6 +167,12 @@ ADR 0017). Инструменты сами `approve` не вызывают: ци
 | `dontAsk` | да | запрет | запрет | запрет | запрет |
 | `bypass` | да | да | да | да | да |
 
+Класс `delete` (`delete_file`, ADR 0044) — вне таблицы: спросить во всех режимах,
+кроме `bypass` (разрешено), `plan` и `dontAsk` (запрет без правила `allow`).
+Корзина — `electron/lib/trash.js` (`moveToTrash`, `listTrash`, `restoreFromTrash`,
+`purgeTrash`), путь передаётся инструменту как `ctx.trashDir` из `agentSettings`;
+IPC `trash:list` (any), `trash:restore` (замена — admin), `trash:purge` (admin).
+
 Порядок проверки: guardrails → `deny` → «План» → `ask` → чтение → `allow` → режим.
 Правила: `settings.permissions` и `session.permissionRules`, синтаксис
 `инструмент(маска)`. MCP-инструмент — `read` только при `readOnlyHint`.

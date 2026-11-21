@@ -206,6 +206,18 @@ ipcMain.handle('marketplace:add', (_e, payload) => {
   marketCalls.push({ type: 'add', ...payload });
   return { ok: true, marketplaces: marketState };
 });
+// Корзина (раздел [30]).
+const trashCalls = [];
+let trashItems = [
+  { id: '1700000000000-aaaaaaaa', name: 'old.js', original: '/p/src/old.js', deletedAt: '2026-11-21T10:00:00.000Z', bytes: 2048, files: 1, dir: false },
+  { id: '1700000000001-bbbbbbbb', name: 'build', original: '/p/build', deletedAt: '2026-11-21T11:00:00.000Z', bytes: 9000, files: 12, dir: true },
+];
+ipcMain.handle('trash:list', () => ({ items: trashItems, dir: '/data/trash' }));
+ipcMain.handle('trash:restore', (_e, payload) => {
+  trashCalls.push({ type: 'restore', ...payload });
+  trashItems = trashItems.filter((i) => i.id !== payload.id);
+  return { ok: true };
+});
 const savedSettings = [];
 ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
@@ -1373,6 +1385,18 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('.market-url'); i.value = 'https://git.example.com/other.git'; [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Добавить').click(); })()`);
     await new Promise((r) => setTimeout(r, 300));
     check('каталог добавляется по адресу', marketCalls.some((c) => c.type === 'add' && c.url === 'https://git.example.com/other.git'), JSON.stringify(marketCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[30] Корзина: /trash и восстановление (ADR 0044)');
+    await new Promise((r) => setTimeout(r, 200));
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/trash'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const trashRows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.trash-row')].map((r) => r.textContent)`);
+    check('удалённое в списке с путём и размером', trashRows.length === 2 && /\/p\/src\/old\.js/.test(trashRows[0]) && /2\.0 КБ/.test(trashRows[0]) && /файлов: 12/.test(trashRows[1]), JSON.stringify(trashRows));
+    await win.webContents.executeJavaScript(`document.querySelector('.trash-row[data-id="1700000000000-aaaaaaaa"] .trash-restore').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('«Восстановить» уходит в main', trashCalls.some((c) => c.type === 'restore' && c.id === '1700000000000-aaaaaaaa' && c.overwrite === false), JSON.stringify(trashCalls));
+    check('список обновился', (await win.webContents.executeJavaScript(`document.querySelectorAll('.trash-row').length`)) === 1);
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;

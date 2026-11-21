@@ -17,6 +17,7 @@ import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
 import { listAgentDefs } from './lib/agent-defs.js';
 import { normalizeShellSandbox } from './lib/shell-sandbox.js';
 import { createOAuthStore } from './lib/mcp-oauth.js';
+import { listTrash, restoreFromTrash, purgeTrash } from './lib/trash.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
@@ -207,7 +208,13 @@ function dockerReady() {
 
 function agentSettings(settings) {
   const shellSandbox = normalizeShellSandbox(settings.shellSandbox);
-  return { ...settings, shellSandbox, dockerAvailable: shellSandbox.mode === 'docker' ? dockerReady : () => false };
+  return {
+    ...settings,
+    shellSandbox,
+    dockerAvailable: shellSandbox.mode === 'docker' ? dockerReady : () => false,
+    // Корзина для delete_file (CW1.4).
+    trashDir: path.join(dataDir(), 'trash'),
+  };
 }
 
 /** «Без вопросов» недоступен: гость, недоверенная папка или запрет организации. */
@@ -1507,6 +1514,23 @@ ipcMain.handle('packages:toggle', async (_e, payload = {}) => {
   await mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
   return { ok: true };
 });
+
+/* ---------- корзина (CW1.4, ADR 0044) ---------- */
+
+const trashDir = () => path.join(dataDir(), 'trash');
+ipcMain.handle('trash:list', () => ({ items: listTrash(trashDir()), dir: trashDir() }));
+ipcMain.handle('trash:restore', (_e, payload = {}) => {
+  try {
+    // Восстановить своё может любой; заменить то, что уже лежит на месте, — только admin.
+    if (payload.overwrite === true) requireAdmin();
+    const meta = restoreFromTrash(trashDir(), payload.id, { overwrite: payload.overwrite === true });
+    audit({ at: new Date().toISOString(), tool: 'trash:restore', source: 'user', cls: 'write', subject: meta.original, decision: 'allow' });
+    return { ok: true, item: meta };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+ipcMain.handle('trash:purge', (_e, payload = {}) => ({ ok: true, removed: purgeTrash(trashDir(), { id: payload.id || null, all: payload.all === true }) }));
 
 /* ---------- маркетплейс пакетов (CC10.2, ADR 0042) ---------- */
 

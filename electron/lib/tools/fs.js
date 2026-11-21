@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isSecretPath } from '../guardrails.js';
+import { moveToTrash } from '../trash.js';
 
 const MAX_READ_BYTES = 400_000;
 const MAX_OUTPUT = 20_000;
@@ -270,6 +271,40 @@ export const fsTools = [
       ctx.beforeWrite?.(file);
       fs.writeFileSync(file, text.replace(args.old_string, () => args.new_string), 'utf8');
       return `Изменено: ${file}`;
+    },
+  },
+  {
+    schema: {
+      type: 'function',
+      function: {
+        name: 'delete_file',
+        description:
+          'Удалить файл или папку: переносится в корзину приложения, пользователь может восстановить. ' +
+          'Подтверждение спрашивается всегда, кроме режима «Без вопросов». Не удаляй через run_shell (rm, del) — используй этот инструмент.',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+        },
+      },
+    },
+    precheck(ctx, args) {
+      const file = resolveInside(ctx, args.path);
+      assertNotSecret(ctx, file, 'удаление');
+      if (!fs.existsSync(file)) return `Не найдено: ${file}`;
+      if (path.resolve(file) === path.resolve(ctx.projectDir || process.cwd())) return 'Нельзя удалить всю папку проекта';
+      if (!ctx.trashDir) return 'Корзина недоступна — удаление отключено';
+      return null;
+    },
+    async run(ctx, args) {
+      const file = resolveInside(ctx, args.path);
+      assertNotSecret(ctx, file, 'удаление');
+      if (!ctx.trashDir) return 'Ошибка: корзина недоступна — удаление отключено';
+      if (path.resolve(file) === path.resolve(ctx.projectDir || process.cwd())) return 'Ошибка: нельзя удалить всю папку проекта';
+      // Файл — ещё и в чекпоинт: «откат к сообщению» вернёт его (CC6.1).
+      if (fs.existsSync(file) && fs.statSync(file).isFile()) ctx.beforeWrite?.(file);
+      const meta = moveToTrash(file, ctx.trashDir, { projectDir: ctx.projectDir || '' });
+      return `Перемещено в корзину: ${file}${meta.dir ? ` (папка, файлов: ${meta.files})` : ''}. Восстановить — /trash.`;
     },
   },
 ];

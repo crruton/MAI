@@ -1619,6 +1619,10 @@ async function runSlash(text) {
       clear();
       await openPermissions();
       return;
+    case 'trash':
+      clear();
+      await openTrash();
+      return;
     case 'agents':
       clear();
       await openSubagents();
@@ -1664,6 +1668,66 @@ async function openHooks() {
       el('p', {
         class: 'hint-text',
         text: `Хуки проекта — ${info.projectFile}; глобальные — поле hooks в settings.json. Команда получает JSON на stdin; код 2 блокирует действие (причина — stderr), JSON { "decision", "reason", "additionalContext" } на stdout — решение и контекст.`,
+      }),
+    ],
+  });
+}
+
+/* ---------- корзина (CW1.4, ADR 0044) ---------- */
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} Б`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} КБ`;
+  return `${(n / 1024 / 1024).toFixed(1)} МБ`;
+}
+
+async function openTrash() {
+  const list = el('div', { class: 'help-table trash-list' });
+  const render = async () => {
+    const { items } = await api.chat.trash();
+    list.replaceChildren(
+      ...(items.length
+        ? items.map((item) =>
+            el('div', { class: 'help-row trash-row', 'data-id': item.id }, [
+              el('code', { text: item.name }),
+              el('span', { class: 'suggest-path', text: `${item.original} · ${item.dir ? `папка, файлов: ${item.files}` : formatBytes(item.bytes)} · ${new Date(item.deletedAt).toLocaleString()}` }),
+              el('span', { class: 'trash-actions' }, [
+                el('button', {
+                  class: 'btn small trash-restore',
+                  type: 'button',
+                  text: 'Восстановить',
+                  onclick: async () => {
+                    let r = await api.chat.restoreTrash(item.id);
+                    if (r?.ok === false && /уже есть/.test(r.error || '') && window.confirm(`${r.error}. Заменить?`)) r = await api.chat.restoreTrash(item.id, true);
+                    if (r?.ok === false) return toast(r.error, 'err');
+                    toast(`Восстановлено: ${item.original}`, 'ok');
+                    render();
+                  },
+                }),
+                el('button', {
+                  class: 'btn ghost small trash-purge',
+                  type: 'button',
+                  text: 'Удалить навсегда',
+                  onclick: async () => {
+                    if (!window.confirm(`Удалить «${item.name}» без возможности восстановить?`)) return;
+                    await api.chat.purgeTrash({ id: item.id });
+                    render();
+                  },
+                }),
+              ]),
+            ]),
+          )
+        : [el('p', { class: 'hint-text', text: 'Корзина пуста.' })]),
+    );
+  };
+  await render();
+  openModal({
+    title: 'Корзина',
+    body: [
+      list,
+      el('p', {
+        class: 'hint-text',
+        text: 'Агент не удаляет файлы окончательно: инструмент delete_file переносит их сюда, и на каждое удаление спрашивается разрешение (кроме режима «Без вопросов»). Записи старше 30 дней удаляются сами.',
       }),
     ],
   });
@@ -2763,6 +2827,7 @@ const RISK_LABEL = { low: 'Низкий риск', medium: 'Средний ри�
 const CLASS_LABEL = {
   read: 'чтение',
   write: 'правка файла',
+  delete: 'удаление (в корзину)',
   exec: 'команда',
   memory: 'память',
   network: 'сеть',

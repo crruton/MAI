@@ -10,7 +10,7 @@ import path from 'node:path';
 import { checkCommand } from './guardrails.js';
 import { normalizeMode } from './permissions.js';
 
-export const ACTION_CLASSES = ['read', 'write', 'exec', 'memory', 'network', 'external'];
+export const ACTION_CLASSES = ['read', 'write', 'delete', 'exec', 'memory', 'network', 'external'];
 
 /** Встроенные инструменты и их классы. Имя встроенного инструмента нельзя переопределить плагином. */
 const BUILTIN = {
@@ -25,6 +25,8 @@ const BUILTIN = {
   repowise_search: 'read',
   write_file: 'write',
   edit_file: 'write',
+  // Удаление — отдельный класс (CW1.4, ADR 0044): спрашивается во всех режимах, кроме «Без вопросов».
+  delete_file: 'delete',
   run_shell: 'exec',
   memory_append: 'memory',
   // Диалоговые инструменты ничего не меняют сами: решение принимает пользователь.
@@ -179,6 +181,7 @@ export function assessRisk(cls, subject = '') {
   if (cls === 'read') return { risk: 'low', why: 'только чтение' };
   if (cls === 'memory') return { risk: 'low', why: 'запись в память с версией и откатом' };
   if (cls === 'write') return { risk: 'medium', why: 'меняет файл проекта' };
+  if (cls === 'delete') return { risk: 'medium', why: 'удаляет — файл уйдёт в корзину приложения, его можно восстановить' };
   if (cls === 'exec') {
     if (HIGH_RISK_COMMAND.test(String(subject))) {
       return { risk: 'high', why: 'удаление, сеть, установка пакетов или необратимая операция git' };
@@ -219,6 +222,7 @@ export function classifyAuto({ cls, subject = '' }) {
   const text = String(subject ?? '');
   if (cls === 'read') return { action: 'allow', why: 'только чтение' };
   if (cls === 'memory') return { action: 'allow', why: 'запись в память с версией и откатом' };
+  if (cls === 'delete') return { action: 'ask', why: 'удаление спрашивается всегда — файл уйдёт в корзину' };
   if (cls === 'write') {
     if (outsideProjectToken(text)) return { action: 'ask', why: 'файл вне папки проекта' };
     if (/^\.git(?:\/|$)/.test(text)) return { action: 'ask', why: 'служебные файлы git' };
@@ -317,7 +321,7 @@ export function relativeSubject(projectDir, target) {
 
 export function subjectOf({ tool, cls, args = {}, projectDir, command }) {
   if (cls === 'exec') return String(command ?? args.command ?? '');
-  if (cls === 'write' || cls === 'read') return args.path ? relativeSubject(projectDir, args.path) : null;
+  if (cls === 'write' || cls === 'read' || cls === 'delete') return args.path ? relativeSubject(projectDir, args.path) : null;
   if (cls === 'memory') return String(args.scope || 'project');
   if (tool) return null;
   return null;
@@ -329,6 +333,8 @@ export function summarize({ tool, cls, args = {}, subject }) {
       return `Записать файл ${subject} (${String(args.content ?? '').length} символов)`;
     case 'edit_file':
       return `Изменить файл ${subject}`;
+    case 'delete_file':
+      return `Удалить ${subject} (в корзину)`;
     case 'run_shell':
       return String(subject || '');
     case 'memory_append':
@@ -358,6 +364,11 @@ export function suggestRules({ tool, cls, subject }) {
     return [`write_file(${spec})`, `edit_file(${spec})`];
   }
   if (cls === 'memory') return [`memory_append(${subject || 'project'})`];
+  // Удаление: правило только на эту папку, без `**` на весь проект.
+  if (cls === 'delete') {
+    const dir = path.posix.dirname(String(subject || '.'));
+    return dir === '.' || dir === '' ? [] : [`delete_file(${dir}/**)`];
+  }
   if (cls === 'external' || cls === 'network') return [tool];
   return [];
 }

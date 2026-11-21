@@ -26,6 +26,7 @@ export const BUILTIN_COMMANDS = [
   { name: 'cost', description: 'Токены и стоимость чата' },
   { name: 'hooks', description: 'Хуки на события агента' },
   { name: 'permissions', description: 'Правила разрешений по уровням и проверка вызова' },
+  { name: 'trash', description: 'Корзина: удалённые агентом файлы, восстановление' },
   { name: 'agents', description: 'Типы субагентов' },
   { name: 'packages', description: 'Пакеты плагинов: список, установка, включение' },
 ];

@@ -644,6 +644,7 @@ export async function runAgent({
       guardrails: settings.guardrails,
       repowise: settings.repowise,
       shellSandbox: settings.shellSandbox,
+      trashDir: settings.trashDir,
       dockerAvailable: settings.dockerAvailable,
       trusted,
       ask,
