@@ -300,6 +300,13 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
 
+### Результаты задачи
+
+ADR 0047. `touchedFiles(dataDir, sessionId)` (checkpoints.js) →
+`sessionResults`, `resultFile` (проверка, что файл из результатов чата),
+`previewResult`, `canOpen` (белый список расширений) в `electron/lib/results.js`.
+IPC `results:list | preview | open | show` принимают `{ sessionId, file }`.
+
 ### Режим «Задача»
 
 ADR 0046. `runAgent({ kind })`: при `task` — `TASK_PROMPT` вместо `BASE_PROMPT`

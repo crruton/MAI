@@ -244,6 +244,29 @@ ipcMain.handle('session:setKind', (_e, payload) => {
   kindNow = payload.kind;
   return { ok: true, kind: payload.kind, scope: payload.sessionId ? 'session' : 'default' };
 });
+// Результаты задачи (раздел [33]).
+const resultCalls = [];
+ipcMain.handle('results:list', (_e, sessionId) =>
+  sessionId === 's-dirs'
+    ? [
+        { file: '/p/отчёт.md', name: 'отчёт.md', status: 'created', size: 2048, turn: 2, openable: true, text: true },
+        { file: '/p/run.bat', name: 'run.bat', status: 'created', size: 10, turn: 2, openable: false, text: false },
+        { file: '/p/old.txt', name: 'old.txt', status: 'deleted', size: 0, turn: 1, openable: false, text: true },
+      ]
+    : [],
+);
+ipcMain.handle('results:preview', (_e, payload) => {
+  resultCalls.push({ type: 'preview', ...payload });
+  return { ok: true, preview: '# Отчёт за квартал' };
+});
+ipcMain.handle('results:open', (_e, payload) => {
+  resultCalls.push({ type: 'open', ...payload });
+  return { ok: true };
+});
+ipcMain.handle('results:show', (_e, payload) => {
+  resultCalls.push({ type: 'show', ...payload });
+  return { ok: true };
+});
 const savedSettings = [];
 ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
@@ -1453,6 +1476,24 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`document.querySelector('#kind-toggle [data-kind=code]').click()`);
     await new Promise((r) => setTimeout(r, 300));
     check('обратно в «Код»', (await kindState()).active === 'code');
+
+    console.log('\n[33] Результаты чата (ADR 0047)');
+    win.webContents.send('chat:event', { type: 'done', sessionId: 's-dirs', messages: [] });
+    await new Promise((r) => setTimeout(r, 500));
+    const resBtn = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector('#results-btn'); return { hidden: b.hidden, text: b.textContent }; })()`);
+    check('кнопка «Результаты · 3»', resBtn.hidden === false && resBtn.text === '📄 Результаты · 3', JSON.stringify(resBtn));
+    await win.webContents.executeJavaScript(`document.querySelector('#results-btn').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const rrows = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.result-row')].map((r) => ({ name: r.querySelector('.result-name').textContent, text: r.textContent, open: Boolean(r.querySelector('.result-open')) }))`);
+    check('статусы и размер', /создан · 2\.0 КБ/.test(rrows[0]?.text) && /удалён · в корзине/.test(rrows[2]?.text), JSON.stringify(rrows));
+    check('«Открыть» только у документа', rrows[0].open && !rrows[1].open && !rrows[2].open, JSON.stringify(rrows));
+    await win.webContents.executeJavaScript(`document.querySelector('.result-row .result-name').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('превью текста', (await win.webContents.executeJavaScript(`document.querySelector('.result-preview').textContent`)) === '# Отчёт за квартал');
+    await win.webContents.executeJavaScript(`document.querySelector('.result-open').click(); document.querySelectorAll('.result-show')[1].click();`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('«Открыть» и «В папке» уходят в main с чатом и путём', resultCalls.some((c) => c.type === 'open' && c.file === '/p/отчёт.md' && c.sessionId === 's-dirs') && resultCalls.some((c) => c.type === 'show' && c.file === '/p/run.bat'), JSON.stringify(resultCalls));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

@@ -62,3 +62,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0044](0044-zashchita-ot-udaleniya.md) | Защита от удаления и корзина | accepted | 2026-11-21 |
 | [0045](0045-rabochie-papki-chata.md) | Рабочие папки чата | accepted | 2026-11-21 |
 | [0046](0046-rezhim-zadacha.md) | Режим «Задача» | accepted | 2026-11-21 |
+| [0047](0047-rezultaty-zadachi.md) | Результаты задачи | accepted | 2026-11-21 |

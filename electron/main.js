@@ -20,6 +20,7 @@ import { normalizeShellSandbox } from './lib/shell-sandbox.js';
 import { createOAuthStore } from './lib/mcp-oauth.js';
 import { listTrash, restoreFromTrash, purgeTrash } from './lib/trash.js';
 import { normalizeRoots } from './lib/workroots.js';
+import { sessionResults, previewResult, resultFile } from './lib/results.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
@@ -1570,6 +1571,37 @@ ipcMain.handle('session:removeDir', (_e, payload = {}) => {
   if (!session) return { ok: false, error: 'Нет чата' };
   setSessionDirs(session.id, (session.extraDirs || []).filter((d) => path.resolve(d) !== path.resolve(String(payload.dir || ''))));
   return sessionDirsView(session.id);
+});
+
+/* ---------- результаты задачи (CW2.6, ADR 0047) ---------- */
+
+ipcMain.handle('results:list', (_e, sessionId) => (sessionId ? sessionResults(dataDir(), sessionId) : []));
+ipcMain.handle('results:preview', (_e, payload = {}) => {
+  try {
+    return { ok: true, ...previewResult(dataDir(), payload.sessionId, payload.file) };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+/** Открыть программой по умолчанию — только документ или картинку из результатов этого чата. */
+ipcMain.handle('results:open', async (_e, payload = {}) => {
+  try {
+    const item = resultFile(dataDir(), payload.sessionId, payload.file);
+    if (!item.openable) return { ok: false, error: 'Такой файл не открывается из приложения — «Показать в папке»' };
+    const error = await shell.openPath(item.file);
+    return error ? { ok: false, error } : { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+ipcMain.handle('results:show', (_e, payload = {}) => {
+  try {
+    const item = resultFile(dataDir(), payload.sessionId, payload.file);
+    shell.showItemInFolder(item.status === 'deleted' ? path.dirname(item.file) : item.file);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
 });
 
 /* ---------- корзина (CW1.4, ADR 0044) ---------- */

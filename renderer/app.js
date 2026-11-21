@@ -654,6 +654,7 @@ async function renderWorkDirs(force = false) {
 
 let kindFor = undefined;
 function paintKind() {
+  $('#results-btn')?.addEventListener('click', openResults);
   for (const button of document.querySelectorAll('#kind-toggle .kind-btn')) {
     button.classList.toggle('active', button.dataset.kind === (state.kind || 'code'));
   }
@@ -679,8 +680,81 @@ async function setKind(kind) {
   toast(result.kind === 'task' ? 'Режим «Задача»: документы и данные, без git и инструментов кода' : 'Режим «Код»: программирование', 'ok');
 }
 
+/* ---------- результаты задачи (CW2.6, ADR 0047) ---------- */
+
+const RESULT_STATUS = { created: 'создан', changed: 'изменён', deleted: 'удалён' };
+let resultsFor = undefined;
+async function refreshResults(force = false) {
+  const button = $('#results-btn');
+  if (!button) return;
+  if (!force && resultsFor === state.sessionId) return;
+  resultsFor = state.sessionId;
+  let items = [];
+  try {
+    items = state.sessionId ? await api.chat.results(state.sessionId) : [];
+  } catch {
+    items = [];
+  }
+  state.results = items;
+  button.hidden = !items.length;
+  button.textContent = `📄 Результаты · ${items.length}`;
+}
+
+async function openResults() {
+  await refreshResults(true);
+  const items = state.results || [];
+  const preview = el('pre', { class: 'result-preview', text: 'Выберите файл, чтобы посмотреть начало.' });
+  const list = el(
+    'div',
+    { class: 'results-list' },
+    items.map((item) =>
+      el('div', { class: `result-row status-${item.status}`, 'data-file': item.file }, [
+        el('button', {
+          class: 'result-name',
+          type: 'button',
+          text: item.name,
+          title: item.file,
+          onclick: async () => {
+            const r = await api.chat.previewResult(state.sessionId, item.file);
+            preview.textContent = !r.ok ? r.error : r.preview === null ? `${item.name}: ${formatBytes(item.size)} — превью только для текстовых файлов, откройте его.` : r.preview || '(пусто)';
+          },
+        }),
+        el('span', { class: 'hint-text', text: `${RESULT_STATUS[item.status]} · ${item.status === 'deleted' ? 'в корзине' : formatBytes(item.size)}` }),
+        el('span', { class: 'result-actions' }, [
+          item.openable
+            ? el('button', {
+                class: 'btn small result-open',
+                type: 'button',
+                text: 'Открыть',
+                onclick: async () => {
+                  const r = await api.chat.openResult(state.sessionId, item.file);
+                  if (r?.ok === false) toast(r.error, 'err');
+                },
+              })
+            : null,
+          el('button', {
+            class: 'btn ghost small result-show',
+            type: 'button',
+            text: 'В папке',
+            onclick: () => api.chat.showResult(state.sessionId, item.file),
+          }),
+        ]),
+      ]),
+    ),
+  );
+  openModal({
+    title: 'Результаты чата',
+    body: [
+      items.length ? list : el('p', { class: 'hint-text', text: 'Агент в этом чате ещё не создавал и не менял файлов.' }),
+      items.length ? preview : null,
+      el('p', { class: 'hint-text', text: 'Файлы, которые агент создал, изменил или удалил (удалённые — в /trash). Открываются только документы и картинки; остальное — «В папке».' }),
+    ],
+  });
+}
+
 function renderAll() {
   syncKind();
+  if (!state.running) refreshResults();
   renderWorkDirs();
   const box = $('#messages');
   const stick = isNearBottom();
@@ -2849,6 +2923,7 @@ function handleEvent(event) {
       break;
     case 'done':
       refreshCheckpoints().then(() => renderAll());
+      refreshResults(true);
       notify('Агент закончил', [...(event.messages || [])].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '');
       state.messages = event.messages || state.messages;
       state.live = null;

@@ -763,3 +763,12 @@ button { cursor: pointer; }
 .kind-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .kind-btn { background: transparent; color: var(--text-faint); border: 0; padding: 3px 9px; font: inherit; font-size: 12px; cursor: pointer; }
 .kind-btn.active { background: var(--accent-soft, rgba(99, 102, 241, 0.18)); color: var(--text); }
+
+/* результаты задачи (ADR 0047) */
+.results-btn { background: transparent; border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer; }
+.results-list { display: grid; gap: 4px; max-height: 320px; overflow: auto; }
+.result-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; font-size: 13px; }
+.result-name { background: none; border: 0; color: var(--accent-2, var(--text)); text-align: left; cursor: pointer; font: inherit; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-row.status-deleted .result-name { text-decoration: line-through; color: var(--text-faint); }
+.result-actions { display: flex; gap: 6px; }
+.result-preview { max-height: 240px; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 12px; white-space: pre-wrap; }
