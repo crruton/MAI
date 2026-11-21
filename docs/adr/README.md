@@ -69,3 +69,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0051](0051-dlinnye-zadachi.md) | Длинные задачи и прогресс | accepted | 2026-11-21 |
 | [0052](0052-katalog-konnektorov.md) | Каталог коннекторов и токены MCP | accepted | 2026-11-21 |
 | [0053](0053-zashchita-ot-prompt-injection.md) | Защита от prompt injection | accepted | 2026-11-21 |
+| [0054](0054-glob-edit-file-limit-vyvoda.md) | glob, правка файлов и лимит вывода | accepted | 2026-11-21 |

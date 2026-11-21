@@ -17,6 +17,7 @@ export const ACTION_CLASSES = ['read', 'write', 'delete', 'exec', 'memory', 'net
 const BUILTIN = {
   read_file: 'read',
   list_files: 'read',
+  glob: 'read',
   grep: 'read',
   load_skill: 'read',
   memory_read: 'read',

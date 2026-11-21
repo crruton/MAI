@@ -5,7 +5,7 @@ import { createOutputDecoder, withUtf8Console } from '../encoding.js';
 import { sandboxPlan, dockerRunArgs } from '../shell-sandbox.js';
 import { normalizeRoots, resolveIn } from '../workroots.js';
 
-const MAX_OUTPUT = 24_000;
+const MAX_OUTPUT = 200_000; // дальше — единый лимит runToolCall: остальное в файл (CC1.13)
 const TIMEOUT_MS = 180_000;
 
 // repowise может быть не установлен. Проверяем один раз и кешируем результат,

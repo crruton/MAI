@@ -308,6 +308,8 @@ export async function runAgent({
   // действует сразу, в том числе на список инструментов следующей итерации.
   const role = policy?.role || 'admin';
   const skillGrants = [];
+  // Отметки «файл прочитан» живут весь прогон, а не одну итерацию (CC1.2).
+  const readFiles = new Map();
   // Признаки prompt injection в прочитанном (CC2.10): до конца прогона «Авто» спрашивает про действия.
   let taint = null;
   const currentMode = () => effectiveMode(policy?.getMode ? policy.getMode() : permissionMode || settings.permissionMode, role);
@@ -676,7 +678,11 @@ export async function runAgent({
 
     const toolCtx = {
       projectDir,
-      roots: normalizeRoots(projectDir, extraDirs),
+      // Папка длинных выводов (CC1.13) — тоже рабочая: агент дочитывает её read_file/grep.
+      roots: normalizeRoots(projectDir, [...extraDirs, ...(settings.outputDir ? [{ dir: settings.outputDir, name: 'вывод' }] : [])]),
+      outputDir: settings.outputDir || null,
+      // Какие файлы агент прочитал в этом прогоне — правка вслепую запрещена (CC1.2).
+      readFiles,
       allowOutsideProject: settings.allowOutsideProject,
       guardrails: settings.guardrails,
       repowise: settings.repowise,

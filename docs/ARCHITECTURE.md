@@ -336,6 +336,14 @@ ADR 0050. `electron/lib/scheduler.js`: `normalizeSchedule`, `nextRunAt`,
 уведомление `Notification`. IPC `schedule:list | runs` (any),
 `schedule:save | remove | runNow` (admin).
 
+### Файловые инструменты
+
+ADR 0054. `tools/fs.js`: `glob` (`globToRegExp`), `edit_file` через
+`planEdits` (precheck/preview/run на одном плане), `readGuard` и `markRead` —
+`ctx.readFiles` (Map путь → mtime) создаётся один раз на `runAgent`. Лимит —
+`spillOutput` в `tool-runner.js` (`MAX_TOOL_OUTPUT`, папка `ctx.outputDir`,
+подключена в `roots` как `@вывод`).
+
 ### Документы
 
 ADR 0049. `electron/lib/documents.js`: `buildDocx`, `buildXlsx` (`sheetsToXlsx` в

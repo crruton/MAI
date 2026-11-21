@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 /**
  * Выполнение одного вызова инструмента через PolicyEngine (ADR 0027).
  *
@@ -44,6 +47,41 @@ export function normalizeAnswer(answer) {
     feedback: String(answer.feedback || '').trim(),
     message: answer.message || '',
   };
+}
+
+/* ---------- единый лимит вывода (CC1.13, ADR 0054) ---------- */
+
+export const MAX_TOOL_OUTPUT = 30_000;
+const KEEP_DAYS = 7;
+
+/**
+ * Длинный результат любого инструмента (встроенного, MCP, плагина) — целиком в
+ * файл `<данные>/tool-output/…`, модели — начало, конец и путь `@вывод/…`.
+ * Без папки вывода — просто обрезка.
+ */
+export function spillOutput(ctx, tool, content) {
+  if (content.length <= MAX_TOOL_OUTPUT) return content;
+  const head = content.slice(0, Math.floor(MAX_TOOL_OUTPUT * 0.7));
+  const tail = content.slice(-Math.floor(MAX_TOOL_OUTPUT * 0.2));
+  if (!ctx?.outputDir) return `${head}\n\n… обрезано ${content.length - head.length - tail.length} символов …\n\n${tail}`;
+  try {
+    fs.mkdirSync(ctx.outputDir, { recursive: true });
+    const now = Date.now();
+    for (const name of fs.readdirSync(ctx.outputDir)) {
+      const full = path.join(ctx.outputDir, name);
+      try {
+        if (now - fs.statSync(full).mtimeMs > KEEP_DAYS * 86_400_000) fs.rmSync(full, { force: true });
+      } catch {
+        /* файл занят — удалится в следующий раз */
+      }
+    }
+    const name = `${new Date(now).toISOString().replace(/[:.]/g, '-')}-${String(tool).replace(/[^\w-]/g, '_').slice(0, 40)}-${crypto.randomBytes(3).toString('hex')}.txt`;
+    fs.writeFileSync(path.join(ctx.outputDir, name), content, 'utf8');
+    const lines = content.split('\n').length;
+    return `${head}\n\n… вывод длиннее ${MAX_TOOL_OUTPUT} символов (${content.length} символов, ${lines} строк). Полностью — @вывод/${name}: read_file с offset/limit или grep по этому пути …\n\n${tail}`;
+  } catch {
+    return `${head}\n\n… обрезано …\n\n${tail}`;
+  }
 }
 
 function preview(args) {
@@ -212,7 +250,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
       },
       args,
     );
-    let content = String(result);
+    let content = spillOutput(ctx, entry.name, String(result));
     if (hookNote) content = `${content}\n\n[Хук PreToolUse]\n${hookNote}`;
     // PostToolUse: контекст от хука дописывается к результату; block — замечание агенту.
     if (hooks?.has('PostToolUse', entry.name)) {

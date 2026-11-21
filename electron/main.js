@@ -219,6 +219,8 @@ function agentSettings(settings) {
     dockerAvailable: shellSandbox.mode === 'docker' ? dockerReady : () => false,
     // Корзина для delete_file (CW1.4).
     trashDir: path.join(dataDir(), 'trash'),
+    // Длинный вывод инструментов — в файл (CC1.13).
+    outputDir: path.join(dataDir(), 'tool-output'),
   };
 }
 

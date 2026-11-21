@@ -572,6 +572,7 @@ console.log('\n[14] Чекпоинты настоящих правок и отк
       checkpoint,
       clientFactory: fakeClient(
         [
+          { calls: [{ name: 'read_file', args: { path: 'cp.txt' } }] },
           { calls: [{ name: 'edit_file', args: { path: 'cp.txt', old_string: 'исходный', new_string: 'правка 1' } }] },
           { calls: [{ name: 'write_file', args: { path: 'cp-new.txt', content: 'создан' } }] },
           { text: 'готово' },
@@ -581,7 +582,7 @@ console.log('\n[14] Чекпоинты настоящих правок и отк
       policy: { getMode: () => 'bypass', getRules: () => ({}) },
     }),
   );
-  check('правки выполнены', fs.readFileSync(file, 'utf8') === 'правка 1' && fs.existsSync(path.join(project, 'cp-new.txt')));
+  check('правки выполнены', fs.readFileSync(file, 'utf8') === 'правка 1' && fs.existsSync(path.join(project, 'cp-new.txt')), JSON.stringify(history.filter((m) => m.role === 'tool').map((m) => m.content.slice(0, 120))));
   const plan = rewindPlan(data, 'loop', 2);
   check('чекпоинт привязан к сообщению «поправь файл» (индекс 2)', plan.length === 2, JSON.stringify(plan));
   rewindFiles(data, 'loop', 2);
@@ -723,7 +724,7 @@ console.log('\n[17] Субагенты: свой контекст, итог ро
       checkpoint: { record: (file, turn) => recorded.push({ file, turn }) },
       clientFactory: routed(
         [{ calls: [{ name: 'agent', args: { type: 'general', prompt: 'поправь sub.txt' } }] }, { text: 'готово' }],
-        (sub, task, n) => (n === 1 ? { calls: [{ name: 'edit_file', args: { path: 'sub.txt', old_string: 'исходный', new_string: 'субагент' } }] } : { text: 'поправил' }),
+        (sub, task, n) => (n === 1 ? { calls: [{ name: 'read_file', args: { path: 'sub.txt' } }] } : n === 2 ? { calls: [{ name: 'edit_file', args: { path: 'sub.txt', old_string: 'исходный', new_string: 'субагент' } }] } : { text: 'поправил' }),
         [],
       ),
       policy: { getMode: () => 'manual', getRules: () => ({}) },
