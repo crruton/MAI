@@ -78,6 +78,8 @@ export function createProjectStore(dataDir) {
         // Пусто — все подключённые коннекторы; список — только эти.
         connectors: [...new Set((raw.connectors ?? prev.connectors ?? []).map(String).filter(Boolean))].slice(0, 50),
         kind: (raw.kind ?? prev.kind) === 'code' ? 'code' : 'task',
+        // Песочница команд проекта (CW1.3): inherit — как в настройках, docker, off.
+        sandbox: ['docker', 'off'].includes(raw.sandbox ?? prev.sandbox) ? raw.sandbox ?? prev.sandbox : 'inherit',
         createdAt: prev.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };

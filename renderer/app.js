@@ -2010,6 +2010,12 @@ function projectForm(existing, onSaved) {
   instructions.value = draft.instructions || '';
   const kind = el('select', { class: 'project-kind' }, [el('option', { value: 'task', text: 'Задача' }), el('option', { value: 'code', text: 'Код' })]);
   kind.value = draft.kind || 'task';
+  const sandboxSel = el('select', { class: 'project-sandbox' }, [
+    el('option', { value: 'inherit', text: 'как в настройках' }),
+    el('option', { value: 'docker', text: 'всегда в Docker' }),
+    el('option', { value: 'off', text: 'без песочницы' }),
+  ]);
+  sandboxSel.value = draft.sandbox || 'inherit';
   const connectors = el('div', { class: 'project-connectors' });
   api.mcp
     .status()
@@ -2058,7 +2064,7 @@ function projectForm(existing, onSaved) {
     ]),
     field('Инструкции проекта', instructions),
     el('label', { class: 'field' }, [el('span', { text: 'Коннекторы (ничего не выбрано — все)' }), connectors]),
-    field('Вид чатов', kind),
+    el('div', { class: 'row' }, [field('Вид чатов', kind), field('Команды агента', sandboxSel)]),
     el('button', {
       class: 'btn primary small project-save',
       type: 'button',
@@ -2072,6 +2078,7 @@ function projectForm(existing, onSaved) {
           instructions: instructions.value,
           connectors: [...connectors.querySelectorAll('input:checked')].map((b) => b.value),
           kind: kind.value,
+          sandbox: sandboxSel.value,
         });
         if (r?.ok === false) return toast(r.error, 'err');
         toast(`Проект «${r.project.name}» сохранён`, 'ok');
@@ -3693,8 +3700,12 @@ async function openSettings() {
   guardExtra.value = (guard.extraDeny || []).join('\n');
   // Песочница для команд агента (ADR 0040).
   const shellBox = settings.shellSandbox || {};
-  const shellDocker = el('input', { type: 'checkbox', class: 'shell-sandbox-docker' });
-  shellDocker.checked = shellBox.mode === 'docker';
+  const shellMode = el('select', { class: 'shell-sandbox-mode' }, [
+    el('option', { value: 'off', text: 'выключена — команды на компьютере' }),
+    el('option', { value: 'docker', text: 'всегда в Docker' }),
+    el('option', { value: 'tasks', text: 'в Docker только в чатах «Задача»' }),
+  ]);
+  shellMode.value = ['docker', 'tasks'].includes(shellBox.mode) ? shellBox.mode : 'off';
   const shellImage = el('input', { class: 'shell-sandbox-image', value: shellBox.image || 'node:22-bookworm-slim' });
   const shellNetwork = el('select', { class: 'shell-sandbox-network' }, [
     el('option', { value: 'none', text: 'выключена' }),
@@ -3835,7 +3846,7 @@ async function openSettings() {
         text: 'Guardrails не заменяют песочницу: внешние рантаймы запускаются как отдельные процессы/контейнеры и не проходят эти проверки.',
       }),
       el('div', { class: 'docs-group-title', text: 'Команды агента' }),
-      el('label', { class: 'hint-text' }, [shellDocker, ' выполнять run_shell в Docker-песочнице (проект в /workspace, без лишних прав)']),
+      field('Песочница run_shell (проект в /workspace, папки чата в /mnt, без лишних прав)', shellMode),
       el('div', { class: 'row' }, [field('Образ', shellImage), field('Сеть в контейнере', shellNetwork)]),
       field('На хосте (маски)', shellHost),
       el('p', {
@@ -3908,7 +3919,7 @@ async function openSettings() {
             },
             webSearch: { provider: webProvider.value, url: webUrl.value.trim(), apiKey: webKey.value, allowPrivate: webPrivate.checked },
             shellSandbox: {
-              mode: shellDocker.checked ? 'docker' : 'off',
+              mode: shellMode.value,
               image: shellImage.value.trim(),
               network: shellNetwork.value,
               hostCommands: shellHost.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),

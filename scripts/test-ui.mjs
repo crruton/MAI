@@ -1428,10 +1428,10 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`document.querySelector('#settings-btn').click()`);
     await new Promise((r) => setTimeout(r, 600));
     const box = await win.webContents.executeJavaScript(`(() => {
-      const d = document.querySelector('.shell-sandbox-docker');
+      const d = document.querySelector('.shell-sandbox-mode');
       if (!d) return { found: false };
-      const before = { docker: d.checked, network: document.querySelector('.shell-sandbox-network').value };
-      d.checked = true;
+      const before = { docker: d.value !== 'off', network: document.querySelector('.shell-sandbox-network').value, options: [...d.options].map((o) => o.value).join() };
+      d.value = 'docker';
       document.querySelector('.shell-sandbox-image').value = 'python:3.12-slim';
       document.querySelector('.shell-sandbox-network').value = 'bridge';
       document.querySelector('.shell-sandbox-host').value = 'git *\\n\\n  gh *  ';
@@ -1439,7 +1439,7 @@ app.whenReady().then(async () => {
       return { found: true, before };
     })()`);
     check('раздел «Команды агента» в настройках', box.found === true, JSON.stringify(box));
-    check('по умолчанию выключено, сеть выключена', box.before?.docker === false && box.before?.network === 'none', JSON.stringify(box));
+    check('по умолчанию выключено, сеть выключена; есть «только в Задаче»', box.before?.docker === false && box.before?.network === 'none' && box.before?.options === 'off,docker,tasks', JSON.stringify(box));
     await new Promise((r) => setTimeout(r, 400));
     const sb = savedSettings.at(-1)?.shellSandbox;
     check('сохраняется mode/image/network/hostCommands', sb?.mode === 'docker' && sb?.image === 'python:3.12-slim' && sb?.network === 'bridge' && sb?.hostCommands?.join('|') === 'git *|gh *', JSON.stringify(sb));
@@ -1684,10 +1684,10 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 200));
     await win.webContents.executeJavaScript(`document.querySelector('.project-add-dir').click()`);
     await new Promise((r) => setTimeout(r, 200));
-    await win.webContents.executeJavaScript(`(() => { document.querySelector('.project-name-input').value = 'Новый'; document.querySelector('.project-instructions').value = 'правила'; document.querySelector('.project-kind').value = 'code'; document.querySelector('.project-save').click(); })()`);
+    await win.webContents.executeJavaScript(`(() => { document.querySelector('.project-name-input').value = 'Новый'; document.querySelector('.project-instructions').value = 'правила'; document.querySelector('.project-kind').value = 'code'; document.querySelector('.project-sandbox').value = 'docker'; document.querySelector('.project-save').click(); })()`);
     await new Promise((r) => setTimeout(r, 400));
     const savedProject = projCalls.find((c) => c.type === 'save');
-    check('новый проект: папки из диалога, инструкции, вид', savedProject?.name === 'Новый' && savedProject.primaryDir === '/p/new-main' && savedProject.extraDirs.join() === '/p/new-extra' && savedProject.instructions === 'правила' && savedProject.kind === 'code', JSON.stringify(savedProject));
+    check('новый проект: папки из диалога, инструкции, вид', savedProject?.name === 'Новый' && savedProject.primaryDir === '/p/new-main' && savedProject.extraDirs.join() === '/p/new-extra' && savedProject.instructions === 'правила' && savedProject.kind === 'code' && savedProject.sandbox === 'docker', JSON.stringify(savedProject));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;

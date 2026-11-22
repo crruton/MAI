@@ -29,6 +29,7 @@ import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DEL
 import { modelCapabilities, requestOptions } from './capabilities.js';
 import { NO_TRACER } from './tracer.js';
 import { projectPrompt, connectorAllowed } from './projects.js';
+import { effectiveSandbox } from './shell-sandbox.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
 import { runToolCall, toolEntry } from './tool-runner.js';
 import { attachImages, attachToolImages, isImageRejected, supportsVision, isImageFile } from './vision.js';
@@ -947,7 +948,8 @@ async function runAgentInner({
       allowOutsideProject: settings.allowOutsideProject,
       guardrails: settings.guardrails,
       repowise: settings.repowise,
-      shellSandbox: settings.shellSandbox,
+      // Песочница с учётом вида чата и проекта (CW1.3).
+      shellSandbox: effectiveSandbox(settings.shellSandbox, { kind, project }),
       trashDir: settings.trashDir,
       // Защищённые ветки (CC11.6): по умолчанию main и master.
       protectedBranches: Array.isArray(settings.protectedBranches) ? settings.protectedBranches : undefined,

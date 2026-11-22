@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeShellSandbox, hostAllowed, sandboxPlan, dockerRunArgs, DEFAULT_SHELL_SANDBOX } from '../electron/lib/shell-sandbox.js';
+import { normalizeShellSandbox, hostAllowed, sandboxPlan, dockerRunArgs, DEFAULT_SHELL_SANDBOX, effectiveSandbox } from '../electron/lib/shell-sandbox.js';
 import { shellTools } from '../electron/lib/tools/shell.js';
 
 let pass = 0;
@@ -43,6 +43,12 @@ check('docker — контейнер', sandboxPlan('npm test', docker, { dockerA
 check('маска — хост', sandboxPlan('git status', docker, { dockerAvailable: false }).where === 'host');
 const blocked = sandboxPlan('npm test', docker, { dockerAvailable: false });
 check('Docker недоступен — отказ, не хост', blocked.where === 'blocked' && /Docker недоступен/.test(blocked.why));
+
+console.log('[3б] режим «только в Задаче» и проект (CW1.3)');
+check('tasks: «Задача» — docker, «Код» — хост', effectiveSandbox({ mode: 'tasks' }, { kind: 'task' }).mode === 'docker' && effectiveSandbox({ mode: 'tasks' }, { kind: 'code' }).mode === 'off');
+check('проект сильнее общей настройки', effectiveSandbox({ mode: 'off' }, { kind: 'code', project: { sandbox: 'docker' } }).mode === 'docker' && effectiveSandbox({ mode: 'docker' }, { project: { sandbox: 'off' } }).mode === 'off' && effectiveSandbox({ mode: 'docker' }, { project: { sandbox: 'inherit' } }).mode === 'docker');
+check('tasks в «Коде» — на хосте без проверки Docker', sandboxPlan('ls', { mode: 'tasks' }).where === 'host');
+check('режим tasks сохраняется', normalizeShellSandbox({ mode: 'tasks' }).mode === 'tasks');
 
 console.log('[4] аргументы docker run');
 const proj = path.resolve(os.tmpdir(), 'proj');

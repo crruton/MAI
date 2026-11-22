@@ -221,7 +221,8 @@ function agentSettings(settings) {
   return {
     ...settings,
     shellSandbox,
-    dockerAvailable: shellSandbox.mode === 'docker' ? dockerReady : () => false,
+    // Docker нужен и для режима «только в Задаче», и для проектов с песочницей (CW1.3).
+    dockerAvailable: dockerReady,
     // Корзина для delete_file (CW1.4).
     trashDir: path.join(dataDir(), 'trash'),
     // Длинный вывод инструментов — в файл (CC1.13).
