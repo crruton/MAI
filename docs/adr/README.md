@@ -90,3 +90,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0072](0072-lokalnye-konnektory.md) | Локальные коннекторы | accepted | 2026-11-22 |
 | [0073](0073-chaty-imya-kopiya-hranenie.md) | Чаты: имя, копия, хранение и точки отката | accepted | 2026-11-22 |
 | [0074](0074-interfeys-tema-statusnaya-stroka-dostupnost.md) | Интерфейс: !команда, статусная строка, тема, доступность | accepted | 2026-11-22 |
+| [0075](0075-izolyaciya-i-fonovye-subagenty.md) | Изоляция субагента в git worktree и фоновые субагенты | accepted | 2026-11-22 |

@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import { runAgent, trimMessages, toApiMessage, compactSession, suggestTitle } from '../electron/lib/agent.js';
 import { loadPlugins } from '../electron/lib/plugins.js';
@@ -1195,6 +1196,116 @@ console.log('\n[28] Проект: инструкции в промпте и то
   const factory = () => ({ chat: { completions: { create: async (body) => { seen.push(body); return { choices: [{ message: { content: '«Сверка выписки».' } }] }; } } } });
   const title = await suggestTitle({ provider: { apiKey: 'k', baseURL: 'http://x' }, model: 'm', request: 'сверь выписку с реестром', answer: 'готово', clientFactory: factory });
   check('suggestTitle: запрос с текстом задачи, ответ очищен', title === 'Сверка выписки' && /сверь выписку с реестром/.test(seen[0].messages[0].content), title);
+}
+
+{
+  console.log('\n[30] Субагент в своей копии проекта (CC8.5, ADR 0075)');
+  const git = (cwd, ...args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' });
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mai-iso-')));
+  git(repo, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'note.txt'), 'исходный', 'utf8');
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-q', '-m', 'init');
+  const runIso = async (allowMerge) => {
+    const asked = [];
+    const recorded = [];
+    let seenDuring = null;
+    await runAgent(
+      base({
+        projectDir: repo,
+        settings: { maxIterations: 6, permissions: {}, worktreeDir: path.join(repo, '..', `wt-${allowMerge}`) },
+        messages: [{ role: 'user', content: 'поправь в копии' }],
+        mcp: fakeMcp(),
+        agentDefs: BUILTIN_AGENTS,
+        checkpoint: { record: (file, turn) => recorded.push({ file, turn }) },
+        approve: async (r) => {
+          asked.push(r.tool);
+          if (r.tool === 'agent_merge') seenDuring = fs.readFileSync(path.join(repo, 'note.txt'), 'utf8');
+          return r.tool === 'agent_merge' ? allowMerge : true;
+        },
+        clientFactory: routed(
+          [{ calls: [{ name: 'agent', args: { type: 'general', prompt: 'поправь note.txt', isolation: 'worktree' } }] }, { text: 'готово' }],
+          (sub, task, n) => (n === 1 ? { calls: [{ name: 'read_file', args: { path: 'note.txt' } }] } : n === 2 ? { calls: [{ name: 'edit_file', args: { path: 'note.txt', old_string: 'исходный', new_string: 'из копии' } }] } : { text: 'поправил' }),
+          [],
+        ),
+        policy: { getMode: () => 'acceptEdits', getRules: () => ({}) },
+      }),
+    );
+    return { asked, recorded, seenDuring };
+  };
+  let r = await runIso(true);
+  check('правка шла в копии: проект не тронут до слияния', r.seenDuring === 'исходный', r.seenDuring);
+  check('слияние — только с подтверждения', r.asked.includes('agent_merge'), JSON.stringify(r.asked));
+  check('после «да» правка в проекте, в чекпоинте хода', fs.readFileSync(path.join(repo, 'note.txt'), 'utf8') === 'из копии' && r.recorded.some((x) => x.file.endsWith('note.txt') && x.turn === 0), JSON.stringify(r.recorded));
+  check('копия и ветка убраны', !git(repo, 'branch', '--list', 'mai/agent-*').stdout.trim() && git(repo, 'worktree', 'list').stdout.trim().split('\n').length === 1);
+  git(repo, 'checkout', '-q', '--', 'note.txt');
+  r = await runIso(false);
+  check('после «нет» проект не изменён, правка в ветке', fs.readFileSync(path.join(repo, 'note.txt'), 'utf8') === 'исходный' && /mai\/agent-/.test(git(repo, 'branch', '--list', 'mai/agent-*').stdout));
+  const plain = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mai-noiso-')));
+  const bodies = [];
+  await runAgent(
+    base({
+      projectDir: plain,
+      messages: [{ role: 'user', content: 'в копии' }],
+      mcp: fakeMcp(),
+      agentDefs: BUILTIN_AGENTS,
+      approve: async () => true,
+      clientFactory: routed([{ calls: [{ name: 'agent', args: { type: 'general', prompt: 'x', isolation: 'worktree' } }] }, { text: 'ок' }], () => ({ text: 'ок' }), bodies),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const toolMsg = bodies.at(-1)?.messages?.find((m) => m.role === 'tool')?.content || '';
+  check('не git — понятный отказ вместо правок в проекте', /не git-репозиторий/.test(toolMsg), toolMsg);
+  fs.rmSync(repo, { recursive: true, force: true });
+  fs.rmSync(plain, { recursive: true, force: true });
+}
+
+{
+  console.log('\n[31] Фоновые субагенты (CC8.6, ADR 0075)');
+  const tasks = new Map();
+  const started = [];
+  const background = {
+    start({ type, description, run }) {
+      const id = `bg-${tasks.size + 1}`;
+      const task = { id, type, description, status: 'работает', result: '' };
+      tasks.set(id, task);
+      started.push(task);
+      task.promise = run().then((res) => {
+        task.status = 'готово';
+        task.result = res;
+      });
+      return task;
+    },
+    get: (id) => tasks.get(id) || null,
+    list: () => [...tasks.values()],
+  };
+  const bodies = [];
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'поищи в фоне' }],
+      mcp: fakeMcp(),
+      agentDefs: BUILTIN_AGENTS,
+      background,
+      approve: async () => true,
+      clientFactory: routed(
+        [
+          { calls: [{ name: 'agent', args: { type: 'explore', description: 'поиск конфига', prompt: 'найди конфиг', background: true } }, { name: 'agent', args: { type: 'general', prompt: 'правь', background: true } }] },
+          { text: 'продолжаю' },
+        ],
+        () => ({ text: 'конфиг в app.json' }),
+        bodies,
+      ),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const mainBody = bodies.filter((b) => !/Ты — субагент/.test(b.messages[0].content)).at(-1);
+  const results = mainBody.messages.filter((m) => m.role === 'tool').map((m) => m.content);
+  check('чтение — в фоне, родитель сразу продолжает', started.length === 1 && /запущен в фоне: bg-1/.test(results[0]), JSON.stringify(results));
+  check('пишущий без изоляции в фон не идёт', /только субагентов для чтения или с isolation/.test(results[1] || ''), results[1]);
+  const parentTools = mainBody.tools;
+  check('у родителя есть agent_result', parentTools.includes('agent_result'), parentTools.join(','));
+  await started[0].promise;
+  check('итог фонового субагента собран', started[0].status === 'готово' && /конфиг в app.json/.test(started[0].result), started[0].result);
 }
 
 fs.rmSync(project, { recursive: true, force: true });

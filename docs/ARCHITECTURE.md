@@ -320,6 +320,13 @@ ADR 0036. `runAgent({ agentDefs })` добавляет инструмент `age
 `subagent` сужает инструменты (`def.tools`, без `NEVER_FOR_SUBAGENT`) и
 отключает ревизор и `Stop`. IPC `agents:defs(projectDir)`.
 
+ADR 0075: `worktree.js` — `repoRoot`, `createWorktree`, `worktreeChanges`,
+`applyChanges` (по файлу, `git merge-file`), `removeWorktree({ keepBranch })`;
+`executeSubagent` в agent.js запускает субагента в копии и `mergeWorktree`
+(вопрос `agent_merge`, чекпоинт, слияние). Фон: `runAgent({ background })` —
+реестр `backgroundFor(window, sessionId)` в main (итог в историю, событие
+`agent:background`, уведомление), инструмент `agent_result`.
+
 ### Вывод консоли на Windows
 
 `electron/lib/encoding.js`: `withUtf8Console` добавляет `chcp 65001` перед

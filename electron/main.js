@@ -462,6 +462,8 @@ app.on('before-quit', () => {
   disposePluginHosts();
   // Фоновые команды агента (CC1.4) не переживают приложение.
   disposeBackground();
+  // Фоновые субагенты (CC8.6) — тоже.
+  for (const tasks of backgroundAgents.values()) for (const t of tasks.values()) t.abort?.();
   for (const state of runs.values()) {
     try {
       state.stage?.kill();
@@ -1276,6 +1278,66 @@ ipcMain.handle('sessions:importFile', async (event) => {
 
 // ---------- чат ----------
 
+/* ---------- фоновые субагенты (CC8.6, ADR 0075) ---------- */
+
+// sessionId → Map(id → задача). Живут дольше прогона родителя, до выхода из приложения.
+const backgroundAgents = new Map();
+
+function backgroundFor(window, sessionId) {
+  if (!backgroundAgents.has(sessionId)) backgroundAgents.set(sessionId, new Map());
+  const tasks = backgroundAgents.get(sessionId);
+  const view = (t) => ({ id: t.id, type: t.type, description: t.description, status: t.status, result: t.result || '' });
+  return {
+    start({ type, description, run, abort }) {
+      const id = `bg-${crypto.randomBytes(3).toString('hex')}`;
+      const task = { id, type, description, status: 'работает', result: '', abort, startedAt: new Date().toISOString() };
+      tasks.set(id, task);
+      send(window, { type: 'agent:background', sessionId, task: view(task) });
+      Promise.resolve()
+        .then(run)
+        .then(
+          (result) => {
+            task.status = 'готово';
+            task.result = String(result || '').slice(0, 20000);
+          },
+          (err) => {
+            task.status = 'ошибка';
+            task.result = err?.message || String(err);
+          },
+        )
+        .finally(() => {
+          task.abort = null;
+          // Итог — в историю чата: агент увидит его следующим ходом, пользователь — в ленте.
+          try {
+            const session = getSession(sessionId);
+            if (session) {
+              session.messages.push({
+                role: 'user',
+                content: `[Фоновый субагент ${task.type} «${task.description}» (${task.id}) завершил работу: ${task.status}]\n\n${task.result}`,
+                display: `⟳ Фоновый субагент «${task.description}»: ${task.status}`,
+                background: task.id,
+              });
+              saveSession(session);
+            }
+          } catch {
+            /* чат удалён */
+          }
+          send(window, { type: 'agent:background', sessionId, task: view(task), done: true });
+          if (Notification.isSupported?.() && !(window && !window.isDestroyed() && window.isFocused())) {
+            try {
+              new Notification({ title: `Субагент «${task.description}»: ${task.status}`, body: task.result.replace(/\s+/g, ' ').slice(0, 180) }).show();
+            } catch {
+              /* без уведомлений */
+            }
+          }
+        });
+      return view(task);
+    },
+    get: (id) => (tasks.has(id) ? view(tasks.get(id)) : null),
+    list: () => [...tasks.values()].map(view),
+  };
+}
+
 ipcMain.handle('chat:start', async (event, payload) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   const state = runState(window);
@@ -1442,6 +1504,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
         extraDirs: [...new Set([...(project?.extraDirs || []), ...(getSession(session.id)?.extraDirs || [])])].filter((d) => fs.existsSync(d)),
         kind: getSession(session.id)?.kind || 'code',
         project,
+        background: backgroundFor(window, session.id),
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {

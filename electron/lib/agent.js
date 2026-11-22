@@ -33,7 +33,9 @@ import { NO_TRACER } from './tracer.js';
 import { projectPrompt, connectorAllowed } from './projects.js';
 import { effectiveSandbox } from './shell-sandbox.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
-import { runToolCall, toolEntry } from './tool-runner.js';
+import { runToolCall, toolEntry, normalizeAnswer } from './tool-runner.js';
+import { repoRoot, createWorktree, worktreeChanges, applyChanges, removeWorktree } from './worktree.js';
+import os from 'node:os';
 import { attachImages, attachToolImages, isImageRejected, supportsVision, isImageFile } from './vision.js';
 import { addUsage, isStreamOptionsRejected, normalizeUsage } from './usage.js';
 import { activeHistory, compactionCut, compactionPrompt, contextBreakdown, DEFAULT_CONTEXT, needsCompaction } from './context.js';
@@ -405,6 +407,8 @@ async function runAgentInner({
   runSpan = null,
   // Проект Cowork (CW1.5, ADR 0065): инструкции и разрешённые коннекторы.
   project = null,
+  // Фоновые субагенты (CC8.6, ADR 0075): реестр от main — start(task), get(id), list().
+  background = null,
 }) {
   let usingFallback = false;
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
@@ -469,6 +473,41 @@ async function runAgentInner({
     const def = defOf(args);
     if (!def) return `Ошибка: нет субагента «${args?.type}». Доступны: ${(agentDefs || []).map((d) => d.name).join(', ')}`;
     if (!String(args?.prompt || '').trim()) return 'Ошибка: пустая задача субагента';
+    const readOnly = isReadOnlyDef(def);
+    // Изоляция (CC8.5): только для пишущих субагентов, только в git-репозитории с коммитами.
+    const isolate = !readOnly && (args.isolation === 'worktree' || def.isolation === 'worktree');
+    let worktree = null;
+    if (isolate) {
+      const repo = repoRoot(projectDir);
+      if (!repo) return 'Ошибка: изоляция worktree недоступна — папка проекта не git-репозиторий с коммитами. Запусти без isolation или сначала сделай коммит.';
+      try {
+        worktree = createWorktree({ repo, baseDir: settings.worktreeDir || path.join(os.tmpdir(), 'mai-worktrees') });
+      } catch (err) {
+        return `Ошибка: не удалось создать рабочую копию: ${err.message}`;
+      }
+    }
+    // Фон (CC8.6): только без вопросов о правках в проекте — чтение или своя копия.
+    if (args.background === true) {
+      if (!background) {
+        if (worktree) removeWorktree(worktree);
+        return 'Ошибка: фоновые субагенты здесь недоступны (нет окна, куда прислать итог).';
+      }
+      if (!readOnly && !worktree) return 'Ошибка: в фоне можно запускать только субагентов для чтения или с isolation: "worktree".';
+      const controller = new AbortController();
+      const task = background.start({
+        type: def.name,
+        description: String(args.description || def.name).slice(0, 80),
+        abort: () => controller.abort(),
+        run: () => executeSubagent(def, args, { ...ctx, progress: null }, worktree, controller.signal),
+      });
+      return `Субагент ${def.name} запущен в фоне: ${task.id}. Продолжай работу; итог придёт сообщением, проверить раньше — agent_result с id ${task.id}.`;
+    }
+    return executeSubagent(def, args, ctx, worktree, signal);
+  };
+
+  /** Сам прогон субагента; при изоляции — в рабочей копии, затем слияние по подтверждению. */
+  const executeSubagent = async (def, args, ctx, worktree, runSignal) => {
+    const subDir = worktree ? path.join(worktree.dir, path.relative(worktree.repo, projectDir)) : projectDir;
     let parentTurn = -1;
     for (let k = history.length - 1; k >= 0; k -= 1) {
       if (history[k].role === 'user') {
@@ -490,12 +529,12 @@ async function runAgentInner({
     const subHistory = await runAgent({
       settings: { ...settings, maxIterations: settings.subagentMaxIterations || 20, autoCompact: settings.autoCompact },
       provider,
-      projectDir,
+      projectDir: subDir,
       model,
       messages: [{ role: 'user', content: String(args.prompt) }],
       emit: subEmit,
       approve,
-      signal,
+      signal: runSignal,
       mcp,
       pluginTools: def.tools ? [] : pluginTools,
       transforms: [],
@@ -505,12 +544,13 @@ async function runAgentInner({
       audit,
       trusted,
       // Правки субагента — в чекпоинт хода родителя: откат вернёт и их (CC6.1).
-      checkpoint: checkpoint ? { record: (file) => checkpoint.record(file, parentTurn) } : null,
+      // В своей копии чекпоинты не нужны: в проект попадёт только то, что слито.
+      checkpoint: checkpoint && !worktree ? { record: (file) => checkpoint.record(file, parentTurn) } : null,
       hooks,
       clientFactory,
       contextWindow,
       skillDirs,
-      extraDirs,
+      extraDirs: worktree ? [] : extraDirs,
       kind,
       fallback: usingFallback ? null : fallback,
       effort,
@@ -523,8 +563,90 @@ async function runAgentInner({
     const usage = subHistory.filter((m) => m.role === 'assistant' && m.usage).reduce((sum, m) => addUsage(sum, m.usage), null);
     if (usage) runUsage = addUsage(runUsage, usage);
     const title = args.description ? ` «${String(args.description).slice(0, 80)}»` : '';
-    return `[Субагент ${def.name}${title}: шагов ${steps}${usage ? `, токенов ↑${usage.input} ↓${usage.output}` : ''}]\n\n${String(final).slice(0, 20000)}`;
+    const head = `[Субагент ${def.name}${title}: шагов ${steps}${usage ? `, токенов ↑${usage.input} ↓${usage.output}` : ''}]`;
+    const merge = worktree ? await mergeWorktree(def, worktree) : '';
+    return `${head}${merge ? `\n${merge}` : ''}\n\n${String(final).slice(0, 20000)}`;
   };
+
+  /** Слияние рабочей копии субагента (CC8.5): спросить, наложить, записать в чекпоинт хода. */
+  const mergeWorktree = async (def, worktree) => {
+    let changes;
+    try {
+      changes = worktreeChanges(worktree);
+    } catch (err) {
+      removeWorktree(worktree, { keepBranch: true });
+      return `[Изменения не слиты: ${err.message}]`;
+    }
+    if (!changes.files.length) {
+      removeWorktree(worktree);
+      return '[Рабочая копия: изменений нет]';
+    }
+    const list = changes.files.map((f) => `${f.status} ${f.path}`).join('\n');
+    const answer = typeof approve === 'function'
+      ? normalizeAnswer(
+          await approve({
+            tool: 'agent_merge',
+            source: 'builtin',
+            cls: 'write',
+            summary: `Слить в проект изменения субагента ${def.name}: файлов ${changes.files.length}`,
+            subject: list.slice(0, 2000),
+            args: { stat: changes.stat.slice(0, 4000) },
+            risk: 'medium',
+            why: 'субагент работал в отдельной копии проекта (git worktree); в проект попадёт только то, что вы разрешите',
+            decisionSource: 'worktree',
+            recommended: 'allow',
+            rule: null,
+            suggestions: [],
+            mode: permissionMode,
+          }),
+        )
+      : { allow: false };
+    if (!answer.allow) {
+      removeWorktree(worktree, { keepBranch: true });
+      return `[Изменения не слиты — остались в ветке ${worktree.branch}:\n${changes.stat}]`;
+    }
+    try {
+      // В чекпоинт хода — до наложения, чтобы откат вернул и эти правки (CC6.1).
+      let parentTurn = -1;
+      for (let k = history.length - 1; k >= 0; k -= 1) {
+        if (history[k].role === 'user') {
+          parentTurn = k;
+          break;
+        }
+      }
+      for (const f of changes.files) checkpoint?.record?.(path.join(worktree.repo, f.path), parentTurn);
+      applyChanges(worktree, changes);
+      removeWorktree(worktree);
+      for (const f of changes.files) touched.add(path.relative(projectDir, path.join(worktree.repo, f.path)) || f.path);
+      return `[Изменения слиты в проект:\n${changes.stat}]`;
+    } catch (err) {
+      removeWorktree(worktree, { keepBranch: true });
+      return `[Изменения не слиты: ${err.message}. Они в ветке ${worktree.branch}]`;
+    }
+  };
+
+  // Итог фонового субагента (CC8.6).
+  const agentResultEntry =
+    !subagent && background
+      ? toolEntry(
+          {
+            type: 'function',
+            function: {
+              name: 'agent_result',
+              description: 'Состояние и итог фоновых субагентов: по id или все запущенные в этом чате.',
+              parameters: { type: 'object', properties: { id: { type: 'string' } } },
+            },
+          },
+          {
+            source: 'builtin',
+            run: (_ctx, a) => {
+              const items = a?.id ? [background.get(a.id)].filter(Boolean) : background.list();
+              if (!items.length) return a?.id ? `Нет фонового субагента ${a.id}` : 'Фоновых субагентов нет';
+              return items.map((t) => `${t.id} · ${t.type} «${t.description}» · ${t.status}${t.result ? `\n${t.result}` : ''}`).join('\n\n');
+            },
+          },
+        )
+      : null;
   const agentEntry =
     !subagent && agentDefs?.length
       ? toolEntry(agentToolSchema(agentDefs), { source: 'builtin', run: runSubagent })
@@ -542,7 +664,7 @@ async function runAgentInner({
     // Субагент (CC8): только инструменты своего типа, без диалога и вложенных субагентов.
     const allowedForSub = (t) =>
       !NEVER_FOR_SUBAGENT.has(t.name) && (!subagent?.def?.tools || subagent.def.tools.includes(t.name) || (t.source === 'mcp' && subagent.def.tools.includes('mcp')));
-    const extra = !subagent && agentEntry ? [agentEntry] : [];
+    const extra = !subagent && agentEntry ? [agentEntry, ...(agentResultEntry ? [agentResultEntry] : [])] : [];
     const all = [...builtin, ...fromPlugins, ...fromMcp, ...extra].filter((t) => {
       if (subagent && !allowedForSub(t)) return false;
       // «Задача» (CW1.1): инструменты про код и репозиторий не нужны.

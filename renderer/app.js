@@ -3834,6 +3834,15 @@ function handleEvent(event) {
       refreshSessions();
       refreshBranch();
       break;
+    case 'agent:background':
+      // Фоновый субагент (CC8.6): старт и итог; итог уже в истории чата.
+      if (event.done) {
+        toast(`Фоновый субагент «${event.task?.description}»: ${event.task?.status}`, event.task?.status === 'ошибка' ? 'err' : 'ok');
+        if (event.sessionId === state.sessionId && !state.running) loadSession(state.sessionId);
+      } else {
+        toast(`Субагент «${event.task?.description}» работает в фоне (${event.task?.id})`);
+      }
+      break;
     case 'title':
       // Автозаголовок от модели (CC6.8).
       refreshSessions();

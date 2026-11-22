@@ -52,6 +52,7 @@ const BUILTIN = {
   todo_write: 'read',
   // Передача подзадачи; каждое действие субагента проверяется отдельно (ADR 0036).
   agent: 'read',
+  agent_result: 'read',
 };
 
 /** Имя инструмента, который что-то отправляет людям или публикует: send_email, post_message, create_event, reply… */
