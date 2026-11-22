@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { dataDir } from './config.js';
 import { listArtifacts, readArtifact, artifactsRoot } from './artifacts.js';
+import { renameWithRetry } from './file-lock.js';
 import { listSkills } from './skills.js';
 import { pluginDirs } from './plugins.js';
 
@@ -172,7 +173,7 @@ export function saveBoards(projectDir, data) {
   data.updatedAt = new Date().toISOString();
   const temp = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(data, null, 2), 'utf8');
-  fs.renameSync(temp, file);
+  renameWithRetry(temp, file);
   return data;
 }
 
