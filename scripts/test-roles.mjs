@@ -22,6 +22,8 @@ function check(name, cond, extra = '') {
 }
 const here = path.dirname(fileURLToPath(import.meta.url));
 const rolesDir = path.join(here, '..', 'roles');
+// На Windows git отдаёт файлы с CRLF — сверяем содержимое без учёта перевода строк.
+const readText = (file) => fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-roles-'));
 
 console.log('[1] наборы в приложении');
@@ -31,8 +33,8 @@ check('у каждой: название, значок, описание, при
 check('коннекторы — только из встроенного каталога', roles.every((r) => r.connectors.every((c) => ['linear', 'notion', 'github', 'sentry'].includes(c))));
 for (const role of roles) {
   const skillsDir = path.join(role.dir, 'skills');
-  const skills = fs.readdirSync(skillsDir).filter((n) => /^---\nname: [a-z-]+\ndescription: .{20,}\n---/.test(fs.readFileSync(path.join(skillsDir, n, 'SKILL.md'), 'utf8')));
-  const cmds = fs.readdirSync(path.join(role.dir, 'commands')).filter((n) => /^---\ndescription: .+\n/.test(fs.readFileSync(path.join(role.dir, 'commands', n), 'utf8')) && fs.readFileSync(path.join(role.dir, 'commands', n), 'utf8').includes('$ARGUMENTS'));
+  const skills = fs.readdirSync(skillsDir).filter((n) => /^---\nname: [a-z-]+\ndescription: .{20,}\n---/.test(readText(path.join(skillsDir, n, 'SKILL.md'))));
+  const cmds = fs.readdirSync(path.join(role.dir, 'commands')).filter((n) => /^---\ndescription: .+\n/.test(readText(path.join(role.dir, 'commands', n))) && readText(path.join(role.dir, 'commands', n)).includes('$ARGUMENTS'));
   const executable = ['plugins', 'hooks.json', 'mcp.json'].some((p) => fs.existsSync(path.join(role.dir, p)));
   check(`${role.id}: навыки и команды с frontmatter, без исполняемого`, skills.length >= 1 && cmds.length >= 1 && !executable, `${skills} ${cmds}`);
 }
