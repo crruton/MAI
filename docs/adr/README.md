@@ -92,3 +92,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0074](0074-interfeys-tema-statusnaya-stroka-dostupnost.md) | Интерфейс: !команда, статусная строка, тема, доступность | accepted | 2026-11-22 |
 | [0075](0075-izolyaciya-i-fonovye-subagenty.md) | Изоляция субагента в git worktree и фоновые субагенты | accepted | 2026-11-22 |
 | [0076](0076-pr-security-review-worktree.md) | /pr, /security-review и чат в рабочей копии /worktree | accepted | 2026-11-22 |
+| [0077](0077-bezgolovyj-rezhim-cli.md) | Безголовый режим: mai -p и поток событий | accepted | 2026-11-22 |

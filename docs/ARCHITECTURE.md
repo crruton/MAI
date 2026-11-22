@@ -312,6 +312,15 @@ ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый про�
 автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
 сообщения. IPC `hooks:list(projectDir)`.
 
+### Безголовый режим
+
+ADR 0077. `cli.js` — `isCliInvocation`, `parseCliArgs`, `resultObject`,
+`streamLine`. В main константа `CLI` (разбор `process.argv`) переключает
+`whenReady` на `runCli`: окно, планировщик и навыки не запускаются; прогон —
+как у плановой задачи (`runAgent` с `policyFor`, хуками, чекпоинтами, сессией,
+`acquireProject`), `approve` отказывает, `emit` пишет stream-json. Перезапуск
+с `--use-system-ca` в CLI наследует stdio. Лаунчер — `bin/mai.mjs`.
+
 ### Субагенты
 
 ADR 0036. `runAgent({ agentDefs })` добавляет инструмент `agent`; его `run`

@@ -67,6 +67,10 @@ jobs:
       - name: Плановые задачи (дымовая)
         run: xvfb-run -a node scripts/smoke-scheduler.mjs
 
+      # Безголовый запуск mai -p (ADR 0077).
+      - name: CLI (дымовая)
+        run: xvfb-run -a node scripts/smoke-cli.mjs
+
       - name: Ссылки в документации
         run: npm run docs:check
 
@@ -123,3 +127,6 @@ jobs:
 
       - name: Плановые задачи (дымовая)
         run: node scripts/smoke-scheduler.mjs
+
+      - name: CLI (дымовая)
+        run: node scripts/smoke-cli.mjs

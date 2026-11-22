@@ -89,6 +89,7 @@ import { trustState, setTrust, removeTrust, listTrust, inspectProject } from './
 import { guardIpc } from './lib/ipc-permissions.js';
 import { isImageFile } from './lib/vision.js';
 import { acquireProject } from './lib/project-lock.js';
+import { isCliInvocation, parseCliArgs, CLI_HELP, streamLine, resultObject } from './lib/cli.js';
 import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions, promptArgs, resolveResourceMentions } from './lib/commands.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
@@ -108,12 +109,18 @@ if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !proc
       NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --use-system-ca`.trim(),
       MAI_CODE_RELAUNCHED: '1',
     },
-    detached: true,
-    stdio: 'ignore',
+    // CLI (CC12.1): вывод и код выхода дочернего процесса — наши.
+    ...(isCliInvocation(process.argv) ? { stdio: 'inherit' } : { detached: true, stdio: 'ignore' }),
   });
-  child.unref();
-  app.exit(0);
+  if (isCliInvocation(process.argv)) child.on('exit', (code) => app.exit(code ?? 1));
+  else {
+    child.unref();
+    app.exit(0);
+  }
 }
+
+// Безголовый запуск (CC12.1, ADR 0077): `mai -p "задача"` — без окна и планировщика.
+const CLI = isCliInvocation(process.argv) ? parseCliArgs(process.argv.slice(process.defaultApp ? 2 : 1), { cwd: process.env.MAI_CLI_CWD || process.cwd() }) : null;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // OAuth удалённых MCP (ADR 0041): токены — в mcp-oauth.json, зашифрованы как ключи провайдеров.
@@ -414,6 +421,12 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  if (CLI) {
+    // Перезапуск с --use-system-ca ещё идёт — ответит дочерний процесс.
+    if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !process.env.MAI_CODE_RELAUNCHED) return;
+    app.exit(await runCli(CLI));
+    return;
+  }
   try {
     installBundledSkills(path.join(app.getAppPath(), 'skills'));
   } catch (err) {
@@ -1733,6 +1746,135 @@ async function runScheduled(task, { reason = 'schedule' } = {}) {
     scheduledRunning.delete(task.id);
     lock.release();
     send(anyWindow(), { type: 'scheduled:run', taskId: task.id });
+  }
+}
+
+/* ---------- безголовый запуск (CC12.1, CC12.2, ADR 0077) ---------- */
+
+function readStdin() {
+  return new Promise((resolve) => {
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (c) => (data += c));
+    process.stdin.on('end', () => resolve(data));
+    process.stdin.on('error', () => resolve(data));
+  });
+}
+
+/** Прогон агента без окна: те же runAgent, политика, хуки и сессии, что у чата. */
+async function runCli(opts) {
+  const out = (text) => process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
+  const err = (text) => process.stderr.write(`${text}\n`);
+  if (opts.help) {
+    out(CLI_HELP);
+    return 0;
+  }
+  if (opts.error) {
+    err(`mai: ${opts.error}\n\n${CLI_HELP}`);
+    return 2;
+  }
+  const started = Date.now();
+  const prompt = opts.fromStdin ? (await readStdin()).trim() : opts.prompt;
+  if (!prompt) {
+    err('mai: пустая задача');
+    return 2;
+  }
+  const settings = loadSettings();
+  const projectDir = path.resolve(opts.cwd);
+  const finish = (data) => {
+    const result = resultObject({ ...data, durationMs: Date.now() - started, mode: opts.mode });
+    if (opts.output === 'text') {
+      if (result.ok) out(result.result || '');
+      else err(`mai: ${result.error}`);
+    } else out(JSON.stringify(result));
+    return result.ok ? 0 : 1;
+  };
+  if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) return finish({ ok: false, error: `нет папки ${projectDir}` });
+  let resolved;
+  try {
+    resolved = resolveModel(settings, opts.model || settings.activeModel);
+    if (!resolved.provider.apiKey) throw new Error(`не задан ключ провайдера «${resolved.provider.name}»`);
+  } catch (e) {
+    return finish({ ok: false, error: e.message });
+  }
+  const trusted = isTrusted(projectDir);
+  if (!trusted) err(`mai: папка не доверена — плагины, MCP и инструкции проекта не загружаются (доверить — в приложении)`);
+  // «Без вопросов» — только там, где он разрешён и в окне (ADR 0028, 0038).
+  let mode = opts.mode;
+  if (mode === 'bypass' && bypassBlocked(projectDir)) {
+    err('mai: «Без вопросов» недоступен для этой папки — работаю «только по правилам» (dontAsk)');
+    mode = 'dontAsk';
+  }
+  // Спросить некого: «Вручную» и «Правки» без вопросов превращаются в отказ.
+  const lock = acquireProject(projectDir, { label: 'mai CLI' });
+  if (!lock.ok) return finish({ ok: false, error: lock.error });
+  const session = createSession({ title: `CLI: ${prompt.replace(/\s+/g, ' ').slice(0, 50)}`, model: opts.model || settings.activeModel, projectDir, permissionMode: mode, kind: opts.kind });
+  if (opts.allow.length) addSessionRules(session.id, 'allow', opts.allow.filter((r) => parseRule(r)));
+  session.messages.push({ role: 'user', content: prompt, display: prompt });
+  saveSession(session);
+  setSessionRun(session.id, { status: 'running', startedAt: new Date().toISOString(), cli: true });
+  const denied = [];
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  try {
+    const plugins = trusted ? await loadPluginsFor(projectDir) : { tools: [], transforms: [] };
+    if (trusted) await mcp.sync(mcpConfigs(projectDir)).catch(() => {});
+    const history = await runAgent({
+      settings: { ...agentSettings(settings), ...(opts.maxTurns ? { maxIterations: opts.maxTurns } : {}), browser: null },
+      provider: resolved.provider,
+      projectDir,
+      model: resolved.modelId,
+      messages: session.messages,
+      signal: controller.signal,
+      mcp,
+      pluginTools: plugins.tools,
+      transforms: plugins.transforms,
+      reviewer: null,
+      permissionMode: mode,
+      policy: { ...policyFor(session.id, projectDir), getMode: () => mode },
+      audit,
+      trusted,
+      contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+      tracer: agentTracer(),
+      fallback: fallbackFor(settings, opts.model || settings.activeModel),
+      checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
+      hooks: hookRunnerFor(null, { projectDir, sessionId: session.id, trusted }),
+      agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(projectDir), 'agents') }),
+      skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
+      kind: opts.kind,
+      onHistory: (h) => {
+        session.messages = h;
+        saveSession(session);
+      },
+      // stream-json (CC12.2): те же события, что получает окно.
+      emit: (event) => {
+        if (opts.output === 'stream-json') out(streamLine({ ...event, session_id: session.id }));
+      },
+      approve: async (request) => {
+        denied.push({ tool: request?.tool || '', summary: String(request?.summary || '').slice(0, 300) });
+        return { allow: false, message: 'CLI: спросить некого — разрешите правилом --allow или выберите режим' };
+      },
+      ask: null,
+    });
+    session.messages = history;
+    saveSession(session);
+    if (controller.signal.aborted) throw new Error('остановлено');
+    const answer = [...history].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+    const usage = history.filter((m) => m.role === 'assistant' && m.usage).reduce((sum, m) => ({ input: (sum.input || 0) + (m.usage.input || 0), output: (sum.output || 0) + (m.usage.output || 0) }), {});
+    setSessionRun(session.id, { status: 'done', endedAt: new Date().toISOString(), cli: true });
+    return finish({ ok: true, answer, sessionId: session.id, model: `${resolved.providerId}/${resolved.modelId}`, usage: usage.input || usage.output ? usage : null, denied });
+  } catch (e) {
+    saveSession(session);
+    setSessionRun(session.id, { status: controller.signal.aborted ? 'stopped' : 'error', endedAt: new Date().toISOString(), cli: true });
+    return finish({ ok: false, error: e?.message || String(e), sessionId: session.id, denied });
+  } finally {
+    lock.release();
+    process.removeListener('SIGINT', stop);
+    process.removeListener('SIGTERM', stop);
+    disposePluginHosts();
+    disposeBackground();
   }
 }
 
