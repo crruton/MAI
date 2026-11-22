@@ -2307,16 +2307,55 @@ async function openConnectors({ only = [] } = {}) {
       }),
     );
   };
-  openModal({
+  // Локальные коннекторы (CW3.3, ADR 0072): сервисы на вашей машине или в сети команды.
+  const localGrid = el('div', { class: 'connectors local-connectors' }, [el('p', { class: 'hint-text', text: 'Проверяю локальные сервисы…' })]);
+  const LOCAL_STATUS = { ready: ['работает', 'ok'], off: ['выключен', ''], missing: ['не настроен', ''], error: ['не отвечает', 'warn'] };
+  let view = null;
+  const runLocal = async (action, card) => {
+    if (action.kind === 'toggle') {
+      const r = await api.mcp.toggleLocalConnector(card.id, !action.enabled);
+      if (r?.ok === false) toast(r.error, 'err');
+      state.settings = await api.settings.get();
+      return renderLocal();
+    }
+    const [where, name] = String(action.target).split(':');
+    view?.close();
+    if (where === 'storage') api.boards.open('storage', `tab:${name}`);
+    else document.querySelector(`[data-panel="${name}"]`)?.click();
+  };
+  const renderLocal = async () => {
+    const cards = (await api.mcp.localConnectors?.().catch(() => [])) || [];
+    localGrid.replaceChildren(
+      ...cards.map((c) => {
+        const [label, tone] = LOCAL_STATUS[c.status] || [c.status, ''];
+        return el('div', { class: `connector local${c.status === 'ready' ? ' installed' : ''}`, 'data-id': c.id }, [
+          el('div', { class: 'connector-head' }, [el('b', { text: c.name }), el('span', { class: `badge ${tone}`, text: label })]),
+          el('div', { class: 'hint-text', text: c.description }),
+          c.detail ? el('div', { class: 'hint-text connector-detail', text: c.detail }) : null,
+          el('div', { class: 'connector-actions' }, [
+            el('button', { class: `btn small local-action ${c.action.kind === 'toggle' && !c.action.enabled ? 'primary' : 'ghost'}`, type: 'button', text: c.action.label, onclick: () => runLocal(c.action, c) }),
+            c.extra ? el('button', { class: 'btn ghost small local-extra', type: 'button', text: c.extra.label, onclick: () => runLocal(c.extra, c) }) : null,
+          ]),
+        ]);
+      }),
+    );
+  };
+  view = openModal({
     title: 'Коннекторы',
+    wide: true,
     body: [
       grid,
+      only.length ? null : el('div', { class: 'docs-group-title', text: 'Локальные' }),
+      only.length ? null : localGrid,
       el('p', {
         class: 'hint-text',
         text: 'Коннектор — удалённый MCP-сервер сервиса. Отправка писем, сообщений и публикаций через него всегда спрашивается, даже в «Без вопросов». Свои коннекторы организация задаёт в managed-settings.json (поле connectors). Подключение — роль admin.',
       }),
     ],
   });
+  // Локальные — не мешая основному списку: проверки сервисов идут несколько секунд.
+  if (!only.length) renderLocal();
+  else localGrid.replaceChildren();
   await render();
 }
 

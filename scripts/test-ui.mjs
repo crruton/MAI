@@ -307,6 +307,23 @@ ipcMain.handle('roles:install', (_e, id) => {
   roleCalls.push(id);
   return { ok: true, role: { id }, package: { name: `role-${id}`, parts: { skills: 1, commands: 1 } } };
 });
+const localCalls = [];
+const boardOpens = [];
+ipcMain.handle('boards:open', (_e, payload) => {
+  boardOpens.push(payload);
+  return 1;
+});
+let rwOn = false;
+ipcMain.handle('connectors:local', () => [
+  { id: 'repowise', name: 'Repowise', description: 'Индекс кода', status: rwOn ? 'ready' : 'off', detail: '', action: { kind: 'toggle', enabled: rwOn, label: rwOn ? 'Выключить' : 'Включить' }, category: 'Локальные', local: true },
+  { id: 'multica', name: 'Multica', description: 'Задачи', status: 'missing', detail: 'CLI не найден', action: { kind: 'open', target: 'panel:multica', label: 'Установить' }, category: 'Локальные', local: true },
+  { id: 'postgres', name: 'Postgres', description: 'Артефакты', status: 'ready', detail: 'PostgreSQL 16', action: { kind: 'open', target: 'storage:infra', label: 'Настроить' }, category: 'Локальные', local: true },
+]);
+ipcMain.handle('connectors:localToggle', (_e, payload) => {
+  localCalls.push(`${payload.id}:${payload.enabled}`);
+  rwOn = payload.enabled;
+  return { ok: true };
+});
 ipcMain.handle('connectors:add', (_e, payload) => {
   connCalls.push({ type: 'add', ...payload });
   connInstalled.add(payload.id);
@@ -1654,7 +1671,7 @@ app.whenReady().then(async () => {
     console.log('\n[37] Каталог коннекторов (ADR 0052)');
     await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/connectors'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
     await new Promise((r) => setTimeout(r, 500));
-    const cards = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.connector')].map((c) => ({ id: c.dataset.id, text: c.textContent, token: Boolean(c.querySelector('.connector-token')), add: Boolean(c.querySelector('.connector-add')), remove: Boolean(c.querySelector('.connector-remove')) }))`);
+    const cards = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.connector:not(.local)')].map((c) => ({ id: c.dataset.id, text: c.textContent, token: Boolean(c.querySelector('.connector-token')), add: Boolean(c.querySelector('.connector-add')), remove: Boolean(c.querySelector('.connector-remove')) }))`);
     const connCard = (id) => cards.find((c) => c.id === id) || {};
     check('карточки каталога', cards.length === 4 && /Вход через браузер/.test(connCard('linear').text) && connCard('linear').add, JSON.stringify(cards));
     check('токен — поле только у токенных', connCard('github').token && !connCard('linear').token);
@@ -1668,6 +1685,16 @@ app.whenReady().then(async () => {
     check('OAuth-коннектор подключается без токена', connCalls.some((c) => c.type === 'add' && c.id === 'linear' && !c.token));
     const linearAfter = await win.webContents.executeJavaScript(`document.querySelector('.connector[data-id=linear]').textContent`);
     check('после подключения — «подключён»', /подключён/.test(linearAfter), linearAfter);
+    // Локальные коннекторы (CW3.3, ADR 0072).
+    const locals = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.connector.local')].map((c) => c.dataset.id + ':' + c.querySelector('.badge').textContent + ':' + c.querySelector('.local-action').textContent).join('|')`);
+    check('локальные — карточками в том же окне', locals === 'repowise:выключен:Включить|multica:не настроен:Установить|postgres:работает:Настроить', locals);
+    await win.webContents.executeJavaScript(`document.querySelector('.connector.local[data-id=repowise] .local-action').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const rwAfter = await win.webContents.executeJavaScript(`document.querySelector('.connector.local[data-id=repowise]').textContent`);
+    check('«Включить» Repowise — сразу здесь', localCalls.join() === 'repowise:true' && /работает/.test(rwAfter) && /Выключить/.test(rwAfter), `${localCalls} ${rwAfter}`);
+    await win.webContents.executeJavaScript(`document.querySelector('.connector.local[data-id=postgres] .local-action').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('«Настроить» хранилище — окно «Хранилища» на вкладке infra', boardOpens.some((b) => b.board === 'storage' && b.focus === 'tab:infra'), JSON.stringify(boardOpens));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
 
     console.log('\n[38] Глубина рассуждений в поле ввода (ADR 0058)');

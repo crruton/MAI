@@ -34,6 +34,7 @@ import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectS
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { listRoles, installRole } from './lib/roles.js';
 import { wrapData } from './lib/injection.js';
+import { localConnectors } from './lib/local-connectors.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -2332,6 +2333,23 @@ ipcMain.handle('connectors:list', () => {
     const st = name ? status.find((s) => s.name === name) : null;
     return { ...c, installed: Boolean(name), server: name || null, status: st?.status || (name ? 'не подключён' : ''), loggedIn: Boolean(st?.loggedIn) };
   });
+});
+
+/** Локальные коннекторы (CW3.3, ADR 0072): проверки параллельно, у каждой свой предел. */
+const settle = (fn, ms) => Promise.race([Promise.resolve().then(fn).catch((err) => ({ error: err?.message || String(err) })), new Promise((r) => setTimeout(() => r(null), ms))]);
+ipcMain.handle('connectors:local', async () => {
+  const settings = loadSettings();
+  const [rw, mc, inf] = await Promise.all([settle(() => repowise.detect(), 8000), settle(() => multica.status(), 8000), settle(() => infra.probe(), 8000)]);
+  return localConnectors({ repowise: rw, repowiseEnabled: Boolean(settings.repowise?.enabled), multica: mc, infra: inf, config: settings.infra || {} });
+});
+
+/** Включить/выключить локальный коннектор здесь же. Только admin. */
+ipcMain.handle('connectors:localToggle', (_e, payload = {}) => {
+  if (payload.id !== 'repowise') return { ok: false, error: 'Этот сервис включается в своей настройке' };
+  const settings = loadSettings();
+  saveSettings({ repowise: { ...(settings.repowise || {}), enabled: payload.enabled === true } });
+  audit({ at: new Date().toISOString(), tool: 'connectors:localToggle', source: 'user', cls: 'external', subject: `repowise → ${payload.enabled === true ? 'on' : 'off'}`, decision: 'allow' });
+  return { ok: true };
 });
 
 /** Подключить из каталога: запись в mcpServers, для OAuth — сразу вход в браузере. Только admin. */

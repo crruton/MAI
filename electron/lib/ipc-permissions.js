@@ -185,6 +185,9 @@ export const IPC_PERMISSIONS = {
   'mcp:login': ADMIN,
   'connectors:list': ANY,
   'mcp:resources': ANY,
+  // Локальные коннекторы (CW3.3).
+  'connectors:local': ANY,
+  'connectors:localToggle': ADMIN,
   'connectors:add': ADMIN,
   'connectors:remove': ADMIN,
   'mcp:logout': ADMIN,

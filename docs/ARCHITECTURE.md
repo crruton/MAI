@@ -105,7 +105,10 @@ main кладёт резолвер в `state.approvals` и отправляет 
 обратно, ищется сервер и оригинальное имя инструмента.
 
 Ресурсы и промпты (ADR 0071): `listResources`/`readResource`, `listPrompts`/
-`getPrompt`. `chat:start` → `resolveResourceMentions` (commands.js) → текст
+`getPrompt`. Локальные коннекторы (ADR 0072): `local-connectors.js` →
+`connectors:local` (проверки repowise/multica/infra с пределом 8 с),
+`connectors:localToggle`; окно «Хранилища» принимает `focus: 'tab:…'`.
+`chat:start` → `resolveResourceMentions` (commands.js) → текст
 ресурса в рамке `wrapData`; `commands:list` добавляет промпты (`source: 'mcp'`),
 `commands:expand` → `promptArgs` → `getPrompt`. IPC `mcp:resources` — для
 подсказки `@`. Транспорт — `declaredTransport(config)` (`transport` или `type`),

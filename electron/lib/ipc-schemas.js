@@ -52,6 +52,7 @@ export const IPC_SCHEMAS = {
   'packages:install': [{ from: S, replace: B_ }],
   'packages:uninstall': [S],
   'roles:install': [S],
+  'connectors:localToggle': [{ id: S, enabled: B }],
   'packages:toggle': [{ name: S, enabled: B }],
   'marketplace:add': [{ url: S, name: S_ }],
   'marketplace:install': [{ marketplace: S, name: S, replace: B_ }],
