@@ -28,6 +28,7 @@ import { modelCapabilities } from './lib/capabilities.js';
 import { createTracer, NO_TRACER } from './lib/tracer.js';
 import { createProjectStore } from './lib/projects.js';
 import { renderPdf, renderPng } from './lib/pdf-render.js';
+import { createAgentBrowser } from './lib/browser-agent.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
@@ -217,6 +218,14 @@ function dockerReady() {
   return dockerCache.available;
 }
 
+// Браузер агента (CW4.1, ADR 0069): одно окно на приложение, создаётся при первом открытии страницы.
+let agentBrowser = null;
+function browserFor(settings) {
+  if (settings.browserEnabled === false) return null;
+  if (!agentBrowser) agentBrowser = createAgentBrowser({ BrowserWindow });
+  return agentBrowser;
+}
+
 function agentSettings(settings) {
   const shellSandbox = normalizeShellSandbox(settings.shellSandbox);
   return {
@@ -230,6 +239,7 @@ function agentSettings(settings) {
     renderPdf: (html) => renderPdf(BrowserWindow, html),
     renderPng: (html, options) => renderPng(BrowserWindow, html, options),
     previewDir: path.join(app.getPath('temp'), 'mai-previews'),
+    browser: browserFor(settings),
     // Длинный вывод инструментов — в файл (CC1.13).
     outputDir: path.join(dataDir(), 'tool-output'),
   };
@@ -375,6 +385,8 @@ function createWindow() {
   });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   mainWindow.on('closed', () => {
+    // Окно браузера агента не держит приложение открытым.
+    agentBrowser?.close();
     runs.delete(mainWindow?.id);
     mainWindow = null;
   });
@@ -502,6 +514,8 @@ ipcMain.handle('settings:save', async (_e, patch) => {
   }
   const current = loadSettings();
   if ('allowOutsideProject' in (patch || {}) && Boolean(patch.allowOutsideProject) !== Boolean(current.allowOutsideProject)) requireAdmin();
+  // Сайты без вопросов для браузера агента (CW4.2) расширяют права — только admin.
+  if (patch?.browserSites && JSON.stringify(patch.browserSites.allow || []) !== JSON.stringify(current.browserSites?.allow || [])) requireAdmin();
   if (patch?.shellSandbox && JSON.stringify(normalizeShellSandbox({ ...current.shellSandbox, ...patch.shellSandbox })) !== JSON.stringify(normalizeShellSandbox(current.shellSandbox))) {
     requireAdmin();
   }

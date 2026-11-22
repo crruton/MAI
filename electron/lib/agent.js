@@ -15,6 +15,7 @@ import { skillTools } from './tools/skills.js';
 import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
 import { documentTools } from './tools/documents.js';
+import { browserTools } from './tools/browser.js';
 import { webTools } from './tools/web.js';
 import { interactiveTools } from './tools/interactive.js';
 import { todoTools } from './tools/todo.js';
@@ -23,7 +24,7 @@ import { agentToolSchema, isReadOnlyDef, NEVER_FOR_SUBAGENT } from './agent-defs
 import { listSkills, readAgents, readMemory } from './skills.js';
 import { reviewAnswer, reviewContext, parseVerdict, VERIFY_PROMPT } from './reviewer.js';
 import { modePrompt } from './permissions.js';
-import { effectiveMode, mergeRules, classifyTool } from './policy.js';
+import { effectiveMode, mergeRules, classifyTool, browserSiteRules } from './policy.js';
 import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
 import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DELAYS } from './retry.js';
 import { modelCapabilities, requestOptions } from './capabilities.js';
@@ -60,6 +61,7 @@ const TASK_PROMPT = `Ты — MAI, помощник для рабочих зад
 - Сначала пойми задачу. Если не хватает важного (для кого документ, формат, срок, какие файлы брать), спроси через ask_user с вариантами.
 - Перед работой посмотри файлы в рабочих папках инструментами list_files и read_file. Не выдумывай содержимое файлов.
 - Документы Word, PDF, презентации PowerPoint и таблицы Excel создавай инструментом create_document (.docx и .pdf из Markdown, .pptx из слайдов, .xlsx из листов с формулами), читай — read_document.
+- Если нужно действовать на сайте (поиск, фильтры, формы, личный кабинет), используй браузер агента: browser_open, затем browser_click и browser_type по номерам [N]. Пароли, коды и оплату делает только пользователь — попроси его через ask_user.
 - Перед сдачей документа посмотри на него инструментом preview_document (если модель видит картинки): вёрстка, обрезанные таблицы, пустые слайды, опечатки в заголовках. Нашёл ошибку — исправь и посмотри снова.
 - Результат сохраняй файлом в рабочей папке и назови путь. Не перезаписывай файлы пользователя: создавай новый файл рядом (например, «отчёт (итог).md»), если тебя явно не попросили изменить исходный.
 - Удаляй только инструментом delete_file и только когда об этом попросили.
@@ -439,12 +441,12 @@ async function runAgentInner({
     role,
     getMode: currentMode,
     // Правила навыков (allowed-tools, CC10.4) — только на этот прогон, поверх обычных.
-    getRules: () => mergeRules(policy?.getRules ? policy.getRules() : mergeRules(settings.permissions), { allow: skillGrants }),
+    getRules: () => mergeRules(policy?.getRules ? policy.getRules() : mergeRules(settings.permissions), { allow: skillGrants }, browserSiteRules(settings.browserSites)),
     getTaint: () => taint,
   };
 
-  const builtin = [...fsTools, ...documentTools, ...shellTools, ...backgroundTools, ...(settings.webTools === false ? [] : webTools), ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
-    toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview }),
+  const builtin = [...fsTools, ...documentTools, ...shellTools, ...backgroundTools, ...(settings.webTools === false ? [] : webTools), ...(settings.browser ? browserTools : []), ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
+    toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview, assess: t.assess }),
   );
   const builtinNames = new Set(builtin.map((t) => t.name));
   const fromPlugins = pluginTools
@@ -955,6 +957,7 @@ async function runAgentInner({
       // PDF из Markdown через Chromium (CW2.4) — функция из main.
       renderPdf: settings.renderPdf,
       renderPng: settings.renderPng,
+      browser: settings.browser || null,
       previewDir: settings.previewDir,
       // Защищённые ветки (CC11.6): по умолчанию main и master.
       protectedBranches: Array.isArray(settings.protectedBranches) ? settings.protectedBranches : undefined,

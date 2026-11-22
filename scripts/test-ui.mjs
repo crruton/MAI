@@ -1435,6 +1435,10 @@ app.whenReady().then(async () => {
       document.querySelector('.shell-sandbox-image').value = 'python:3.12-slim';
       document.querySelector('.shell-sandbox-network').value = 'bridge';
       document.querySelector('.shell-sandbox-host').value = 'git *\\n\\n  gh *  ';
+      // Браузер агента (ADR 0069): включён по умолчанию, сайты — списком через запятую.
+      before.browser = document.querySelector('.browser-enabled')?.checked;
+      document.querySelector('.browser-allow').value = 'wikipedia.org,  docs.python.org ';
+      document.querySelector('.browser-block').value = 'mybank.ru';
       [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Сохранить').click();
       return { found: true, before };
     })()`);
@@ -1442,6 +1446,8 @@ app.whenReady().then(async () => {
     check('по умолчанию выключено, сеть выключена; есть «только в Задаче»', box.before?.docker === false && box.before?.network === 'none' && box.before?.options === 'off,docker,tasks', JSON.stringify(box));
     await new Promise((r) => setTimeout(r, 400));
     const sb = savedSettings.at(-1)?.shellSandbox;
+    const bs = savedSettings.at(-1);
+    check('браузер агента: включён, сайты без вопросов и под запретом сохраняются', box.before?.browser === true && bs?.browserEnabled === true && bs?.browserSites?.allow?.join('|') === 'wikipedia.org|docs.python.org' && bs?.browserSites?.block?.join('|') === 'mybank.ru', JSON.stringify({ b: box.before?.browser, s: bs?.browserSites }));
     check('сохраняется mode/image/network/hostCommands', sb?.mode === 'docker' && sb?.image === 'python:3.12-slim' && sb?.network === 'bridge' && sb?.hostCommands?.join('|') === 'git *|gh *', JSON.stringify(sb));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
 

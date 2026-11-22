@@ -377,6 +377,15 @@ ADR 0056. `electron/lib/web.js`: `isPrivateAddress`, `fetchPage` (проверк
 `tools/web.js`, конфигурация — `ctx.webConfig` из `settings.webSearch`.
 Предмет `web_fetch` в `subjectOf` — домен.
 
+Браузер агента (ADR 0069): `browser-agent.js` — `createAgentBrowser` (окно,
+сессия `persist:mai-browser`, снимок с `data-mai-ref`, `isSensitiveField`,
+`isPaymentAction`); `tools/browser.js` — `browser_*`, `assess` для оплаты;
+main создаёт одно окно (`browserFor`) и отдаёт его как `settings.browser` →
+`ctx.browser`. Предмет правил — домен (`subjectOf(..., browserHost)`),
+`browserSiteRules(settings.browserSites)` добавляются к правилам прогона.
+`runToolCall` после политики зовёт `entry.assess`: оплата → вопрос в любом
+режиме (`browser-payment`).
+
 ### Фоновые команды
 
 ADR 0055. `tools/shell.js`: `spawnCommand` (хост или `docker run`, `kill`),

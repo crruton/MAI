@@ -16,6 +16,9 @@ const DEFAULTS = {
   // deny сильнее ask, ask сильнее allow. Пример: "run_shell(npm test*)".
   permissions: { allow: [], ask: [], deny: [] },
   allowOutsideProject: false,
+  // Браузер агента (CW4.1, CW4.2, ADR 0069).
+  browserEnabled: true,
+  browserSites: { allow: [], block: [] },
   guardrails: DEFAULT_GUARDRAILS,
   telemetry: {
     enabled: false,

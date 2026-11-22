@@ -3664,6 +3664,12 @@ async function openSettings() {
   const fallbackModel = el('input', { class: 'fallback-model', placeholder: 'провайдер/модель, например openai/gpt-5-mini', value: settings.fallbackModel || '' });
   const outside = el('input', { type: 'checkbox' });
   outside.checked = Boolean(settings.allowOutsideProject);
+  // Браузер агента (CW4.1, CW4.2, ADR 0069): включение и сайты без вопросов / под запретом.
+  const browserEnabled = el('input', { type: 'checkbox', class: 'browser-enabled' });
+  browserEnabled.checked = settings.browserEnabled !== false;
+  const browserAllow = el('input', { class: 'browser-allow', placeholder: 'например: wikipedia.org, docs.google.com', value: (settings.browserSites?.allow || []).join(', ') });
+  const browserBlock = el('input', { class: 'browser-block', placeholder: 'например: mybank.ru', value: (settings.browserSites?.block || []).join(', ') });
+  const siteList = (input) => input.value.split(',').map((d) => d.trim()).filter(Boolean);
   const reviewerEnabled = el('input', { type: 'checkbox' });
   reviewerEnabled.checked = Boolean(settings.reviewer?.enabled);
   const reviewerModel = el('input', {
@@ -3806,6 +3812,14 @@ async function openSettings() {
         el('label', { class: 'hint-text' }, [outside, ' разрешить абсолютные пути вне папки проекта']),
       ]),
       el('label', { class: 'field' }, [
+        el('span', { text: 'Браузер агента' }),
+        el('label', { class: 'hint-text' }, [browserEnabled, ' агент может открывать сайты в своём окне, нажимать и заполнять формы (пароли и оплату — только вы)']),
+      ]),
+      el('div', { class: 'row' }, [
+        field('Сайты без вопросов (и поддомены)', browserAllow),
+        field('Сайты под запретом', browserBlock),
+      ]),
+      el('label', { class: 'field' }, [
         el('span', { text: 'Ревизор: вторая модель проверяет ответ' }),
         el('label', { class: 'hint-text' }, [reviewerEnabled, ' включить approve/revise']),
         el('label', { class: 'hint-text' }, [reviewerVerify, ' если агент менял файлы — ревизор сам их читает (только чтение)']),
@@ -3903,6 +3917,8 @@ async function openSettings() {
             protectedBranches: protectedBranches.value.split(',').map((b) => b.trim()).filter(Boolean),
             gitAttribution: gitAttribution.value.trim(),
             allowOutsideProject: outside.checked,
+            browserEnabled: browserEnabled.checked,
+            browserSites: { allow: siteList(browserAllow), block: siteList(browserBlock) },
             reviewer: {
               enabled: reviewerEnabled.checked,
               model: reviewerModel.value.trim(),

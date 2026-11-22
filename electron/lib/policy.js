@@ -31,6 +31,11 @@ const BUILTIN = {
   create_document: 'write',
   read_document: 'read',
   preview_document: 'read',
+  browser_open: 'network',
+  browser_read: 'read',
+  browser_screenshot: 'read',
+  browser_click: 'network',
+  browser_type: 'network',
   // Удаление — отдельный класс (CW1.4, ADR 0044): спрашивается во всех режимах, кроме «Без вопросов».
   delete_file: 'delete',
   run_shell: 'exec',
@@ -350,7 +355,7 @@ export function relativeSubject(projectDir, target) {
   return (rel || '.').split(path.sep).join('/');
 }
 
-export function subjectOf({ tool, cls, args = {}, projectDir, command, roots = null }) {
+export function subjectOf({ tool, cls, args = {}, projectDir, command, roots = null, browserHost = '' }) {
   if (cls === 'exec') return String(command ?? args.command ?? '');
   if (cls === 'write' || cls === 'read' || cls === 'delete') {
     if (!args.path) return null;
@@ -374,6 +379,16 @@ export function subjectOf({ tool, cls, args = {}, projectDir, command, roots = n
     }
   }
   if (tool === 'web_search') return String(args.query || '');
+  // Браузер агента (CW4.2): предмет — домен; для открытия — из адреса, иначе — текущей страницы.
+  if (tool === 'browser_open') {
+    try {
+      const raw = String(args.url || '');
+      return new URL(/^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`).hostname;
+    } catch {
+      return String(args.url || '');
+    }
+  }
+  if (String(tool).startsWith('browser_')) return browserHost || '';
   if (tool) return null;
   return null;
 }
@@ -390,6 +405,12 @@ export function summarize({ tool, cls, args = {}, subject }) {
       return `Открыть ${String(args.url || '')}`;
     case 'web_search':
       return `Поиск в интернете: ${String(args.query || '')}`;
+    case 'browser_open':
+      return `Браузер: открыть ${String(args.url || '')}`;
+    case 'browser_click':
+      return `Браузер: нажать [${args.ref}] на ${subject || 'странице'}`;
+    case 'browser_type':
+      return `Браузер: ввести «${String(args.text ?? '').slice(0, 120)}» в [${args.ref}] на ${subject || 'странице'}${args.submit ? ' и отправить' : ''}`;
     case 'run_shell':
       return `${String(subject || '')}${args.background ? '   (в фоне)' : ''}`;
     case 'memory_append':
@@ -427,8 +448,23 @@ export function suggestRules({ tool, cls, subject }) {
   }
   if (tool === 'web_fetch' && subject) return [`web_fetch(${subject})`];
   if (tool === 'web_search') return ['web_search'];
+  // Сайт для браузера агента (CW4.2): одно правило на все действия на домене.
+  if (String(tool).startsWith('browser_') && subject) return [`browser_*(${subject})`];
   // Отправку не предлагаем запомнить (CW3.2): каждое письмо — своё решение.
   if (cls === 'send') return [];
   if (cls === 'external' || cls === 'network') return [tool];
   return [];
+}
+
+/**
+ * Разрешённые и запрещённые сайты браузера агента (CW4.2, ADR 0069) → правила.
+ * `example.com` покрывает и поддомены.
+ */
+export function browserSiteRules(sites = {}) {
+  const clean = (list) =>
+    (Array.isArray(list) ? list : [])
+      .map((d) => String(d).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^\*\./, ''))
+      .filter((d) => /^[a-z0-9.-]+$/.test(d));
+  const rules = (list) => clean(list).flatMap((d) => [`browser_*(${d})`, `browser_*(*.${d})`]);
+  return { allow: rules(sites.allow), ask: [], deny: rules(sites.block) };
 }
