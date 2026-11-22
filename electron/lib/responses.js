@@ -130,6 +130,7 @@ export async function streamResponseTurn({
   effort = '',
   signal,
   emit = () => {},
+  touch = () => {},
 }) {
   const body = {
     model,
@@ -151,6 +152,8 @@ export async function streamResponseTurn({
 
   for await (const event of stream) {
     if (signal?.aborted) break;
+    // Каждое событие — признак жизни: сторож простоя в agent.js сбрасывается.
+    touch();
     const type = event?.type || '';
     const item = event.item || event.item || null;
 

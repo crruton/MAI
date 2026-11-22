@@ -1619,11 +1619,26 @@ function denyApprovals(state) {
   state.questions.clear();
 }
 
+/** Сколько ждём штатного завершения прогона после «Стоп», прежде чем освободить состояние силой. */
+const STOP_GRACE_MS = 5000;
+
 ipcMain.handle('chat:stop', (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
   const state = runState(window);
   denyApprovals(state);
-  state.controller?.abort();
+  const controller = state.controller;
+  controller?.abort();
+  // Если прогон не завершился за STOP_GRACE_MS (зависший инструмент, MCP,
+  // сеть), освобождаем состояние принудительно: иначе следующий запрос
+  // навсегда получает «Уже выполняется другой запрос».
+  if (controller) {
+    setTimeout(() => {
+      if (state.controller !== controller) return;
+      state.controller = null;
+      state.approvals.clear();
+      send(window, { type: 'error', message: 'Остановлено пользователем', aborted: true });
+    }, STOP_GRACE_MS);
+  }
   return true;
 });
 

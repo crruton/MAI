@@ -1006,6 +1006,70 @@ console.log('\n[24] Возможности модели и глубина рас
   check('модель без инструментов — запрос без tools и уведомление', bodies3[0].tools === undefined && events.some((e) => /не вызывает инструменты/.test(e.text || '')));
 }
 
+
+console.log('\n[25] Сторож простоя: молчащий шлюз прерывает ход (ADR 0061)');
+{
+  // Стрим, который отдаёт один чанк и замолкает: так ведёт себя зависший шлюз.
+  const silent = () => ({
+    chat: {
+      completions: {
+        create: async () => ({
+          async *[Symbol.asyncIterator]() {
+            yield { choices: [{ delta: { content: "начало" } }] };
+            await new Promise((r) => setTimeout(r, 5000));
+          },
+        }),
+      },
+    },
+  });
+  const events = [];
+  const started = Date.now();
+  let error = null;
+  try {
+    await runAgent(
+      base({
+        settings: { maxIterations: 2, permissions: {}, idleTimeoutMs: 300 },
+        messages: [{ role: "user", content: "x" }],
+        mcp: fakeMcp(),
+        emit: (e) => events.push(e),
+        clientFactory: silent,
+        policy: { getMode: () => "manual", getRules: () => ({}) },
+      }),
+    );
+  } catch (err) {
+    error = err;
+  }
+  const elapsed = Date.now() - started;
+  check("ход прерван по тишине, а не ждёт вечно", elapsed < 4000, `прошло ${elapsed} мс`);
+  check("ошибка называет простой", /не отвечала/.test(String(error?.message || "")), String(error?.message || "нет ошибки"));
+  check("пользователь предупреждён уведомлением", events.some((e) => /молчит дольше/.test(e.text || "")));
+
+  // Живой стрим с паузами короче таймаута не должен рваться.
+  const alive = () => ({
+    chat: {
+      completions: {
+        create: async () => ({
+          async *[Symbol.asyncIterator]() {
+            for (const part of ["а", "б", "в"]) {
+              await new Promise((r) => setTimeout(r, 100));
+              yield { choices: [{ delta: { content: part } }] };
+            }
+          },
+        }),
+      },
+    },
+  });
+  const history = await runAgent(
+    base({
+      settings: { maxIterations: 2, permissions: {}, idleTimeoutMs: 300 },
+      messages: [{ role: "user", content: "x" }],
+      mcp: fakeMcp(),
+      clientFactory: alive,
+      policy: { getMode: () => "manual", getRules: () => ({}) },
+    }),
+  );
+  check("живой ответ не прерывается", history.at(-1)?.content === "абв", String(history.at(-1)?.content));
+}
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();
