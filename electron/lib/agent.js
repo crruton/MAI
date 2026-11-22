@@ -50,7 +50,7 @@ const BASE_PROMPT = `Ты — MAI Code, агент для программиро
 - Не коммить в git и не удалять данные без явной просьбы.`;
 
 /** Инструменты ревизора-субагента (F5): только чтение. */
-const REVIEWER_TOOLS = ['read_file', 'read_document', 'list_files', 'glob', 'grep'];
+const REVIEWER_TOOLS = ['read_file', 'read_document', 'preview_document', 'list_files', 'glob', 'grep'];
 
 /** Режим «Задача» (CW1.1, ADR 0046): работа с документами и данными, не с кодом. */
 const TASK_PROMPT = `Ты — MAI, помощник для рабочих задач на компьютере пользователя: документы, таблицы, заметки, отчёты, письма, разбор файлов.
@@ -59,7 +59,8 @@ const TASK_PROMPT = `Ты — MAI, помощник для рабочих зад
 - Отвечай по-русски, ясно и без жаргона программистов: пользователь может не быть разработчиком.
 - Сначала пойми задачу. Если не хватает важного (для кого документ, формат, срок, какие файлы брать), спроси через ask_user с вариантами.
 - Перед работой посмотри файлы в рабочих папках инструментами list_files и read_file. Не выдумывай содержимое файлов.
-- Документы Word, презентации PowerPoint и таблицы Excel создавай инструментом create_document (.docx из Markdown, .pptx из слайдов, .xlsx из листов с формулами), читай — read_document.
+- Документы Word, PDF, презентации PowerPoint и таблицы Excel создавай инструментом create_document (.docx и .pdf из Markdown, .pptx из слайдов, .xlsx из листов с формулами), читай — read_document.
+- Перед сдачей документа посмотри на него инструментом preview_document (если модель видит картинки): вёрстка, обрезанные таблицы, пустые слайды, опечатки в заголовках. Нашёл ошибку — исправь и посмотри снова.
 - Результат сохраняй файлом в рабочей папке и назови путь. Не перезаписывай файлы пользователя: создавай новый файл рядом (например, «отчёт (итог).md»), если тебя явно не попросили изменить исходный.
 - Удаляй только инструментом delete_file и только когда об этом попросили.
 - Для задачи из трёх шагов и больше веди список задач инструментом todo_write.
@@ -953,6 +954,8 @@ async function runAgentInner({
       trashDir: settings.trashDir,
       // PDF из Markdown через Chromium (CW2.4) — функция из main.
       renderPdf: settings.renderPdf,
+      renderPng: settings.renderPng,
+      previewDir: settings.previewDir,
       // Защищённые ветки (CC11.6): по умолчанию main и master.
       protectedBranches: Array.isArray(settings.protectedBranches) ? settings.protectedBranches : undefined,
       // Поиск: провайдер и ключ из настроек (ADR 0056).
@@ -1056,8 +1059,8 @@ async function runAgentInner({
       if (outcome.ok !== false && typeof args?.path === 'string' && ['write', 'delete'].includes(classifyTool(call.function.name))) touched.add(args.path);
       emit({ type: 'tool_result', id: call.id, name: call.function.name, content: outcome.content, ok: outcome.ok, diff: outcome.diff || null });
       // read_file картинки (CC1.3): путь — в результат, сама картинка уйдёт в запрос.
-      let images = null;
-      if (call.function.name === 'read_file' && outcome.ok !== false && isImageFile(args?.path) && /^Изображение /.test(String(outcome.content))) {
+      let images = Array.isArray(outcome.images) && outcome.images.length ? outcome.images : null;
+      if (!images && call.function.name === 'read_file' && outcome.ok !== false && isImageFile(args?.path) && /^Изображение /.test(String(outcome.content))) {
         try {
           images = [resolveIn(toolCtx.roots, args.path, { allowOutside: Boolean(settings.allowOutsideProject) })];
         } catch {

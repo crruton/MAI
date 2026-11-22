@@ -397,6 +397,12 @@ PDF (ADR 0067): `export/html.js` — `markdownToHtml` (A4, CSP); `pdf-render.js`
 `renderPdf(BrowserWindow, html)`: скрытое окно без JS и сети, `printToPDF`.
 В инструмент попадает как `ctx.renderPdf` из `agentSettings` main.
 
+Превью (ADR 0068): `preview_document` → `documentHtml` (docx/pptx/xlsx/csv/md →
+HTML, слайды — `slidesToHtml`) → `ctx.renderPng` (`renderPng` в `pdf-render.js`:
+окно вне экрана, страницы A4 в PNG); PDF — `pdftoppm`. Инструмент возвращает
+`{ content, images }`, `runToolCall` отдаёт `images`, цикл агента прикладывает
+их к сообщению инструмента (`attachToolImages`).
+
 ### Результаты задачи
 
 ADR 0047. `touchedFiles(dataDir, sessionId)` (checkpoints.js) →

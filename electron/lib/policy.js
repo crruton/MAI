@@ -30,6 +30,7 @@ const BUILTIN = {
   // Документы (CW2.1, CW2.2, ADR 0049).
   create_document: 'write',
   read_document: 'read',
+  preview_document: 'read',
   // Удаление — отдельный класс (CW1.4, ADR 0044): спрашивается во всех режимах, кроме «Без вопросов».
   delete_file: 'delete',
   run_shell: 'exec',

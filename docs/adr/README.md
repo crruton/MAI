@@ -83,3 +83,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0065](0065-proekty.md) | Проекты | accepted | 2026-11-22 |
 | [0066](0066-prezentacii-pptx.md) | Презентации PPTX | accepted | 2026-11-22 |
 | [0067](0067-pdf-iz-markdown.md) | PDF из Markdown через Chromium | accepted | 2026-11-22 |
+| [0068](0068-prevyu-dokumenta-dlya-samoproverki.md) | Превью документа для самопроверки агентом | accepted | 2026-11-22 |

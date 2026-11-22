@@ -1,7 +1,9 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { resolveInside, assertNotSecret } from './fs.js';
-import { markdownToHtml } from '../export/html.js';
+import { markdownToHtml, slidesToHtml } from '../export/html.js';
 import { buildDocx, buildXlsx, buildPptx, docxToMarkdown, pptxToMarkdown, readXlsx, sheetsToText } from '../documents.js';
 
 /**
@@ -42,6 +44,63 @@ function currentText(file) {
 function csvCell(value) {
   const text = String(value ?? '');
   return /[;"\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+const PREVIEW_EXT = new Set(['.docx', '.pptx', '.xlsx', '.csv', '.md', '.txt', '.pdf']);
+const DAY = 24 * 60 * 60 * 1000;
+
+/** Таблицы листов → Markdown для превью (первые 200 строк листа). */
+function sheetsMarkdown(sheets) {
+  const cell = (v) => String(v ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+  return sheets
+    .map((sheet) => {
+      const rows = sheet.rows.slice(0, 200);
+      if (!rows.length) return `## ${sheet.name}\n\n(пусто)`;
+      const width = Math.max(...rows.map((r) => r.length), 1);
+      const line = (r) => `| ${Array.from({ length: width }, (_x, i) => cell(r[i])).join(' | ')} |`;
+      return [`## ${sheet.name}`, '', line(rows[0]), `|${' --- |'.repeat(width)}`, ...rows.slice(1).map(line)].join('\n');
+    })
+    .join('\n\n');
+}
+
+/** HTML-вид документа для превью; PDF — отдельно (pdftoppm). */
+export function documentHtml(file) {
+  const ext = path.extname(file).toLowerCase();
+  const title = path.basename(file);
+  if (ext === '.docx') return markdownToHtml(docxToMarkdown(fs.readFileSync(file)));
+  if (ext === '.pptx') return slidesToHtml(pptxToMarkdown(fs.readFileSync(file)), { title });
+  if (ext === '.xlsx') return markdownToHtml(sheetsMarkdown(readXlsx(fs.readFileSync(file), { maxRows: 200 })));
+  if (ext === '.csv') {
+    const text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+    const sep = text.split('\n', 1)[0].includes(';') ? ';' : ',';
+    return markdownToHtml(sheetsMarkdown([{ name: title, rows: text.split(/\r?\n/).filter(Boolean).slice(0, 200).map((l) => l.split(sep)) }]));
+  }
+  if (ext === '.md') return markdownToHtml(fs.readFileSync(file, 'utf8'));
+  return markdownToHtml(`\`\`\`\n${fs.readFileSync(file, 'utf8').slice(0, 100_000)}\n\`\`\``);
+}
+
+/** Папка для картинок превью; старше суток — удаляются. */
+function previewFolder(ctx) {
+  const base = ctx.previewDir || path.join(os.tmpdir(), 'mai-previews');
+  fs.mkdirSync(base, { recursive: true });
+  for (const name of fs.readdirSync(base)) {
+    const full = path.join(base, name);
+    try {
+      if (Date.now() - fs.statSync(full).mtimeMs > DAY) fs.rmSync(full, { recursive: true, force: true });
+    } catch {
+      /* занято — в следующий раз */
+    }
+  }
+  return fs.mkdtempSync(path.join(base, 'p-'));
+}
+
+/** PDF → PNG через pdftoppm (poppler), если он установлен. */
+function pdfPages(file, dir, maxPages) {
+  const probe = spawnSync('pdftoppm', ['-v'], { encoding: 'utf8' });
+  if (probe.error) return null;
+  const run = spawnSync('pdftoppm', ['-png', '-r', '80', '-f', '1', '-l', String(maxPages), file, path.join(dir, 'page')], { encoding: 'utf8', timeout: 60_000 });
+  if (run.status !== 0) throw new Error(`pdftoppm: ${(run.stderr || '').trim().slice(0, 200) || run.status}`);
+  return fs.readdirSync(dir).filter((n) => n.endsWith('.png')).sort().map((n) => path.join(dir, n));
 }
 
 export const documentTools = [
@@ -160,6 +219,64 @@ export const documentTools = [
       } catch (err) {
         return `Не удалось прочитать ${path.basename(file)}: ${err.message}`;
       }
+    },
+  },
+  {
+    schema: {
+      type: 'function',
+      function: {
+        name: 'preview_document',
+        description:
+          'Посмотреть, как выглядит документ (.docx, .pptx, .xlsx, .csv, .md, .txt; .pdf — если установлен pdftoppm): страницы рендерятся в картинки и показываются тебе. ' +
+          'Используй для самопроверки перед сдачей: вёрстка, пустые места, обрезанные таблицы, опечатки в заголовках. Нужна модель со зрением.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            pages: { type: 'number', description: 'Сколько первых страниц показать (1–4, по умолчанию 2)' },
+          },
+          required: ['path'],
+        },
+      },
+    },
+    precheck(ctx, args) {
+      const file = resolveInside(ctx, args.path);
+      assertNotSecret(ctx, file);
+      const ext = path.extname(file).toLowerCase();
+      if (!PREVIEW_EXT.has(ext)) return `Превью для ${ext || 'файла без расширения'} нет: docx, pptx, xlsx, csv, md, txt, pdf`;
+      if (typeof ctx.vision === 'function' && !ctx.vision()) return 'Текущая модель не принимает изображения — проверь документ через read_document.';
+      if (ext !== '.pdf' && typeof ctx.renderPng !== 'function') return 'Превью рисуется только в приложении (нужен встроенный Chromium) — проверь через read_document.';
+      return null;
+    },
+    async run(ctx, args) {
+      const file = resolveInside(ctx, args.path);
+      assertNotSecret(ctx, file);
+      if (!fs.existsSync(file)) return `Файл не найден: ${file}`;
+      const ext = path.extname(file).toLowerCase();
+      const maxPages = Math.min(Math.max(Math.round(Number(args.pages) || 2), 1), 4);
+      const dir = previewFolder(ctx);
+      let images;
+      let total;
+      if (ext === '.pdf') {
+        images = pdfPages(file, dir, maxPages);
+        if (!images) return 'Для превью PDF нужен pdftoppm (poppler) — его нет. Текст PDF читай read_file.';
+        total = null;
+      } else {
+        const out = await ctx.renderPng(documentHtml(file), { maxPages });
+        images = out.pages.map((png, i) => {
+          const name = path.join(dir, `page-${i + 1}.png`);
+          fs.writeFileSync(name, png);
+          return name;
+        });
+        total = out.total;
+      }
+      if (!images.length) return `Превью ${path.basename(file)}: страниц нет`;
+      const more = total && total > images.length ? ` из ${total}` : '';
+      const note = ext === '.pdf' ? '' : ' Это приближённый вид: шрифты и поля Word/PowerPoint могут отличаться, содержание и структура — те же.';
+      return {
+        content: `Превью ${path.basename(file)}: страниц ${images.length}${more} — показаны тебе следующим сообщением.${note}`,
+        images,
+      };
     },
   },
 ];

@@ -38,18 +38,61 @@ export async function renderPdf(BrowserWindow, html, { timeoutMs = 30_000 } = {}
     await withTimeout(load, timeoutMs, 'PDF: страница не загрузилась');
     return await withTimeout(win.webContents.printToPDF({ pageSize: 'A4', printBackground: true }), timeoutMs, 'PDF: печать не завершилась');
   } finally {
-    // Закрываем штатно и ждём, пока окно уйдёт (destroy — запасной путь).
-    await new Promise((resolve) => {
-      if (win.isDestroyed()) return resolve();
-      const timer = setTimeout(() => {
-        if (!win.isDestroyed()) win.destroy();
-        resolve();
-      }, 2000);
-      win.once('closed', () => {
-        clearTimeout(timer);
-        resolve();
-      });
-      win.close();
+    await closeWindow(win);
+  }
+}
+
+/** Закрываем штатно и ждём, пока окно уйдёт (destroy — запасной путь). */
+function closeWindow(win) {
+  return new Promise((resolve) => {
+    if (win.isDestroyed()) return resolve();
+    const timer = setTimeout(() => {
+      if (!win.isDestroyed()) win.destroy();
+      resolve();
+    }, 2000);
+    win.once('closed', () => {
+      clearTimeout(timer);
+      resolve();
     });
+    win.close();
+  });
+}
+
+/**
+ * HTML → картинки страниц для самопроверки агентом (CW2.5, ADR 0068).
+ * Окно вне экрана той же изоляции, что и для PDF: CSP запрещает скрипты
+ * страницы, JavaScript включён только чтобы main измерил высоту документа.
+ * Страница режется на куски по высоте A4 (при ширине 794 px), не больше maxPages.
+ * @returns {Promise<{ pages: Buffer[], total: number }>} PNG и сколько страниц всего
+ */
+export async function renderPng(BrowserWindow, html, { width = 794, pageHeight = 1123, maxPages = 4, timeoutMs = 30_000 } = {}) {
+  const win = new BrowserWindow({
+    show: false,
+    width,
+    height: pageHeight,
+    useContentSize: true,
+    webPreferences: { offscreen: true, javascript: true, sandbox: true, contextIsolation: true, nodeIntegration: false, partition: 'mai-pdf-render' },
+  });
+  try {
+    const urls = ['http', 'https', 'ws', 'wss', 'ftp', 'file'].map((scheme) => `${scheme}://*/*`);
+    win.webContents.session.webRequest.onBeforeRequest({ urls }, (_details, cb) => cb({ cancel: true }));
+    win.webContents.on('will-navigate', (event) => event.preventDefault());
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    const url = `data:text/html;charset=utf-8;base64,${Buffer.from(withCsp(html), 'utf8').toString('base64')}`;
+    await withTimeout(win.loadURL(url), timeoutMs, 'Превью: страница не загрузилась');
+    const height = Math.max(1, Number(await win.webContents.executeJavaScript('document.documentElement.scrollHeight')) || pageHeight);
+    const total = Math.ceil(height / pageHeight);
+    const shown = Math.min(total, maxPages);
+    win.setContentSize(width, Math.min(height, shown * pageHeight));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const pages = [];
+    for (let i = 0; i < shown; i += 1) {
+      const y = i * pageHeight;
+      const image = await withTimeout(win.webContents.capturePage({ x: 0, y, width, height: Math.min(pageHeight, height - y) }), timeoutMs, 'Превью: снимок не получен');
+      pages.push(image.toPNG());
+    }
+    return { pages, total };
+  } finally {
+    await closeWindow(win);
   }
 }

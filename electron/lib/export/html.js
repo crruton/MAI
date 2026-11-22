@@ -28,6 +28,7 @@ th, td { border: 1px solid #d1d5db; padding: 4pt 6pt; text-align: left; vertical
 th { background: #eef2ff; }
 tr { page-break-inside: avoid; }
 hr { border: 0; border-top: 1px solid #d1d5db; margin: 10pt 0; }
+@media screen { body { margin: 0; padding: 56px 60px; } }
 `;
 
 function listHtml(block) {
@@ -36,8 +37,9 @@ function listHtml(block) {
   return `<${tag}>${block.items.map((item) => `<li style="margin-left:${(item.level || 0) * 14}pt">${esc(item.text)}</li>`).join('')}</${tag}>`;
 }
 
-export function markdownToHtml(markdown, { title = '' } = {}) {
-  const body = parseMarkdown(markdown)
+/** Тело страницы из Markdown — без обёртки документа. */
+export function markdownBody(markdown) {
+  return parseMarkdown(markdown)
     .map((block) => {
       switch (block.type) {
         case 'heading':
@@ -61,6 +63,27 @@ export function markdownToHtml(markdown, { title = '' } = {}) {
       }
     })
     .join('\n');
-  const heading = title ? `<h1>${esc(title)}</h1>\n` : '';
-  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>${esc(title)}</title><style>${CSS}</style></head><body>${heading}${body}</body></html>`;
 }
+
+function page(title, body, extraCss = '') {
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>${esc(title)}</title><style>${CSS}${extraCss}</style></head><body>${body}</body></html>`;
+}
+
+export function markdownToHtml(markdown, { title = '' } = {}) {
+  const heading = title ? `<h1>${esc(title)}</h1>\n` : '';
+  return page(title, `${heading}${markdownBody(markdown)}`);
+}
+
+/**
+ * Превью презентации (CW2.5, ADR 0068): Markdown из pptxToMarkdown
+ * («## Слайд N: заголовок» и пункты) → карточки 16:9 одна под другой.
+ */
+export function slidesToHtml(markdown, { title = '' } = {}) {
+  const chunks = String(markdown || '').split(/^(?=## )/m).filter((chunk) => /^## /.test(chunk));
+  const slides = chunks.map((chunk) => `<section class="slide">${markdownBody(chunk.replace(/^## (Слайд \d+: )?/, '## '))}</section>`).join('\n');
+  const css = `
+.slide { width: 100%; aspect-ratio: 16 / 9; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 6px; padding: 28px 40px; margin: 0 0 24px; overflow: hidden; }
+.slide h2 { font-size: 22pt; border-bottom: 3px solid #4f46e5; margin-top: 0; }`;
+  return page(title, slides || '<p>(слайдов нет)</p>', css);
+}
+
