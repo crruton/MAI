@@ -185,6 +185,11 @@ export const IPC_PERMISSIONS = {
   'mcp:login': ADMIN,
   'connectors:list': ANY,
   'mcp:resources': ANY,
+  // Чаты: переименование, форк, файл (CC6.5, CC6.8, CC6.9).
+  'sessions:rename': ANY,
+  'sessions:fork': ANY,
+  'sessions:exportFile': ANY,
+  'sessions:importFile': ANY,
   // Локальные коннекторы (CW3.3).
   'connectors:local': ANY,
   'connectors:localToggle': ADMIN,

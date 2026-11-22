@@ -289,7 +289,12 @@ ADR 0033. `runAgent({ checkpoint })` получает регистратор `cr
 ### Чаты и инструкции проекта
 
 ADR 0034: `session-store.js` — `sessions/<id>.json` и `sessions/index.json`,
-`sessions:list({ projectDir, query })`. `instructions.js`: `projectInstructions`
+`sessions:list({ projectDir, query })`. ADR 0073: `renameSession` (`titleManual`
+защищён в `saveSession`), `forkSession({ upTo })`, `importSession`,
+`expiredSessions(days)` (очистка при запуске); `suggestTitle` в agent.js и
+`cleanTitle` в titles.js — автозаголовок после первого ответа. IPC
+`sessions:rename`, `sessions:fork`, `sessions:exportFile`, `sessions:importFile`.
+`instructions.js`: `projectInstructions`
 (AGENTS.md + AGENTS.local.md с `@`-импортами, глубина 3, только внутри проекта)
 и `nestedInstructions` — вложенные AGENTS.md дописываются к результату
 инструмента с полем `path` один раз за прогон. `memory:append({ scope, text })`

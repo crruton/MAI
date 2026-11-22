@@ -396,6 +396,24 @@ const INTERRUPTED = {
 };
 ipcMain.handle('sessions:get', (_e, id) => (id === TEST_SESSION.id ? TEST_SESSION : id === INTERRUPTED.id ? INTERRUPTED : null));
 
+// Чаты: имя, копия, файл (раздел [43]).
+const sessCalls = [];
+ipcMain.handle('sessions:rename', (_e, payload) => {
+  sessCalls.push({ type: 'rename', ...payload });
+  return { ok: true, title: payload.title };
+});
+ipcMain.handle('sessions:fork', (_e, payload) => {
+  sessCalls.push({ type: 'fork', ...payload });
+  return { ok: true, id: TEST_SESSION.id, title: `${TEST_SESSION.title} (копия)` };
+});
+ipcMain.handle('sessions:exportFile', (_e, id) => {
+  sessCalls.push({ type: 'export', id });
+  return { ok: true, path: '/tmp/x.mai-chat.json' };
+});
+ipcMain.handle('sessions:importFile', () => {
+  sessCalls.push({ type: 'import' });
+  return { ok: false, canceled: true };
+});
 // Экспорт: записываем вызовы, файл не пишем.
 const exportCalls = [];
 ipcMain.handle('export:message', (_e, payload) => {
@@ -892,7 +910,7 @@ app.whenReady().then(async () => {
       return { found: Boolean(picker), items };
     })()`);
     check('меню форматов чата открылось', chatMenu.found === true, JSON.stringify(chatMenu));
-    check('четыре варианта в меню чата', chatMenu.items.length === 4, JSON.stringify(chatMenu.items));
+    check('меню чата: четыре формата и файл чата MAI', chatMenu.items.length === 5 && chatMenu.items[4].startsWith('Файл чата MAI'), JSON.stringify(chatMenu.items));
 
     const chatPick = await win.webContents.executeJavaScript(`(async () => {
       const picker = document.querySelector(".export-picker");
@@ -1783,6 +1801,32 @@ app.whenReady().then(async () => {
     const promptItem = await ui(`document.querySelector('#suggest .suggest-item')?.textContent || ''`);
     check('промпт MCP в списке команд с аргументами и меткой', /\/mcp__db__review/.test(promptItem) && /<file> \[focus\]/.test(promptItem) && /MCP$/.test(promptItem), promptItem);
     await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+
+    console.log('\n[43] Чаты: имя, копия, файл, точки отката (ADR 0073)');
+    await ui(`[...document.querySelectorAll('.session')].find((s) => s.textContent.includes('Тестовый диалог'))?.click()`);
+    await wait(500);
+    await ui(`document.querySelector('.session.active .session-rename').click()`);
+    await wait(200);
+    await ui(`(() => { const i = document.querySelector('.rename-input'); i.value = 'Отчёт за март'; document.querySelector('.rename-save').click(); })()`);
+    await wait(300);
+    check('✎ — переименование уходит в main', sessCalls.some((c) => c.type === 'rename' && c.id === 'test-session' && c.title === 'Отчёт за март'), JSON.stringify(sessCalls));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '/rename Новое имя'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await wait(400);
+    check('/rename с именем — без окна', sessCalls.some((c) => c.type === 'rename' && c.title === 'Новое имя'));
+    await ui(`document.querySelector('.session.active .session-fork').click()`);
+    await wait(500);
+    check('⑂ — копия чата', sessCalls.some((c) => c.type === 'fork' && c.id === 'test-session'));
+    await ui(`(() => { document.activeElement?.blur(); for (let k = 0; k < 2; k += 1) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); })()`);
+    await wait(300);
+    const points = await ui(`[...document.querySelectorAll('.rewind-point')].map((b) => b.textContent).join('|')`);
+    check('двойной Esc — список точек отката, правки отмечены', points === '✎ Покажи отчёт', points);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await wait(200);
+    await ui(`document.querySelector('#export-chat').click()`);
+    await wait(300);
+    await ui(`[...document.querySelectorAll('.export-picker button')].find((b) => b.textContent.startsWith('Файл чата MAI'))?.click()`);
+    await wait(300);
+    check('«Скачать чат» → файл чата MAI', sessCalls.some((c) => c.type === 'export' && c.id === 'test-session'), JSON.stringify(sessCalls));
     await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; })()`);
   } catch (err) {
     fail += 1;

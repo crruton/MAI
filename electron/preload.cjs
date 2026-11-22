@@ -79,6 +79,10 @@ contextBridge.exposeInMainWorld('mai', {
     get: (id) => invoke('sessions:get', id),
     create: (data) => invoke('sessions:create', data),
     remove: (id) => invoke('sessions:delete', id),
+    rename: (id, title) => invoke('sessions:rename', { id, title }),
+    fork: (id, upTo = null) => invoke('sessions:fork', { id, upTo }),
+    exportFile: (id) => invoke('sessions:exportFile', id),
+    importFile: () => invoke('sessions:importFile'),
   },
   chat: {
     start: (payload) => invoke('chat:start', payload),

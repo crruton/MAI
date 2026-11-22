@@ -816,3 +816,10 @@ button { cursor: pointer; }
 .role-title { font-weight: 600; font-size: 15px; }
 .onboarding-examples { display: grid; gap: 8px; margin-top: 8px; }
 .onboarding-example { text-align: left; white-space: normal; }
+
+/* Чаты: точки отката, переименование (CC6.2, CC6.8) */
+.rewind-list { display: grid; gap: 6px; max-height: 60vh; overflow: auto; }
+.rewind-point { text-align: left; white-space: normal; }
+.session .session-rename { right: 46px; }
+.session .session-fork { right: 26px; }
+.session .session-rename:hover, .session .session-fork:hover { color: var(--text); background: var(--accent-soft); }

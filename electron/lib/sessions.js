@@ -23,3 +23,7 @@ export const saveSession = (session) => current().saveSession(session);
 export const addSessionRules = (id, kind, rules) => current().addSessionRules(id, kind, rules);
 export const removeSessionRules = (id, rules) => current().removeSessionRules(id, rules);
 export const deleteSession = (id) => current().deleteSession(id);
+export const renameSession = (id, title, options) => current().renameSession(id, title, options);
+export const forkSession = (id, options) => current().forkSession(id, options);
+export const importSession = (data) => current().importSession(data);
+export const expiredSessions = (days, now) => current().expiredSessions(days, now);

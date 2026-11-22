@@ -19,6 +19,9 @@ const DEFAULTS = {
   // Браузер агента (CW4.1, CW4.2, ADR 0069).
   browserEnabled: true,
   browserSites: { allow: [], block: [] },
+  // Чаты (CC6.8, CC6.9): автозаголовок моделью, срок хранения в днях (0 — бессрочно).
+  autoTitle: true,
+  sessionRetentionDays: 0,
   guardrails: DEFAULT_GUARDRAILS,
   telemetry: {
     enabled: false,

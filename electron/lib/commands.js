@@ -35,6 +35,10 @@ export const BUILTIN_COMMANDS = [
   { name: 'schedule', description: 'Плановые задачи: по расписанию, без вопросов, только по правилам' },
   { name: 'agents', description: 'Типы субагентов' },
   { name: 'packages', description: 'Пакеты плагинов: список, установка, включение' },
+  { name: 'rename', description: 'Переименовать чат', argumentHint: '[новое имя]' },
+  { name: 'fork', description: 'Копия чата с той же историей — попробовать другой подход' },
+  { name: 'import', description: 'Открыть чат из файла (.mai-chat.json)' },
+  { name: 'rewind', description: 'Точки отката: вернуть диалог и правки файлов (двойной Esc)' },
   { name: 'onboarding', description: 'Выбрать роль: набор навыков и команд, коннекторы, примеры задач' },
 ];
 

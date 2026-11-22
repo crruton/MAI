@@ -209,6 +209,11 @@ export function createSessionStore(root) {
         for (const field of OWNED_FIELDS) {
           if (stored[field] !== undefined) session[field] = stored[field];
         }
+        // Имя, данное пользователем во время прогона (CC6.8), не затирается копией в main.
+        if (stored.titleManual) {
+          session.title = stored.title;
+          session.titleManual = true;
+        }
       }
       return write(session);
     },
@@ -241,6 +246,89 @@ export function createSessionStore(root) {
       fs.rmSync(fileOf(id), { force: true });
       updateIndex({ id }, { remove: true });
       return true;
+    },
+
+    /**
+     * Переименование (CC6.8). `auto` — заголовок от модели: не трогает чат,
+     * который пользователь уже назвал сам.
+     */
+    renameSession(id, title, { auto = false } = {}) {
+      const session = getSession(id);
+      const clean = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+      if (!session || !clean) return null;
+      if (auto && session.titleManual) return session;
+      session.title = clean;
+      if (!auto) session.titleManual = true;
+      session.updatedAt = new Date().toISOString();
+      return write(session);
+    },
+
+    /**
+     * Форк (CC6.5): новый чат с той же историей (или до сообщения `upTo`
+     * не включительно), режимом, папками и видом. Состояние прогона и
+     * разрешения «на сессию» не копируются; чекпоинты остаются у исходного.
+     */
+    forkSession(id, { upTo = null } = {}) {
+      const source = getSession(id);
+      if (!source) return null;
+      const now = new Date().toISOString();
+      const messages = (source.messages || []).slice(0, Number.isInteger(upTo) && upTo >= 0 ? upTo : undefined);
+      return write({
+        id: crypto.randomUUID(),
+        title: `${String(source.title || 'Чат').slice(0, 70)} (копия)`,
+        model: source.model || '',
+        projectDir: source.projectDir || '',
+        permissionMode: source.permissionMode || '',
+        permissionRules: { allow: [], ask: [], deny: [] },
+        kind: source.kind === 'task' ? 'task' : 'code',
+        ...(Array.isArray(source.extraDirs) ? { extraDirs: [...source.extraDirs] } : {}),
+        forkedFrom: { id: source.id, at: now, messages: messages.length },
+        createdAt: now,
+        updatedAt: now,
+        messages: JSON.parse(JSON.stringify(messages)),
+      });
+    },
+
+    /**
+     * Импорт (CC6.9) из файла экспорта: всегда новый id, только известные поля,
+     * сообщения — роли user/assistant/tool/system с текстом.
+     */
+    importSession(data) {
+      const raw = data?.session || data;
+      if (!raw || !Array.isArray(raw.messages)) throw new Error('В файле нет чата MAI (нет messages)');
+      const roles = new Set(['user', 'assistant', 'tool', 'system']);
+      const messages = raw.messages
+        .filter((m) => m && roles.has(m.role))
+        .map((m) => {
+          const out = { role: m.role, content: typeof m.content === 'string' ? m.content : m.content == null ? '' : JSON.stringify(m.content) };
+          for (const key of ['display', 'name', 'tool_call_id']) if (typeof m[key] === 'string') out[key] = m[key];
+          if (Array.isArray(m.tool_calls)) out.tool_calls = m.tool_calls;
+          return out;
+        });
+      const now = new Date().toISOString();
+      return write({
+        id: crypto.randomUUID(),
+        title: `${String(raw.title || 'Импорт').slice(0, 70)}`,
+        model: String(raw.model || ''),
+        projectDir: String(raw.projectDir || ''),
+        permissionMode: '',
+        permissionRules: { allow: [], ask: [], deny: [] },
+        kind: raw.kind === 'task' ? 'task' : 'code',
+        importedAt: now,
+        createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : now,
+        updatedAt: now,
+        messages,
+      });
+    },
+
+    /** Чаты, которые не менялись дольше `days` дней (CC6.9); идущие — не трогаем. */
+    expiredSessions(days, now = Date.now()) {
+      const limit = Number(days);
+      if (!Number.isFinite(limit) || limit <= 0) return [];
+      const edge = now - limit * 24 * 60 * 60 * 1000;
+      return readIndex()
+        .filter((m) => m.run !== 'running' && Date.parse(m.updatedAt || m.createdAt || '') < edge)
+        .map((m) => m.id);
     },
   };
 }

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import OpenAI from 'openai';
+import { cleanTitle } from './titles.js';
 import { providerUserAgent } from './config.js';
 import {
   splitSystem,
@@ -242,6 +243,15 @@ export async function compactSession({ provider, model, messages, instructions =
   const history = [...messages];
   const marker = await compactHistory({ client, model, history, instructions, signal });
   return { marker, history };
+}
+
+/** Автозаголовок (CC6.8): короткое имя чата по первому запросу и ответу. */
+export async function suggestTitle({ provider, model, request, answer = '', signal, clientFactory = null }) {
+  const client = (clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider, { maxRetries: 1 }));
+  const prompt =
+    'Придумай короткий заголовок (2–6 слов) для этого чата — о чём задача. Только заголовок, без кавычек и точки, на языке запроса.\n\n' +
+    `Запрос: ${String(request || '').slice(0, 1500)}\n\nНачало ответа: ${String(answer || '').slice(0, 800)}`;
+  return cleanTitle(await completeOnce(client, model, prompt, signal));
 }
 
 /** Разбор контекста для /context: системный промпт и инструменты как у агента. */

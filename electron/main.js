@@ -10,8 +10,8 @@ import { titleBarOptions } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
-import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, setSessionRun, markInterrupted, addSessionRules, removeSessionRules } from './lib/sessions.js';
-import { runAgent, compactSession, describeContext } from './lib/agent.js';
+import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, setSessionRun, markInterrupted, addSessionRules, removeSessionRules, renameSession, forkSession, importSession, expiredSessions } from './lib/sessions.js';
+import { runAgent, compactSession, describeContext, suggestTitle } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
 import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
@@ -419,6 +419,14 @@ app.whenReady().then(async () => {
     if (interrupted.length) emitLog(`Прерванных прогонов: ${interrupted.length}`);
   } catch (err) {
     console.error('[sessions] не удалось отметить прерванные прогоны:', err?.message || err);
+  }
+  // Срок хранения чатов (CC6.9): старше N дней без изменений — удалить.
+  try {
+    const expired = expiredSessions(settings.sessionRetentionDays);
+    for (const id of expired) removeSessionFully(id);
+    if (expired.length) emitLog(`Удалено старых чатов: ${expired.length}`);
+  } catch (err) {
+    console.error('[sessions] не удалось очистить старые чаты:', err?.message || err);
   }
   startScheduler();
   app.on('activate', () => {
@@ -1162,11 +1170,54 @@ ipcMain.handle('workspace:create', async (_e, payload) => {
 ipcMain.handle('sessions:list', (_e, options) => listSessions(options && typeof options === 'object' ? { projectDir: String(options.projectDir || ''), query: String(options.query || '').slice(0, 200) } : {}));
 ipcMain.handle('sessions:get', (_e, id) => getSession(id));
 ipcMain.handle('sessions:create', (_e, data) => createSession(data || {}));
-ipcMain.handle('sessions:delete', (_e, id) => {
+/** Удаление чата вместе с вложениями и чекпоинтами. */
+function removeSessionFully(id) {
   const session = getSession(id);
   if (session?.projectDir) removeSessionUploads(session.projectDir, id);
   removeCheckpoints(dataDir(), id);
   return deleteSession(id);
+}
+ipcMain.handle('sessions:delete', (_e, id) => removeSessionFully(id));
+
+// Переименование и форк (CC6.8, CC6.5, ADR 0073).
+ipcMain.handle('sessions:rename', (_e, payload = {}) => {
+  const session = renameSession(payload.id, payload.title);
+  return session ? { ok: true, title: session.title } : { ok: false, error: 'Нет такого чата или пустое имя' };
+});
+ipcMain.handle('sessions:fork', (_e, payload = {}) => {
+  const session = forkSession(payload.id, { upTo: Number.isInteger(payload.upTo) ? payload.upTo : null });
+  return session ? { ok: true, id: session.id, title: session.title } : { ok: false, error: 'Нет такого чата' };
+});
+
+// Экспорт и импорт чата файлом (CC6.9): JSON с историей, без чекпоинтов и вложений.
+ipcMain.handle('sessions:exportFile', async (event, id) => {
+  const session = getSession(id);
+  if (!session) return { ok: false, error: 'Нет такого чата' };
+  const safe = String(session.title || 'chat').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60);
+  const { canceled, filePath } = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: 'Сохранить чат',
+    defaultPath: `${safe}.mai-chat.json`,
+    filters: [{ name: 'Чат MAI', extensions: ['json'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  const { run: _run, permissionRules: _rules, ...rest } = session;
+  fs.writeFileSync(filePath, JSON.stringify({ format: 'mai-chat', version: 1, exportedAt: new Date().toISOString(), session: rest }, null, 2), 'utf8');
+  return { ok: true, path: filePath };
+});
+ipcMain.handle('sessions:importFile', async (event) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: 'Открыть чат',
+    properties: ['openFile'],
+    filters: [{ name: 'Чат MAI', extensions: ['json'] }],
+  });
+  if (canceled || !filePaths?.[0]) return { ok: false, canceled: true };
+  try {
+    if (fs.statSync(filePaths[0]).size > 50 * 1024 * 1024) throw new Error('Файл больше 50 МБ');
+    const session = importSession(JSON.parse(fs.readFileSync(filePaths[0], 'utf8')));
+    return { ok: true, id: session.id, title: session.title };
+  } catch (err) {
+    return { ok: false, error: `Не удалось импортировать: ${err?.message || err}` };
+  }
 });
 
 // ---------- чат ----------
@@ -1354,6 +1405,17 @@ ipcMain.handle('chat:start', async (event, payload) => {
       // runAgent выходит из цикла по abort без исключения — не выдаём это за успех.
       if (controller.signal.aborted) throw new Error('Остановлено пользователем');
       send(window, { type: 'saved', sessionId: session.id, title: session.title, plugins: loaded });
+      // Автозаголовок (CC6.8): после первого ответа, если чат не назван вручную.
+      const users = history.filter((m) => m.role === 'user');
+      if (settings.autoTitle !== false && users.length === 1 && !getSession(session.id)?.titleManual) {
+        const answer = [...history].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+        suggestTitle({ provider: resolved.provider, model: resolved.modelId, request: users[0].display || users[0].content, answer })
+          .then((title) => {
+            const renamed = title ? renameSession(session.id, title, { auto: true }) : null;
+            if (renamed && !renamed.titleManual) send(window, { type: 'title', sessionId: session.id, title: renamed.title });
+          })
+          .catch(() => {});
+      }
     } catch (err) {
       const aborted = controller.signal.aborted;
       runStatus = aborted ? 'stopped' : 'error';

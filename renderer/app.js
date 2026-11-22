@@ -1125,10 +1125,10 @@ function exportMenu(markdown) {
  * Спрашивает формат у пользователя через простое меню у кнопки.
  * Возвращает `md`, `txt`, `docx`, `xlsx` или пустую строку при отмене.
  */
-function pickExportFormat(anchor) {
+function pickExportFormat(anchor, { chatFile = false } = {}) {
   return new Promise((resolve) => {
     const menu = el('div', { class: 'export-picker' });
-    const formats = [['md', 'Markdown'], ['txt', 'Текст'], ['docx', 'Word'], ['xlsx', 'Excel']];
+    const formats = [['md', 'Markdown'], ['txt', 'Текст'], ['docx', 'Word'], ['xlsx', 'Excel'], ...(chatFile ? [['json', 'Файл чата MAI — открыть в другом MAI']] : [])];
     let settled = false;
     const close = (value) => {
       if (settled) return;
@@ -1378,6 +1378,11 @@ function renderSessions() {
       }),
       session.match ? el('span', { class: 'session-match', text: `…${session.match}…` }) : null,
     ]);
+    // Переименовать и форк (CC6.8, CC6.5).
+    node.append(
+      el('span', { class: 'del session-rename', text: '✎', title: 'Переименовать', onclick: (event) => { event.stopPropagation(); renameChat(session.id, session.title); } }),
+      el('span', { class: 'del session-fork', text: '⑂', title: 'Копия чата — попробовать другой подход', onclick: (event) => { event.stopPropagation(); forkChat(session.id); } }),
+    );
     const del = el('span', {
       class: 'del',
       text: '✕',
@@ -1922,6 +1927,25 @@ async function runSlash(text) {
     case 'onboarding':
       clear();
       await openOnboarding();
+      return;
+    case 'rename':
+      clear();
+      if (!state.sessionId) return toast('Сначала начните чат');
+      if (args.trim()) await applyRename(state.sessionId, args.trim());
+      else renameChat(state.sessionId, state.sessions.find((s) => s.id === state.sessionId)?.title || '');
+      return;
+    case 'fork':
+      clear();
+      if (!state.sessionId) return toast('Сначала начните чат');
+      await forkChat(state.sessionId);
+      return;
+    case 'import':
+      clear();
+      await importChat();
+      return;
+    case 'rewind':
+      clear();
+      openRewindList();
       return;
     case 'projects':
       clear();
@@ -2960,6 +2984,78 @@ async function refreshCheckpoints() {
   }
 }
 
+/* ---------- чаты: имя, копия, файл, точки отката (CC6.2, CC6.5, CC6.8, CC6.9, ADR 0073) ---------- */
+
+async function applyRename(id, title) {
+  const r = await api.sessions.rename(id, title);
+  if (!r?.ok) return toast(r?.error || 'Не удалось переименовать', 'err');
+  await refreshSessions();
+}
+
+function renameChat(id, current = '') {
+  const input = el('input', { class: 'rename-input', value: current || '', maxlength: '80' });
+  const save = async () => {
+    const title = input.value.trim();
+    if (!title) return;
+    view.close();
+    await applyRename(id, title);
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      save();
+    }
+  });
+  const view = openModal({
+    title: 'Переименовать чат',
+    small: true,
+    body: [field('Имя', input), el('p', { class: 'hint-text', text: 'Имя, данное вручную, автозаголовок не меняет.' })],
+    footer: [el('button', { class: 'btn primary rename-save', type: 'button', text: 'Сохранить', onclick: save })],
+  });
+  setTimeout(() => input.select(), 0);
+}
+
+async function forkChat(id, upTo = null) {
+  const r = await api.sessions.fork(id, upTo);
+  if (!r?.ok) return toast(r?.error || 'Не удалось сделать копию', 'err');
+  await refreshSessions();
+  await loadSession(r.id);
+  toast(`Копия: ${r.title}. Откат файлов из исходного чата здесь недоступен.`);
+}
+
+async function importChat() {
+  const r = await api.sessions.importFile();
+  if (r?.canceled) return;
+  if (!r?.ok) return toast(r?.error || 'Не удалось открыть файл', 'err');
+  await refreshSessions();
+  await loadSession(r.id);
+  toast(`Открыт чат: ${r.title}`);
+}
+
+/** Список точек отката (двойной Esc): ваши сообщения, правки файлов отмечены. */
+function openRewindList() {
+  if (!state.sessionId) return toast('В этом чате ещё нечего откатывать');
+  const turns = state.messages.map((m, index) => ({ m, index })).filter(({ m }) => m.role === 'user');
+  if (!turns.length) return toast('В этом чате ещё нечего откатывать');
+  const view = openModal({
+    title: 'Вернуться к сообщению',
+    body: [
+      el('p', { class: 'hint-text', text: 'Выберите сообщение: откатится диалог после него, а правки файлов — по вашему выбору на следующем шаге.' }),
+      el(
+        'div',
+        { class: 'rewind-list' },
+        turns
+          .reverse()
+          .map(({ m, index }) =>
+            el('button', { class: 'btn ghost rewind-point', type: 'button', 'data-turn': String(index), onclick: () => { view.close(); openRewind(index); } }, [
+              el('span', { text: `${state.checkpointTurns?.has(index) ? '✎ ' : ''}${String(m.display || m.content || '').replace(/\s+/g, ' ').slice(0, 120)}` }),
+            ]),
+          ),
+      ),
+    ],
+  });
+}
+
 async function openRewind(turn) {
   const plan = await api.chat.rewindPlan(state.sessionId, turn);
   if (!plan?.ok) {
@@ -3462,6 +3558,17 @@ document.addEventListener('keydown', (event) => {
     cancelEdit();
     return;
   }
+  // Двойной Esc (CC6.2): список точек отката.
+  if (event.key === 'Escape') {
+    const now = Date.now();
+    if (state.lastEscape && now - state.lastEscape < 500) {
+      state.lastEscape = 0;
+      event.preventDefault();
+      openRewindList();
+      return;
+    }
+    state.lastEscape = now;
+  }
   if (event.key === 'Tab' && event.shiftKey && (event.target === input || event.target === document.body)) {
     event.preventDefault();
     setPermissionMode(nextMode());
@@ -3612,6 +3719,10 @@ function handleEvent(event) {
       break;
     case 'saved':
       if (event.sessionId) state.sessionId = event.sessionId;
+      refreshSessions();
+      break;
+    case 'title':
+      // Автозаголовок от модели (CC6.8).
       refreshSessions();
       break;
     case 'runtime:start': {
@@ -3834,6 +3945,10 @@ async function openSettings() {
   browserEnabled.checked = settings.browserEnabled !== false;
   const browserAllow = el('input', { class: 'browser-allow', placeholder: 'например: wikipedia.org, docs.google.com', value: (settings.browserSites?.allow || []).join(', ') });
   const browserBlock = el('input', { class: 'browser-block', placeholder: 'например: mybank.ru', value: (settings.browserSites?.block || []).join(', ') });
+  // Чаты (CC6.8, CC6.9).
+  const autoTitle = el('input', { type: 'checkbox', class: 'auto-title' });
+  autoTitle.checked = settings.autoTitle !== false;
+  const retention = el('input', { type: 'number', min: '0', max: '3650', class: 'session-retention', value: String(settings.sessionRetentionDays || 0) });
   const siteList = (input) => input.value.split(',').map((d) => d.trim()).filter(Boolean);
   const reviewerEnabled = el('input', { type: 'checkbox' });
   reviewerEnabled.checked = Boolean(settings.reviewer?.enabled);
@@ -3977,6 +4092,11 @@ async function openSettings() {
         el('label', { class: 'hint-text' }, [outside, ' разрешить абсолютные пути вне папки проекта']),
       ]),
       el('label', { class: 'field' }, [
+        el('span', { text: 'Чаты' }),
+        el('label', { class: 'hint-text' }, [autoTitle, ' название чата придумывает модель после первого ответа (переименованные вручную не трогает)']),
+      ]),
+      el('div', { class: 'row' }, [field('Хранить чаты, дней (0 — всегда; старые удаляются при запуске)', retention)]),
+      el('label', { class: 'field' }, [
         el('span', { text: 'Браузер агента' }),
         el('label', { class: 'hint-text' }, [browserEnabled, ' агент может открывать сайты в своём окне, нажимать и заполнять формы (пароли и оплату — только вы)']),
       ]),
@@ -4083,6 +4203,8 @@ async function openSettings() {
             gitAttribution: gitAttribution.value.trim(),
             allowOutsideProject: outside.checked,
             browserEnabled: browserEnabled.checked,
+            autoTitle: autoTitle.checked,
+            sessionRetentionDays: Math.max(0, Math.min(3650, Math.round(Number(retention.value) || 0))),
             browserSites: { allow: siteList(browserAllow), block: siteList(browserBlock) },
             reviewer: {
               enabled: reviewerEnabled.checked,
@@ -5797,8 +5919,15 @@ $('#export-chat').addEventListener('click', async (event) => {
     toast('В диалоге пока нет сообщений');
     return;
   }
-  const format = await pickExportFormat(button);
+  const format = await pickExportFormat(button, { chatFile: Boolean(state.sessionId) });
   if (!format) return;
+  // Файл чата (CC6.9): вся история, открывается через /import.
+  if (format === 'json') {
+    const r = await api.sessions.exportFile(state.sessionId);
+    if (r?.ok) toast(`Сохранено: ${r.path}`);
+    else if (r?.error) toast(r.error, 'err');
+    return;
+  }
   button.disabled = true;
   const result = await api.export.chat({ messages, format, title: 'Диалог MAI Code' });
   button.disabled = false;

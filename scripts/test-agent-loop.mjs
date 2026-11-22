@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { runAgent, trimMessages, toApiMessage, compactSession } from '../electron/lib/agent.js';
+import { runAgent, trimMessages, toApiMessage, compactSession, suggestTitle } from '../electron/lib/agent.js';
 import { loadPlugins } from '../electron/lib/plugins.js';
 import { createRecorder, rewindFiles, rewindPlan } from '../electron/lib/checkpoints.js';
 import { createHookRunner, normalizeHooks } from '../electron/lib/hooks.js';
@@ -1187,6 +1187,14 @@ console.log('\n[28] Проект: инструкции в промпте и то
   const tools = (bodies[0].tools || []).map((t) => t.function.name);
   check('инструкции проекта в системном промпте', /# Проект «Отчётность»/.test(bodies[0].messages[0].content) && /ОСОБОЕ-ПРАВИЛО-ПРОЕКТА/.test(bodies[0].messages[0].content));
   check('только коннекторы проекта', tools.includes('mcp__gmail__read') && !tools.includes('mcp__slack__post') && tools.includes('read_file'), tools.join(','));
+}
+
+{
+  console.log('\n[29] Автозаголовок чата (CC6.8, ADR 0073)');
+  const seen = [];
+  const factory = () => ({ chat: { completions: { create: async (body) => { seen.push(body); return { choices: [{ message: { content: '«Сверка выписки».' } }] }; } } } });
+  const title = await suggestTitle({ provider: { apiKey: 'k', baseURL: 'http://x' }, model: 'm', request: 'сверь выписку с реестром', answer: 'готово', clientFactory: factory });
+  check('suggestTitle: запрос с текстом задачи, ответ очищен', title === 'Сверка выписки' && /сверь выписку с реестром/.test(seen[0].messages[0].content), title);
 }
 
 fs.rmSync(project, { recursive: true, force: true });
