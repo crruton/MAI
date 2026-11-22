@@ -60,6 +60,7 @@ jobs:
           xvfb-run -a npx electron --no-sandbox scripts/test-ui.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-storage-safety.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-telemetry.mjs
+          xvfb-run -a npx electron --no-sandbox scripts/test-pdf.mjs
 
       # Плановая задача на настоящем приложении с поддельной моделью (ADR 0050).
       - name: Плановые задачи (дымовая)
@@ -103,7 +104,7 @@ jobs:
         run: |
           $electron = Join-Path $PWD 'node_modules\electron\dist\electron.exe'
           $failed = @()
-          foreach ($t in 'test-agent-loop', 'test-memory-tools', 'test-plugin-host', 'test-secrets-electron', 'test-ui', 'test-storage-safety', 'test-telemetry', 'smoke-electron') {
+          foreach ($t in 'test-agent-loop', 'test-memory-tools', 'test-plugin-host', 'test-secrets-electron', 'test-ui', 'test-storage-safety', 'test-telemetry', 'test-pdf', 'smoke-electron') {
             Write-Host "== $t"
             $p = Start-Process -FilePath $electron -ArgumentList "scripts/$t.mjs" -NoNewWindow -PassThru -RedirectStandardOutput "$t.out.txt" -RedirectStandardError "$t.err.txt"
             $null = $p.Handle  # без этого ExitCode после WaitForExit бывает пустым

@@ -27,6 +27,7 @@ import { createScheduleStore, isDue, nextRunAt, describeSchedule } from './lib/s
 import { modelCapabilities } from './lib/capabilities.js';
 import { createTracer, NO_TRACER } from './lib/tracer.js';
 import { createProjectStore } from './lib/projects.js';
+import { renderPdf } from './lib/pdf-render.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
@@ -225,6 +226,8 @@ function agentSettings(settings) {
     dockerAvailable: dockerReady,
     // Корзина для delete_file (CW1.4).
     trashDir: path.join(dataDir(), 'trash'),
+    // PDF для create_document (CW2.4, ADR 0067).
+    renderPdf: (html) => renderPdf(BrowserWindow, html),
     // Длинный вывод инструментов — в файл (CC1.13).
     outputDir: path.join(dataDir(), 'tool-output'),
   };

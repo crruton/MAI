@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveInside, assertNotSecret } from './fs.js';
+import { markdownToHtml } from '../export/html.js';
 import { buildDocx, buildXlsx, buildPptx, docxToMarkdown, pptxToMarkdown, readXlsx, sheetsToText } from '../documents.js';
 
 /**
@@ -8,7 +9,7 @@ import { buildDocx, buildXlsx, buildPptx, docxToMarkdown, pptxToMarkdown, readXl
  * существующие. Правка документа — прочитать, изменить, сохранить заново
  * (оформление исходника при этом не сохраняется — см. ADR).
  */
-const WRITE_EXT = new Set(['.docx', '.xlsx', '.pptx', '.md', '.txt', '.csv']);
+const WRITE_EXT = new Set(['.docx', '.xlsx', '.pptx', '.pdf', '.md', '.txt', '.csv']);
 const MAX_TEXT = 60_000;
 
 function textOf(ext, args) {
@@ -50,7 +51,7 @@ export const documentTools = [
       function: {
         name: 'create_document',
         description:
-          'Создать документ: .docx (из markdown: заголовки #, абзацы, списки, таблицы), .pptx (из slides: [{ title, subtitle?, bullets }] ' +
+          'Создать документ: .docx или .pdf (из markdown: заголовки #, абзацы, списки, таблицы; PDF — A4), .pptx (из slides: [{ title, subtitle?, bullets }] ' +
           'или markdown: «## » — новый слайд, «- » — пункты, отступ — уровень), .xlsx (из sheets: листы со строками; ' +
           'числа — числами, строки с = — формулами, например "=SUM(B2:B10)"; первая строка — заголовок), .csv, .md или .txt. ' +
           'Существующий файл перезаписывается — для правки сначала прочитай его read_document; чтобы не потерять исходник, сохраняй под новым именем.',
@@ -99,6 +100,7 @@ export const documentTools = [
       if (ext === '.xlsx' && !(Array.isArray(args.sheets) && args.sheets.length) && !args.markdown) return 'Для xlsx нужны sheets (или markdown с таблицами)';
       if (ext === '.pptx' && !(Array.isArray(args.slides) && args.slides.length) && !args.markdown) return 'Для pptx нужны slides (или markdown со слайдами «## »)';
       if (!['.xlsx', '.csv', '.pptx'].includes(ext) && !args.markdown) return 'Нужен markdown — содержимое документа';
+      if (ext === '.pdf' && typeof ctx.renderPdf !== 'function') return 'PDF создаётся только в приложении (нужен встроенный Chromium)';
       return null;
     },
     /** Было/стало текстом — в запросе разрешения видно, что окажется в документе. */
@@ -114,6 +116,7 @@ export const documentTools = [
       let data;
       if (ext === '.docx') data = buildDocx(args.markdown, { title: args.title });
       else if (ext === '.pptx') data = buildPptx({ slides: args.slides, markdown: args.markdown, title: args.title });
+      else if (ext === '.pdf') data = await ctx.renderPdf(markdownToHtml(args.markdown, { title: args.title }));
       else if (ext === '.xlsx') data = buildXlsx({ sheets: args.sheets, markdown: args.markdown, title: args.title });
       else if (ext === '.csv') data = `\uFEFF${(args.sheets?.[0]?.rows || []).map((r) => r.map(csvCell).join(';')).join('\r\n') || String(args.markdown || '')}`;
       else data = textOf(ext, args);

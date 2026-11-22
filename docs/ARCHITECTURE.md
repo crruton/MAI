@@ -393,6 +393,10 @@ ADR 0049. `electron/lib/documents.js`: `buildDocx`, `buildXlsx` (`sheetsToXlsx` 
 `create_document` (write, precheck формата, preview текста), `read_document`
 (read; есть в наборе субагентов explore/plan).
 
+PDF (ADR 0067): `export/html.js` — `markdownToHtml` (A4, CSP); `pdf-render.js` —
+`renderPdf(BrowserWindow, html)`: скрытое окно без JS и сети, `printToPDF`.
+В инструмент попадает как `ctx.renderPdf` из `agentSettings` main.
+
 ### Результаты задачи
 
 ADR 0047. `touchedFiles(dataDir, sessionId)` (checkpoints.js) →
@@ -571,6 +575,8 @@ IPC-каналы: `ocr:status`, `ocr:recognize`. Подробности — [OCR
 | `markdown.js` | разбор Markdown в блоки и Markdown → простой текст |
 | `docx.js` | WordprocessingML: заголовки, таблицы, код моношрифтом |
 | `xlsx.js` | SpreadsheetML: каждая таблица — отдельный лист |
+| `pptx.js` | PresentationML: слайды из списка или Markdown (ADR 0066) |
+| `html.js` | Markdown → HTML для печати в PDF (ADR 0067) |
 | `index.js` | выбор формата, безопасное имя файла, сборка чата |
 
 DOCX и XLSX собираются без внешних библиотек: это ZIP с XML внутри, а `zlib`

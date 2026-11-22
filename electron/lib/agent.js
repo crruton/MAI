@@ -951,6 +951,8 @@ async function runAgentInner({
       // Песочница с учётом вида чата и проекта (CW1.3).
       shellSandbox: effectiveSandbox(settings.shellSandbox, { kind, project }),
       trashDir: settings.trashDir,
+      // PDF из Markdown через Chromium (CW2.4) — функция из main.
+      renderPdf: settings.renderPdf,
       // Защищённые ветки (CC11.6): по умолчанию main и master.
       protectedBranches: Array.isArray(settings.protectedBranches) ? settings.protectedBranches : undefined,
       // Поиск: провайдер и ключ из настроек (ADR 0056).
