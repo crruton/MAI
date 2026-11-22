@@ -806,3 +806,13 @@ button { cursor: pointer; }
 .project-row.active b { color: var(--accent-2, var(--text)); }
 .project-form { display: grid; gap: 8px; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
 .project-extras, .project-connectors { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Онбординг (CW6.2, ADR 0070) */
+.onboarding-step { font-size: 12px; color: var(--muted, #9ca3af); text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 6px; }
+.role-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-top: 10px; }
+.role-card { text-align: left; border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: transparent; color: inherit; cursor: pointer; display: grid; gap: 6px; align-content: start; font: inherit; }
+.role-card:hover, .role-card:focus-visible { border-color: var(--accent, #6366f1); }
+.role-card.installed { border-color: rgba(52, 211, 153, 0.45); }
+.role-title { font-weight: 600; font-size: 15px; }
+.onboarding-examples { display: grid; gap: 8px; margin-top: 8px; }
+.onboarding-example { text-align: left; white-space: normal; }

@@ -291,6 +291,19 @@ ipcMain.handle('connectors:list', () => [
   { id: 'notion', name: 'Notion', category: 'Вики', description: 'Страницы', url: 'https://mcp.notion.com/mcp', auth: 'oauth', source: 'builtin', installed: connInstalled.has('notion'), status: 'needs_auth' },
   { id: '1c', name: '1С', category: 'Учёт', description: 'Наш 1С', url: 'https://1c.corp/mcp', auth: 'token', source: 'managed', installed: false, status: '' },
 ]);
+// Онбординг и наборы ролей (раздел [41]).
+const roleCalls = [];
+ipcMain.handle('roles:list', () => ({
+  roles: [
+    { id: 'developer', title: 'Разработчик', icon: '💻', summary: 'Код и тесты', connectors: ['github', 'linear'], examples: ['Напиши тесты'], package: 'role-developer', installed: false },
+    { id: 'finance', title: 'Финансы', icon: '💰', summary: 'Бюджеты', connectors: [], examples: ['Сверь выписку банка с реестром', 'Построй бюджет'], package: 'role-finance', installed: true },
+  ],
+  onboarding: null,
+}));
+ipcMain.handle('roles:install', (_e, id) => {
+  roleCalls.push(id);
+  return { ok: true, role: { id }, package: { name: `role-${id}`, parts: { skills: 1, commands: 1 } } };
+});
 ipcMain.handle('connectors:add', (_e, payload) => {
   connCalls.push({ type: 'add', ...payload });
   connInstalled.add(payload.id);
@@ -1695,6 +1708,38 @@ app.whenReady().then(async () => {
     const savedProject = projCalls.find((c) => c.type === 'save');
     check('новый проект: папки из диалога, инструкции, вид', savedProject?.name === 'Новый' && savedProject.primaryDir === '/p/new-main' && savedProject.extraDirs.join() === '/p/new-extra' && savedProject.instructions === 'правила' && savedProject.kind === 'code' && savedProject.sandbox === 'docker', JSON.stringify(savedProject));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[41] Онбординг: роль → набор → коннекторы → пример (ADR 0070)');
+    const ui = (code) => win.webContents.executeJavaScript(code);
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '/onboarding'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await wait(500);
+    const roleCards = await ui(`[...document.querySelectorAll('.role-card')].map((c) => c.dataset.role + ':' + c.classList.contains('installed')).join()`);
+    check('/onboarding: карточки ролей, установленный отмечен', roleCards === 'developer:false,finance:true', roleCards);
+    await ui(`document.querySelector('.role-card[data-role=developer]').click()`);
+    await wait(400);
+    const step2 = await ui(`document.querySelector('.onboarding-installed')?.textContent || ''`);
+    check('выбор роли ставит набор и показывает, что в нём', roleCalls.join() === 'developer' && /навыков 1, команд 1/.test(step2), step2);
+    await ui(`document.querySelector('.onboarding-connect').click()`);
+    await wait(500);
+    const shown = await ui(`[...document.querySelectorAll('.connector')].map((c) => c.dataset.id).join()`);
+    check('«Подключить коннекторы» — только коннекторы роли', shown === 'linear,github', shown);
+    const doneSave = savedSettings.findLast((s) => s.onboarding);
+    check('закрытие мастера запоминает «пройден» и роль', doneSave?.onboarding?.done === true && doneSave.onboarding.role === 'developer', JSON.stringify(doneSave));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '/onboarding'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await wait(500);
+    await ui(`document.querySelector('.role-card[data-role=finance]').click()`);
+    await wait(400);
+    const noConn = await ui(`!document.querySelector('.onboarding-connect')`);
+    await ui(`document.querySelector('.onboarding-next').click()`);
+    await wait(200);
+    await ui(`[...document.querySelectorAll('.onboarding-example')][0].click()`);
+    await wait(200);
+    const inputText = await ui(`document.querySelector('#input').value`);
+    const modalGone = await ui(`!document.querySelector('.role-cards, .onboarding-examples')`);
+    check('роль без коннекторов; пример задачи — в поле ввода, мастер закрыт', noConn && inputText === 'Сверь выписку банка с реестром' && modalGone, JSON.stringify({ noConn, inputText, modalGone }));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; })()`);
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

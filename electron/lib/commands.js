@@ -35,6 +35,7 @@ export const BUILTIN_COMMANDS = [
   { name: 'schedule', description: 'Плановые задачи: по расписанию, без вопросов, только по правилам' },
   { name: 'agents', description: 'Типы субагентов' },
   { name: 'packages', description: 'Пакеты плагинов: список, установка, включение' },
+  { name: 'onboarding', description: 'Выбрать роль: набор навыков и команд, коннекторы, примеры задач' },
 ];
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;

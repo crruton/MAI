@@ -32,6 +32,7 @@ import { createAgentBrowser } from './lib/browser-agent.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
+import { listRoles, installRole } from './lib/roles.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -1739,6 +1740,31 @@ ipcMain.handle('packages:list', (_e, projectDir) => {
     trusted: isTrusted(dir),
     globalDir: path.join(dataDir(), 'packages'),
   };
+});
+
+// Наборы по ролям и онбординг (CW6.1, CW6.2, ADR 0070).
+const rolesDir = () => path.join(app.getAppPath(), 'roles');
+ipcMain.handle('roles:list', () => {
+  const settings = loadSettings();
+  const installed = new Set(listPackages('', dataDir(), { includeProject: false }).map((p) => p.name));
+  return {
+    roles: listRoles(rolesDir()).map(({ dir: _dir, ...role }) => ({ ...role, installed: installed.has(role.package) })),
+    onboarding: settings.onboarding || null,
+  };
+});
+
+ipcMain.handle('roles:install', async (_e, id) => {
+  try {
+    const { role, package: pkg } = installRole({ id, rolesDir: rolesDir(), dataDir: dataDir() });
+    // Набор включён, даже если раньше его выключали; роль запоминается.
+    const settings = loadSettings();
+    saveSettings({ packages: { ...(settings.packages || {}), [pkg.name]: { ...(settings.packages?.[pkg.name] || {}), enabled: true } }, onboarding: { ...(settings.onboarding || {}), role: role.id } });
+    audit({ at: new Date().toISOString(), tool: 'role:install', source: 'user', cls: 'external', subject: `${role.id} → ${pkg.name} ${role.version}`, decision: 'allow' });
+    const { dir: _dir, ...clean } = role;
+    return { ok: true, role: clean, package: { name: pkg.name, parts: pkg.parts } };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
 });
 
 /** Установка из папки или git-URL в глобальные пакеты. Код пакета исполняется — только admin. */

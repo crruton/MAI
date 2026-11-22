@@ -85,3 +85,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0067](0067-pdf-iz-markdown.md) | PDF из Markdown через Chromium | accepted | 2026-11-22 |
 | [0068](0068-prevyu-dokumenta-dlya-samoproverki.md) | Превью документа для самопроверки агентом | accepted | 2026-11-22 |
 | [0069](0069-brauzer-agenta.md) | Браузер агента и разрешения по сайтам | accepted | 2026-11-22 |
+| [0070](0070-roli-i-onbording.md) | Наборы по ролям и онбординг | accepted | 2026-11-22 |

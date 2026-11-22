@@ -129,6 +129,8 @@ contextBridge.exposeInMainWorld('mai', {
     installFromMarketplace: (marketplace, name, replace = false) => invoke('marketplace:install', { marketplace, name, replace }),
     uninstallPackage: (name) => invoke('packages:uninstall', name),
     togglePackage: (name, enabled) => invoke('packages:toggle', { name, enabled }),
+    roles: () => invoke('roles:list'),
+    installRole: (id) => invoke('roles:install', id),
     context: (payload) => invoke('context:stats', payload),
     // Чекпоинты и откат (CC6.1).
     checkpoints: (sessionId) => invoke('checkpoints:turns', sessionId),

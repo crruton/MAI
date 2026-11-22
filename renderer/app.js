@@ -1919,6 +1919,10 @@ async function runSlash(text) {
       clear();
       await openConnectors();
       return;
+    case 'onboarding':
+      clear();
+      await openOnboarding();
+      return;
     case 'projects':
       clear();
       await openProjects();
@@ -2136,10 +2140,124 @@ async function openProjects() {
 
 /* ---------- каталог коннекторов (CW3.1, ADR 0052) ---------- */
 
-async function openConnectors() {
+/* ---------- онбординг: роль → набор → коннекторы → пример задачи (CW6.1, CW6.2, ADR 0070) ---------- */
+
+async function finishOnboarding(role) {
+  try {
+    state.settings = await api.settings.save({ onboarding: { ...(state.settings.onboarding || {}), done: true, ...(role ? { role } : {}) } });
+  } catch {
+    /* гость: настройки не сохраняются — мастер просто закроется */
+  }
+}
+
+async function openOnboarding() {
+  const info = await api.chat.roles();
+  let chosen = null;
+  const view = openModal({
+    title: 'Добро пожаловать в MAI Code',
+    wide: true,
+    body: [],
+    onClose: () => finishOnboarding(chosen?.id),
+  });
+  const step = (body, footer) => {
+    view.bodyEl.replaceChildren(...body);
+    view.footEl.replaceChildren(...footer);
+  };
+
+  const examples = () =>
+    step(
+      [
+        el('p', { class: 'onboarding-step', text: 'Шаг 3 из 3 · С чего начать' }),
+        el('p', { text: 'Выберите пример — он появится в поле ввода, его можно поправить перед отправкой. Для задач с документами выберите вид чата «Задача».' }),
+        el(
+          'div',
+          { class: 'onboarding-examples' },
+          (chosen?.examples || []).map((text) =>
+            el('button', {
+              class: 'btn ghost onboarding-example',
+              type: 'button',
+              text,
+              onclick: () => {
+                const input = $('#input');
+                input.value = text;
+                input.dispatchEvent(new Event('input'));
+                view.close();
+                input.focus();
+              },
+            }),
+          ),
+        ),
+      ],
+      [el('button', { class: 'btn primary', type: 'button', text: 'Готово', onclick: () => view.close() })],
+    );
+
+  const connectors = (installed) => {
+    const ids = chosen.connectors || [];
+    const parts = installed?.parts || {};
+    step(
+      [
+        el('p', { class: 'onboarding-step', text: 'Шаг 2 из 3 · Набор установлен' }),
+        el('p', { class: 'onboarding-installed', text: `«${chosen.title}»: навыков ${parts.skills || 0}, команд ${parts.commands || 0}. Набор — обычный пакет: его можно выключить в «Пакетах» (/packages).` }),
+        ids.length
+          ? el('p', { text: `Подходящие коннекторы: ${ids.join(', ')}. Подключение — вход в сервис через браузер или токен; можно сделать и позже (/connectors).` })
+          : el('p', { text: 'Коннекторы для этой роли не нужны — работа идёт с файлами на компьютере.' }),
+      ],
+      [
+        ids.length
+          ? el('button', {
+              class: 'btn ghost onboarding-connect',
+              type: 'button',
+              text: 'Подключить коннекторы',
+              onclick: () => {
+                view.close();
+                openConnectors({ only: ids });
+              },
+            })
+          : null,
+        el('button', { class: 'btn primary onboarding-next', type: 'button', text: 'Дальше', onclick: examples }),
+      ].filter(Boolean),
+    );
+  };
+
+  const install = async (role) => {
+    chosen = role;
+    step([el('p', { text: `Устанавливаю набор «${role.title}»…` })], []);
+    const result = await api.chat.installRole(role.id);
+    if (!result?.ok) {
+      step([el('p', { class: 'error-text', text: `Не удалось установить набор: ${result?.error || 'ошибка'}` })], [el('button', { class: 'btn', type: 'button', text: 'Назад', onclick: roles })]);
+      return;
+    }
+    connectors(result.package);
+  };
+
+  function roles() {
+    step(
+      [
+        el('p', { class: 'onboarding-step', text: 'Шаг 1 из 3 · Чем вы занимаетесь?' }),
+        el('p', { class: 'hint-text', text: 'Агент получит навыки и команды для вашей работы. Роль можно сменить позже командой /onboarding.' }),
+        el(
+          'div',
+          { class: 'role-cards' },
+          info.roles.map((role) =>
+            el('button', { class: `role-card${role.installed ? ' installed' : ''}`, type: 'button', 'data-role': role.id, onclick: () => install(role) }, [
+              el('div', { class: 'role-title', text: `${role.icon} ${role.title}` }),
+              el('div', { class: 'hint-text', text: role.summary }),
+              role.installed ? el('span', { class: 'badge ok', text: 'установлен' }) : null,
+            ]),
+          ),
+        ),
+      ],
+      [el('button', { class: 'btn ghost onboarding-skip', type: 'button', text: 'Пропустить', onclick: () => view.close() })],
+    );
+  }
+  roles();
+}
+
+async function openConnectors({ only = [] } = {}) {
   const grid = el('div', { class: 'connectors' });
   const render = async () => {
-    const list = await api.mcp.connectors();
+    // Из онбординга (CW6.2) — только коннекторы, подходящие роли.
+    const list = (await api.mcp.connectors()).filter((c) => !only.length || only.includes(c.id));
     grid.replaceChildren(
       ...list.map((c) => {
         const token = c.auth === 'token' && !c.installed ? el('input', { class: 'connector-token', type: 'password', placeholder: c.tokenHint || 'токен', autocomplete: 'off' }) : null;
@@ -5603,6 +5721,10 @@ async function init() {
   await loadModels();
   await refreshSessions();
   renderAll();
+  // Первый запуск (CW6.2): ещё нет чатов, мастер не пройден — предложить роль.
+  if ((!state.auth || state.auth.role === 'admin') && !state.settings.onboarding?.done && !(state.sessions || []).length) {
+    openOnboarding().catch(() => {});
+  }
 
   api.chat.onEvent(handleEvent);
 

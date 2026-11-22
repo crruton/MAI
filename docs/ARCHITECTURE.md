@@ -317,6 +317,11 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
 
+Наборы ролей (ADR 0070): папка `roles/` приложения, `roles.js` — `listRoles`,
+`installRole` (своя копия из asar, только commands/skills/agents). IPC
+`roles:list`, `roles:install`; мастер `openOnboarding` в renderer открывается
+при первом запуске (`settings.onboarding.done`) и по `/onboarding`.
+
 ### Длинные задачи
 
 ADR 0051. `session.run` (`setSessionRun`, защищённое поле, в индексе — `run`):

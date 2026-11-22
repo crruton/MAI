@@ -102,6 +102,9 @@ export const IPC_PERMISSIONS = {
   // Пакет — исполняемый код: установка, удаление и включение — только admin.
   'packages:list': ANY,
   'packages:install': ADMIN,
+  // Наборы ролей и онбординг (CW6.1, CW6.2).
+  'roles:list': ANY,
+  'roles:install': ADMIN,
   'marketplace:list': ANY,
   'trash:list': ANY,
   'projects:list': ANY,
