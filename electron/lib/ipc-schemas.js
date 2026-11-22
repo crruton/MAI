@@ -90,6 +90,9 @@ export const IPC_SCHEMAS = {
   'sessions:delete': [S],
   'auth:setRole': [S],
   'models:caps': [S_],
+  'projects:save': [{ id: S_, name: S_, primaryDir: S_, extraDirs: A_, instructions: S_, connectors: A_, kind: S_ }],
+  'projects:remove': [S],
+  'projects:activate': [S_],
   // Остальные каналы admin/self: данные — объект или строка, как их передаёт preload.
   'auth:configure': [O_],
   'providers:save': [{ id: S, provider: O }],

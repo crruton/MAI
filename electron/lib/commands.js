@@ -30,6 +30,7 @@ export const BUILTIN_COMMANDS = [
   // overridable: своя команда проекта или пакета с тем же именем сильнее встроенной.
   { name: 'commit', description: 'Закоммитить изменения: агент пишет сообщение, вы подтверждаете', argumentHint: '[уточнение]', overridable: true },
   { name: 'review', description: 'Ревью текущих изменений или PR', argumentHint: '[номер PR]', overridable: true },
+  { name: 'projects', description: 'Проекты: папки, инструкции, коннекторы и вид — одним кликом' },
   { name: 'connectors', description: 'Каталог коннекторов: Linear, Notion, GitHub и другие в два клика' },
   { name: 'schedule', description: 'Плановые задачи: по расписанию, без вопросов, только по правилам' },
   { name: 'agents', description: 'Типы субагентов' },

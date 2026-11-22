@@ -1919,6 +1919,10 @@ async function runSlash(text) {
       clear();
       await openConnectors();
       return;
+    case 'projects':
+      clear();
+      await openProjects();
+      return;
     case 'agents':
       clear();
       await openSubagents();
@@ -1967,6 +1971,160 @@ async function openHooks() {
       }),
     ],
   });
+}
+
+/* ---------- проекты (CW1.5, ADR 0065) ---------- */
+
+async function activateProject(project) {
+  const r = await api.chat.activateProject(project?.id || null);
+  if (r?.ok === false) return toast(r.error, 'err');
+  if (project) {
+    state.projectDir = project.primaryDir;
+    newChat();
+    // Вид нового чата — как у проекта.
+    await api.chat.setKind(null, project.kind);
+    state.kind = project.kind;
+    paintKind();
+  }
+  state.activeProject = project?.id || null;
+  updateChrome();
+  refreshSessions();
+  const trust = await refreshTrust();
+  if (trust?.state === 'unknown') await decideTrust(trust);
+  toast(project ? `Проект «${project.name}» открыт` : 'Проект закрыт', 'ok');
+}
+
+function projectForm(existing, onSaved) {
+  const draft = { ...(existing || { name: '', primaryDir: '', extraDirs: [], instructions: '', connectors: [], kind: 'task' }) };
+  const name = el('input', { class: 'project-name-input', value: draft.name, placeholder: 'Отчётность отдела' });
+  const primary = el('span', { class: 'hint-text project-primary', text: draft.primaryDir || 'папка не выбрана' });
+  const extras = el('div', { class: 'project-extras' });
+  const renderExtras = () =>
+    extras.replaceChildren(
+      ...draft.extraDirs.map((d) =>
+        el('span', { class: 'work-dir', title: d }, [d.split(/[\\/]/).pop(), el('button', { class: 'work-dir-remove', type: 'button', text: '×', onclick: () => ((draft.extraDirs = draft.extraDirs.filter((x) => x !== d)), renderExtras()) })]),
+      ),
+    );
+  renderExtras();
+  const instructions = el('textarea', { class: 'project-instructions', rows: '4', placeholder: 'Что агент должен знать об этом проекте: для кого результаты, формат, где что лежит' });
+  instructions.value = draft.instructions || '';
+  const kind = el('select', { class: 'project-kind' }, [el('option', { value: 'task', text: 'Задача' }), el('option', { value: 'code', text: 'Код' })]);
+  kind.value = draft.kind || 'task';
+  const connectors = el('div', { class: 'project-connectors' });
+  api.mcp
+    .status()
+    .then((servers) =>
+      connectors.replaceChildren(
+        ...(servers.length
+          ? servers.map((s) => {
+              const box = el('input', { type: 'checkbox', value: s.name, checked: draft.connectors.includes(s.name) ? 'checked' : null });
+              return el('label', { class: 'hint-text' }, [box, ` ${s.name}`]);
+            })
+          : [el('span', { class: 'hint-text', text: 'MCP-серверов нет — подключите в /connectors' })]),
+      ),
+    )
+    .catch(() => {});
+  return el('div', { class: 'project-form' }, [
+    field('Название', name),
+    el('div', { class: 'row' }, [
+      el('label', { class: 'field' }, [el('span', { text: 'Основная папка (инструкции и память — здесь)' }), primary]),
+      el('button', {
+        class: 'btn ghost small project-pick',
+        type: 'button',
+        text: 'Выбрать…',
+        onclick: async () => {
+          const dir = await api.chat.pickProjectDir();
+          if (dir) {
+            draft.primaryDir = dir;
+            primary.textContent = dir;
+          }
+        },
+      }),
+    ]),
+    el('div', { class: 'row' }, [
+      el('label', { class: 'field' }, [el('span', { text: 'Ещё папки' }), extras]),
+      el('button', {
+        class: 'btn ghost small project-add-dir',
+        type: 'button',
+        text: '＋ папка',
+        onclick: async () => {
+          const dir = await api.chat.pickProjectDir();
+          if (dir && !draft.extraDirs.includes(dir)) {
+            draft.extraDirs.push(dir);
+            renderExtras();
+          }
+        },
+      }),
+    ]),
+    field('Инструкции проекта', instructions),
+    el('label', { class: 'field' }, [el('span', { text: 'Коннекторы (ничего не выбрано — все)' }), connectors]),
+    field('Вид чатов', kind),
+    el('button', {
+      class: 'btn primary small project-save',
+      type: 'button',
+      text: existing ? 'Сохранить' : 'Создать проект',
+      onclick: async () => {
+        const r = await api.chat.saveProject({
+          id: existing?.id,
+          name: name.value,
+          primaryDir: draft.primaryDir,
+          extraDirs: draft.extraDirs,
+          instructions: instructions.value,
+          connectors: [...connectors.querySelectorAll('input:checked')].map((b) => b.value),
+          kind: kind.value,
+        });
+        if (r?.ok === false) return toast(r.error, 'err');
+        toast(`Проект «${r.project.name}» сохранён`, 'ok');
+        onSaved(r.project);
+      },
+    }),
+  ]);
+}
+
+async function openProjects() {
+  const list = el('div', { class: 'projects-list' });
+  const formBox = el('div', { class: 'project-form-box' });
+  const render = async () => {
+    const { projects, active } = await api.chat.projects();
+    list.replaceChildren(
+      ...(projects.length
+        ? projects.map((p) =>
+            el('div', { class: `project-row${p.id === active ? ' active' : ''}`, 'data-id': p.id }, [
+              el('div', { class: 'package-info' }, [
+                el('b', { text: `${p.name}${p.id === active ? ' · открыт' : ''}` }),
+                el('div', { class: 'hint-text', text: `${p.primaryDir}${p.extraDirs.length ? ` + ещё ${p.extraDirs.length}` : ''} · ${p.kind === 'code' ? 'Код' : 'Задача'}${p.connectors.length ? ` · коннекторы: ${p.connectors.join(', ')}` : ''}` }),
+              ]),
+              el('span', { class: 'trash-actions' }, [
+                p.id === active
+                  ? el('button', { class: 'btn ghost small', type: 'button', text: 'Закрыть', onclick: async () => (await activateProject(null), render()) })
+                  : el('button', { class: 'btn primary small project-open', type: 'button', text: 'Открыть', onclick: async () => (await activateProject(p), render()) }),
+                el('button', { class: 'btn ghost small project-edit', type: 'button', text: 'Изменить', onclick: () => formBox.replaceChildren(projectForm(p, () => (formBox.replaceChildren(), render()))) }),
+                el('button', {
+                  class: 'btn ghost small',
+                  type: 'button',
+                  text: 'Удалить',
+                  onclick: async () => {
+                    if (!window.confirm(`Удалить проект «${p.name}»? Папки и чаты останутся.`)) return;
+                    await api.chat.removeProject(p.id);
+                    render();
+                  },
+                }),
+              ]),
+            ]),
+          )
+        : [el('p', { class: 'hint-text', text: 'Проектов нет. Проект собирает папки, инструкции и коннекторы, чтобы открыть их одним кликом.' })]),
+    );
+  };
+  openModal({
+    title: 'Проекты',
+    body: [
+      list,
+      el('button', { class: 'btn small project-new', type: 'button', text: '＋ Новый проект', onclick: () => formBox.replaceChildren(projectForm(null, () => (formBox.replaceChildren(), render()))) }),
+      formBox,
+      el('p', { class: 'hint-text', text: 'Открытый проект: основная папка — текущая, новые чаты получают его папки, инструкции, вид и только его коннекторы. Память — memory.md основной папки. Папки и чаты при удалении проекта не трогаются.' }),
+    ],
+  });
+  await render();
 }
 
 /* ---------- каталог коннекторов (CW3.1, ADR 0052) ---------- */
@@ -5453,6 +5611,7 @@ $('#export-chat').addEventListener('click', async (event) => {
 });
   $('#project-btn').addEventListener('click', pickProject);
   $('#new-project-btn').addEventListener('click', newProjectModal);
+  $('#projects-btn')?.addEventListener('click', openProjects);
   $('#settings-btn').addEventListener('click', openSettings);
   for (const button of document.querySelectorAll('#kind-toggle .kind-btn')) {
     button.addEventListener('click', () => setKind(button.dataset.kind));

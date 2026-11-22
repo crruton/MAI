@@ -28,6 +28,7 @@ import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
 import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DELAYS } from './retry.js';
 import { modelCapabilities, requestOptions } from './capabilities.js';
 import { NO_TRACER } from './tracer.js';
+import { projectPrompt, connectorAllowed } from './projects.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
 import { runToolCall, toolEntry } from './tool-runner.js';
 import { attachImages, attachToolImages, isImageRejected, supportsVision, isImageFile } from './vision.js';
@@ -388,6 +389,8 @@ async function runAgentInner({
   effort = '',
   tracer = NO_TRACER,
   runSpan = null,
+  // Проект Cowork (CW1.5, ADR 0065): инструкции и разрешённые коннекторы.
+  project = null,
 }) {
   let usingFallback = false;
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
@@ -499,6 +502,7 @@ async function runAgentInner({
       effort,
       tracer,
       parentSpan: ctx.span || runSpan,
+      project,
       subagent: { def },
     });
     const final = [...subHistory].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '(субагент не вернул текст)';
@@ -513,7 +517,8 @@ async function runAgentInner({
       : null;
 
   const buildTools = (mode) => {
-    const fromMcp = mcp.toolSchemas().map((schema) =>
+    // Проект (CW1.5): только его коннекторы.
+    const fromMcp = mcp.toolSchemas().filter((schema) => connectorAllowed(project, schema.function.name)).map((schema) =>
       toolEntry(schema, {
         source: 'mcp',
         annotations: schema.annotations,
@@ -580,6 +585,7 @@ async function runAgentInner({
     const tools = buildTools(mode);
     const system =
       systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs, kind }) +
+      projectPrompt(project) +
       (subagent
         ? `\n\n# Ты — субагент «${subagent.def.name}»\n${subagent.def.prompt || ''}\nПользователь этот диалог не видит: родительский агент получит только твой последний ответ. ` +
           'Заверши работу одним итоговым сообщением: что найдено или сделано, пути файлов, что не удалось.'

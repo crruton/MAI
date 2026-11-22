@@ -1164,6 +1164,31 @@ console.log('\n[27] Ревизор: режим и проверка изменё�
   check('gpt-5: без temperature', plain && plain.temperature === undefined, JSON.stringify(plain && Object.keys(plain)));
 }
 
+console.log('\n[28] Проект: инструкции в промпте и только его коннекторы (CW1.5)');
+{
+  const bodies = [];
+  const mcp2 = {
+    status: () => [{ name: 'gmail', status: 'ready', tools: ['read'] }, { name: 'slack', status: 'ready', tools: ['post'] }],
+    toolSchemas: () => [
+      { type: 'function', function: { name: 'mcp__gmail__read', description: 'r', parameters: { type: 'object' } }, annotations: { readOnlyHint: true } },
+      { type: 'function', function: { name: 'mcp__slack__post', description: 'p', parameters: { type: 'object' } }, annotations: {} },
+    ],
+    call: async () => 'ok',
+  };
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'x' }],
+      mcp: mcp2,
+      project: { id: 'p1', name: 'Отчётность', instructions: 'ОСОБОЕ-ПРАВИЛО-ПРОЕКТА', connectors: ['gmail'] },
+      clientFactory: fakeClient([{ text: 'ок' }], bodies),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const tools = (bodies[0].tools || []).map((t) => t.function.name);
+  check('инструкции проекта в системном промпте', /# Проект «Отчётность»/.test(bodies[0].messages[0].content) && /ОСОБОЕ-ПРАВИЛО-ПРОЕКТА/.test(bodies[0].messages[0].content));
+  check('только коннекторы проекта', tools.includes('mcp__gmail__read') && !tools.includes('mcp__slack__post') && tools.includes('read_file'), tools.join(','));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

@@ -462,6 +462,14 @@ ADR 0038. `electron/lib/settings-levels.js`: `readManaged()` (файл орга�
 решение `evaluate` и уровни найденного правила. Ответ на запрос
 `remember: 'local'` пишет правило в `settings.local.json` (admin, доверенная папка).
 
+## Проекты
+
+ADR 0065. `createProjectStore(dataDir)` (`projects.json`, `checkDir`),
+`projectPrompt`, `connectorAllowed` в `projects.js`. main: `activeProjectFor(dir)`
+по `settings.activeProject`; `chat:start` передаёт `project` в `runAgent` и
+объединяет его `extraDirs` с папками чата. IPC `projects:list` (any),
+`projects:pickDir | save | remove | activate` (admin).
+
 ## Ревизор
 
 ADR 0064. После финального ответа: `touched` (файлы `write`/`delete` прогона)
