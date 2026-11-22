@@ -25,13 +25,23 @@ function git(cwd, args, { input, allowFail = false } = {}) {
   return res;
 }
 
+/** Настоящий путь без коротких имён и ссылок. */
+export function realPath(p) {
+  try {
+    return fs.realpathSync.native(path.resolve(p));
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 /** Корень git-репозитория папки или '' (не репозиторий, нет git, нет коммитов). */
 export function repoRoot(dir) {
   try {
     const top = git(dir, ['rev-parse', '--show-toplevel'], { allowFail: true });
     if (top.status !== 0) return '';
     const head = git(dir, ['rev-parse', '--verify', 'HEAD'], { allowFail: true });
-    return head.status === 0 ? path.resolve(top.stdout.trim()) : '';
+    // Полный путь: на Windows временная папка бывает в коротком виде (RUNNER~1), а git отдаёт длинный.
+    return head.status === 0 ? realPath(top.stdout.trim()) : '';
   } catch {
     return '';
   }

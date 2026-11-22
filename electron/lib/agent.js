@@ -34,7 +34,7 @@ import { projectPrompt, connectorAllowed } from './projects.js';
 import { effectiveSandbox } from './shell-sandbox.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
 import { runToolCall, toolEntry, normalizeAnswer } from './tool-runner.js';
-import { repoRoot, createWorktree, worktreeChanges, applyChanges, removeWorktree } from './worktree.js';
+import { repoRoot, realPath, createWorktree, worktreeChanges, applyChanges, removeWorktree } from './worktree.js';
 import os from 'node:os';
 import { attachImages, attachToolImages, isImageRejected, supportsVision, isImageFile } from './vision.js';
 import { addUsage, isStreamOptionsRejected, normalizeUsage } from './usage.js';
@@ -507,7 +507,7 @@ async function runAgentInner({
 
   /** Сам прогон субагента; при изоляции — в рабочей копии, затем слияние по подтверждению. */
   const executeSubagent = async (def, args, ctx, worktree, runSignal) => {
-    const subDir = worktree ? path.join(worktree.dir, path.relative(worktree.repo, projectDir)) : projectDir;
+    const subDir = worktree ? path.join(worktree.dir, path.relative(worktree.repo, realPath(projectDir))) : projectDir;
     let parentTurn = -1;
     for (let k = history.length - 1; k >= 0; k -= 1) {
       if (history[k].role === 'user') {
@@ -617,7 +617,7 @@ async function runAgentInner({
       for (const f of changes.files) checkpoint?.record?.(path.join(worktree.repo, f.path), parentTurn);
       applyChanges(worktree, changes);
       removeWorktree(worktree);
-      for (const f of changes.files) touched.add(path.relative(projectDir, path.join(worktree.repo, f.path)) || f.path);
+      for (const f of changes.files) touched.add(path.relative(realPath(projectDir), path.join(worktree.repo, f.path)) || f.path);
       return `[Изменения слиты в проект:\n${changes.stat}]`;
     } catch (err) {
       removeWorktree(worktree, { keepBranch: true });

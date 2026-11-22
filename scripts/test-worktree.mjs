@@ -19,7 +19,7 @@ function check(name, cond, extra = '') {
   }
 }
 const git = (cwd, ...args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' });
-const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mai-wt-')));
+const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'mai-wt-')));
 const repo = path.join(tmp, 'repo');
 const base = path.join(tmp, 'worktrees');
 fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
