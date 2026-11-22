@@ -187,6 +187,8 @@ export const IPC_PERMISSIONS = {
   'mcp:resources': ANY,
   // Чаты: переименование, форк, файл (CC6.5, CC6.8, CC6.9).
   'sessions:rename': ANY,
+  'shell:direct': ADMIN,
+  'git:branch': ANY,
   'sessions:fork': ANY,
   'sessions:exportFile': ANY,
   'sessions:importFile': ANY,

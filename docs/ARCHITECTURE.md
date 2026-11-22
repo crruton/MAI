@@ -289,7 +289,11 @@ ADR 0033. `runAgent({ checkpoint })` получает регистратор `cr
 ### Чаты и инструкции проекта
 
 ADR 0034: `session-store.js` — `sessions/<id>.json` и `sessions/index.json`,
-`sessions:list({ projectDir, query })`. ADR 0073: `renameSession` (`titleManual`
+`sessions:list({ projectDir, query })`. ADR 0074: `shell:direct` (`!команда`,
+`execute` из tools/shell.js, guardrails, аудит, сообщение `direct: true`),
+`git:branch` для статусной строки; тема — `nativeTheme.themeSource` из
+`settings.theme`, CSS по `prefers-color-scheme`, `windowColors` в window.js;
+`openModal` — dialog, фокус, Esc, Tab. ADR 0073: `renameSession` (`titleManual`
 защищён в `saveSession`), `forkSession({ upTo })`, `importSession`,
 `expiredSessions(days)` (очистка при запуске); `suggestTitle` в agent.js и
 `cleanTitle` в titles.js — автозаголовок после первого ответа. IPC

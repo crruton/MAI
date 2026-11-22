@@ -74,6 +74,10 @@ contextBridge.exposeInMainWorld('mai', {
     logout: () => invoke('auth:logout'),
     setRole: (role) => invoke('auth:setRole', role),
   },
+  // Ветка git для статусной строки (CC7.12).
+  git: {
+    branch: (projectDir) => invoke('git:branch', projectDir),
+  },
   sessions: {
     list: (options) => invoke('sessions:list', options),
     get: (id) => invoke('sessions:get', id),
@@ -83,6 +87,7 @@ contextBridge.exposeInMainWorld('mai', {
     fork: (id, upTo = null) => invoke('sessions:fork', { id, upTo }),
     exportFile: (id) => invoke('sessions:exportFile', id),
     importFile: () => invoke('sessions:importFile'),
+    shell: (sessionId, command) => invoke('shell:direct', { sessionId, command }),
   },
   chat: {
     start: (payload) => invoke('chat:start', payload),

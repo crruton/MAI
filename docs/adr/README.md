@@ -89,3 +89,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0071](0071-mcp-resursy-prompty-sse.md) | MCP: ресурсы, промпты и SSE | accepted | 2026-11-22 |
 | [0072](0072-lokalnye-konnektory.md) | Локальные коннекторы | accepted | 2026-11-22 |
 | [0073](0073-chaty-imya-kopiya-hranenie.md) | Чаты: имя, копия, хранение и точки отката | accepted | 2026-11-22 |
+| [0074](0074-interfeys-tema-statusnaya-stroka-dostupnost.md) | Интерфейс: !команда, статусная строка, тема, доступность | accepted | 2026-11-22 |

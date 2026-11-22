@@ -61,7 +61,7 @@
             <div class="topbar-row-actions">
               <button class="btn ghost" data-panel="docs" title="Документация GitBook">📖 Документация</button>
               <button class="btn ghost" data-panel="auth" id="auth-btn" title="Роли и вход">Доступ</button>
-              <button class="btn icon" id="settings-btn" title="Настройки">⚙</button>
+              <button class="btn icon" id="settings-btn" title="Настройки" aria-label="Настройки">⚙</button>
             </div>
           </div>
           <nav class="top-actions" aria-label="Панели">
@@ -104,7 +104,7 @@
             <div class="work-dirs" id="work-dirs" hidden></div>
             <textarea id="input" rows="1" placeholder="Опишите задачу…  Enter — отправить, Shift+Enter — новая строка. Файлы можно перетащить сюда"></textarea>
             <div class="composer-actions">
-              <button class="btn icon attach" id="attach" type="button" title="Прикрепить файлы: документы, архивы, изображения">+</button>
+              <button class="btn icon attach" id="attach" type="button" title="Прикрепить файлы: документы, архивы, изображения" aria-label="Прикрепить файлы">+</button>
               <button class="btn icon mic" id="mic" type="button" title="Голосовой ввод (MAS): нажмите, продиктуйте задачу, нажмите ещё раз" aria-label="Голосовой ввод" aria-pressed="false">
                 <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
                   <path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z" fill="currentColor"></path>
@@ -127,11 +127,11 @@
               <button class="results-btn" id="results-btn" type="button" title="Файлы, созданные и изменённые агентом в этом чате" hidden></button>
               <button class="context-meter" id="context-meter" type="button" title="Заполнение контекста модели — /context" hidden></button>
               <span class="composer-hint" id="composer-hint"></span>
-              <button class="btn icon send" id="send" title="Отправить">➤</button>
-              <button class="btn icon stop" id="stop" title="Остановить" hidden>■</button>
+              <button class="btn icon send" id="send" title="Отправить" aria-label="Отправить">➤</button>
+              <button class="btn icon stop" id="stop" title="Остановить" aria-label="Остановить" hidden>■</button>
             </div>
           </div>
-          <div class="composer-note">Модели: MAI · агент может менять файлы и запускать команды — с вашего подтверждения</div>
+          <div class="composer-note statusline" id="statusline" role="status" aria-live="polite">Модели: MAI · агент может менять файлы и запускать команды — с вашего подтверждения</div>
         </footer>
       </main>
     </div>

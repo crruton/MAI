@@ -553,24 +553,56 @@ async function withTrust(start) {
 
 /* ---------- модальные окна ---------- */
 
+let modalSeq = 0;
 function openModal({ title, body, footer, small = false, wide = false, onClose }) {
   const root = $('#modal-root');
+  // Доступность (CC7.17): фокус уходит в окно и возвращается туда, откуда пришёл.
+  const returnFocus = document.activeElement;
   const close = () => {
     backdrop.remove();
+    document.removeEventListener('keydown', onKey, true);
     onClose?.();
+    if (returnFocus?.isConnected && !document.querySelector('.modal-backdrop')) returnFocus.focus?.();
   };
+  const titleId = `modal-title-${(modalSeq += 1)}`;
   const head = el('div', { class: 'modal-head' }, [
-    el('h2', { text: title }),
-    el('button', { class: 'x', type: 'button', text: '×', onclick: close }),
+    el('h2', { text: title, id: titleId }),
+    el('button', { class: 'x', type: 'button', text: '×', 'aria-label': 'Закрыть', onclick: close }),
   ]);
   const bodyEl = el('div', { class: 'modal-body' }, body);
   const footEl = el('div', { class: 'modal-foot' }, footer || []);
-  const modal = el('div', { class: `modal${small ? ' small' : ''}${wide ? ' wide' : ''}` }, [head, bodyEl, footEl]);
+  const modal = el('div', { class: `modal${small ? ' small' : ''}${wide ? ' wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId }, [head, bodyEl, footEl]);
   const backdrop = el('div', { class: 'modal-backdrop' }, [modal]);
   backdrop.addEventListener('mousedown', (event) => {
     if (event.target === backdrop) close();
   });
+  // Esc закрывает верхнее окно; Tab не выходит за его пределы.
+  const focusable = () => [...modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')].filter((n) => !n.disabled && n.offsetParent !== null);
+  const onKey = (event) => {
+    if (backdrop !== root.lastElementChild) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    } else if (event.key === 'Tab') {
+      const list = focusable();
+      if (!list.length) return;
+      const first = list[0];
+      const last = list[list.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  };
+  document.addEventListener('keydown', onKey, true);
   root.append(backdrop);
+  setTimeout(() => {
+    if (!modal.contains(document.activeElement)) (focusable().find((n) => !n.classList.contains('x')) || modal.querySelector('.x'))?.focus();
+  }, 0);
   return { close, bodyEl, footEl, modal };
 }
 
@@ -828,6 +860,7 @@ async function refreshEffort() {
 
 function renderAll() {
   syncKind();
+  renderStatusLine();
   refreshEffort();
   if (!state.running) refreshResults();
   renderWorkDirs();
@@ -1380,13 +1413,14 @@ function renderSessions() {
     ]);
     // Переименовать и форк (CC6.8, CC6.5).
     node.append(
-      el('span', { class: 'del session-rename', text: '✎', title: 'Переименовать', onclick: (event) => { event.stopPropagation(); renameChat(session.id, session.title); } }),
-      el('span', { class: 'del session-fork', text: '⑂', title: 'Копия чата — попробовать другой подход', onclick: (event) => { event.stopPropagation(); forkChat(session.id); } }),
+      el('span', { class: 'del session-rename', text: '✎', title: 'Переименовать', 'aria-label': 'Переименовать чат', onclick: (event) => { event.stopPropagation(); renameChat(session.id, session.title); } }),
+      el('span', { class: 'del session-fork', text: '⑂', title: 'Копия чата — попробовать другой подход', 'aria-label': 'Копия чата', onclick: (event) => { event.stopPropagation(); forkChat(session.id); } }),
     );
     const del = el('span', {
       class: 'del',
       text: '✕',
       title: 'Удалить чат',
+      'aria-label': 'Удалить чат',
       onclick: async (event) => {
         event.stopPropagation();
         await api.sessions.remove(session.id);
@@ -1578,6 +1612,11 @@ async function send(override = null) {
   const typed = input.value.trim();
   if (!override && typed.startsWith('/') && !typed.startsWith('//')) {
     await runSlash(typed);
+    return;
+  }
+  // `!команда` (CC7.10): выполнить самому, без модели; `!!` — обычный текст.
+  if (!override && /^!\S/.test(typed) && !typed.startsWith('!!') && !typed.includes('\n')) {
+    await runDirect(typed.slice(1).trim());
     return;
   }
   // `# правило` — в память, а не агенту (CC4.3). `##` и многострочный текст — обычное сообщение.
@@ -2986,6 +3025,23 @@ async function refreshCheckpoints() {
 
 /* ---------- чаты: имя, копия, файл, точки отката (CC6.2, CC6.5, CC6.8, CC6.9, ADR 0073) ---------- */
 
+/** `!команда`: чат создаётся, если его ещё нет; вывод появляется в ленте. */
+async function runDirect(command) {
+  const input = $('#input');
+  if (!state.sessionId) {
+    const created = await api.sessions.create({ title: 'Новый чат', model: state.model, projectDir: state.projectDir, permissionMode: state.permissionMode, kind: state.kind });
+    state.sessionId = created?.id || null;
+  }
+  if (!state.sessionId) return toast('Не удалось создать чат', 'err');
+  toast(`Выполняю: ${command}`);
+  const r = await api.sessions.shell(state.sessionId, command);
+  if (!r?.ok) return toast(r?.error || 'Команда не выполнена', 'err');
+  input.value = '';
+  autosize();
+  await loadSession(state.sessionId);
+  await refreshSessions();
+}
+
 async function applyRename(id, title) {
   const r = await api.sessions.rename(id, title);
   if (!r?.ok) return toast(r?.error || 'Не удалось переименовать', 'err');
@@ -3156,6 +3212,7 @@ function renderContextMeter() {
   meter.textContent = `контекст ${pct}%`;
   meter.className = `context-meter${pct >= 85 ? ' ctx-high' : pct >= 70 ? ' ctx-mid' : ''}`;
   meter.title = `${c.exact ? '' : '≈ '}${contextLabel(c.used)} из ${contextLabel(c.window)} токенов. С 80% ранняя часть диалога сжимается в сводку. /context — подробно`;
+  renderStatusLine();
 }
 
 async function refreshContext() {
@@ -3236,7 +3293,8 @@ function priceOf(modelKey) {
   return (provider?.models || []).find((m) => m.id === id)?.price || null;
 }
 
-function openCost() {
+/** Стоимость чата по ценам моделей: { total, priced, rows }. */
+function sessionCost() {
   const byModel = new Map();
   for (const m of state.messages) {
     if (m.role !== 'assistant' || !m.usage) continue;
@@ -3255,12 +3313,66 @@ function openCost() {
     const cost = price ? (row.input * price.input + row.output * (price.output || 0)) / 1e6 : null;
     if (cost == null) priced = false;
     else total += cost;
-    return el('div', { class: 'context-row' }, [
+    return { key, row, cost };
+  });
+  return { total, priced, rows };
+}
+
+/* ---------- статусная строка (CC7.12, ADR 0074) ---------- */
+
+const STATUS_ITEMS = [
+  ['model', 'модель'],
+  ['mode', 'режим'],
+  ['branch', 'ветка git'],
+  ['context', 'контекст %'],
+  ['cost', 'стоимость'],
+];
+const STATUS_DEFAULT = ['model', 'mode', 'branch', 'cost'];
+
+async function refreshBranch() {
+  try {
+    state.branch = state.projectDir ? (await api.git?.branch?.(state.projectDir)) || '' : '';
+  } catch {
+    state.branch = '';
+  }
+  renderStatusLine();
+}
+
+function renderStatusLine() {
+  const line = document.querySelector('#statusline');
+  if (!line) return;
+  const items = Array.isArray(state.settings?.statusLine) ? state.settings.statusLine : STATUS_DEFAULT;
+  const parts = [];
+  for (const item of items) {
+    if (item === 'model' && state.model) parts.push(['model', modelLabel(state.model)]);
+    if (item === 'mode') {
+      const mode = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).find((m) => m.id === state.permissionMode);
+      if (mode) parts.push(['mode', mode.label]);
+    }
+    if (item === 'branch' && state.branch) parts.push(['branch', `⎇ ${state.branch}`]);
+    if (item === 'context' && state.context?.window && state.context.used) parts.push(['context', `контекст ${Math.min(100, Math.round((state.context.used / state.context.window) * 100))}%`]);
+    if (item === 'cost') {
+      const cost = sessionCost();
+      if (cost.total) parts.push(['cost', `$${cost.total.toFixed(cost.total < 1 ? 4 : 2)}${cost.priced ? '' : '+'}`]);
+    }
+  }
+  if (!parts.length) {
+    line.textContent = 'Агент может менять файлы и запускать команды — с вашего подтверждения';
+    return;
+  }
+  line.replaceChildren(...parts.flatMap(([key, text], i) => [i ? el('span', { class: 'status-sep', text: ' · ' }) : null, el('span', { class: `status-${key}`, text })]).filter(Boolean));
+  line.title = 'Статусная строка — что показывать, задаётся в «Настройках»';
+}
+
+function openCost() {
+  const { total, priced, rows: data } = sessionCost();
+  const rows = data.map(({ key, row, cost }) =>
+    el('div', { class: 'context-row' }, [
       el('span', { text: modelLabel(key) }),
       el('span', { class: 'context-num', text: `${row.steps} шагов · ↑${contextLabel(row.input)}${row.cached ? ` (кэш ${contextLabel(row.cached)})` : ''} ↓${contextLabel(row.output)}` }),
       el('span', { class: 'context-num', text: cost == null ? 'цена не задана' : `$${cost.toFixed(4)}` }),
-    ]);
-  });
+    ]),
+  );
   openModal({
     title: 'Токены и стоимость чата',
     body: [
@@ -3720,6 +3832,7 @@ function handleEvent(event) {
     case 'saved':
       if (event.sessionId) state.sessionId = event.sessionId;
       refreshSessions();
+      refreshBranch();
       break;
     case 'title':
       // Автозаголовок от модели (CC6.8).
@@ -3945,6 +4058,16 @@ async function openSettings() {
   browserEnabled.checked = settings.browserEnabled !== false;
   const browserAllow = el('input', { class: 'browser-allow', placeholder: 'например: wikipedia.org, docs.google.com', value: (settings.browserSites?.allow || []).join(', ') });
   const browserBlock = el('input', { class: 'browser-block', placeholder: 'например: mybank.ru', value: (settings.browserSites?.block || []).join(', ') });
+  // Тема (CC7.16, ADR 0074).
+  const theme = el('select', { class: 'theme-select' }, [['dark', 'Тёмная'], ['light', 'Светлая'], ['system', 'Как в системе']].map(([value, text]) => el('option', { value, text })));
+  theme.value = ['dark', 'light', 'system'].includes(settings.theme) ? settings.theme : 'dark';
+  // Статусная строка (CC7.12): что показывать.
+  const statusOn = new Set(Array.isArray(settings.statusLine) ? settings.statusLine : STATUS_DEFAULT);
+  const statusBoxes = STATUS_ITEMS.map(([key, label]) => {
+    const box = el('input', { type: 'checkbox', class: 'statusline-item', 'data-item': key });
+    box.checked = statusOn.has(key);
+    return el('label', { class: 'hint-text' }, [box, ` ${label} `]);
+  });
   // Чаты (CC6.8, CC6.9).
   const autoTitle = el('input', { type: 'checkbox', class: 'auto-title' });
   autoTitle.checked = settings.autoTitle !== false;
@@ -4084,6 +4207,7 @@ async function openSettings() {
         field('Температура', temperature),
         field('Максимум шагов агента', maxIterations),
         field('Запасная модель', fallbackModel),
+        field('Тема', theme),
         field('Защищённые ветки (пуш запрещён)', protectedBranches),
         field('Подпись в коммитах (/commit)', gitAttribution),
       ]),
@@ -4091,6 +4215,7 @@ async function openSettings() {
         el('span', { text: 'Доступ к файлам вне проекта' }),
         el('label', { class: 'hint-text' }, [outside, ' разрешить абсолютные пути вне папки проекта']),
       ]),
+      el('div', { class: 'field' }, [el('span', { text: 'Статусная строка под полем ввода' }), el('div', { class: 'statusline-items' }, statusBoxes)]),
       el('label', { class: 'field' }, [
         el('span', { text: 'Чаты' }),
         el('label', { class: 'hint-text' }, [autoTitle, ' название чата придумывает модель после первого ответа (переименованные вручную не трогает)']),
@@ -4204,6 +4329,8 @@ async function openSettings() {
             allowOutsideProject: outside.checked,
             browserEnabled: browserEnabled.checked,
             autoTitle: autoTitle.checked,
+            theme: theme.value,
+            statusLine: STATUS_ITEMS.map(([key]) => key).filter((key) => statusBoxes.some((l) => l.querySelector(`[data-item=${key}]`)?.checked)),
             sessionRetentionDays: Math.max(0, Math.min(3650, Math.round(Number(retention.value) || 0))),
             browserSites: { allow: siteList(browserAllow), block: siteList(browserBlock) },
             reviewer: {
@@ -5651,6 +5778,7 @@ async function pickProject() {
   state.projectDir = dir;
   updateChrome();
   refreshSessions();
+  refreshBranch();
   // Решение о доверии — сразу при выборе папки, как в Claude Code (ADR 0028).
   const trust = await refreshTrust();
   if (trust?.state === 'unknown') await decideTrust(trust);
@@ -5890,6 +6018,7 @@ async function init() {
   await loadModels();
   await refreshSessions();
   renderAll();
+  refreshBranch();
   // Первый запуск (CW6.2): ещё нет чатов, мастер не пройден — предложить роль.
   if ((!state.auth || state.auth.role === 'admin') && !state.settings.onboarding?.done && !(state.sessions || []).length) {
     openOnboarding().catch(() => {});

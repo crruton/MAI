@@ -5,7 +5,7 @@
  * IPC-каналы подменены заглушками: тест проверяет фронтенд, а не бэкенд.
  * Запуск: npx electron scripts/test-ui.mjs
  */
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -396,6 +396,13 @@ const INTERRUPTED = {
 };
 ipcMain.handle('sessions:get', (_e, id) => (id === TEST_SESSION.id ? TEST_SESSION : id === INTERRUPTED.id ? INTERRUPTED : null));
 
+// Статусная строка и `!команда` (раздел [45]).
+ipcMain.handle('git:branch', () => 'dev');
+const directCalls = [];
+ipcMain.handle('shell:direct', (_e, payload) => {
+  directCalls.push(payload);
+  return { ok: true, output: '$ npm test\n\nok\n\n[код 0, 5 мс]' };
+});
 // Чаты: имя, копия, файл (раздел [43]).
 const sessCalls = [];
 ipcMain.handle('sessions:rename', (_e, payload) => {
@@ -501,6 +508,8 @@ ipcMain.handle('boards:load', () => ({
 }));
 
 app.whenReady().then(async () => {
+  // Как в приложении: тема по умолчанию — тёмная (ADR 0074), а не системная.
+  nativeTheme.themeSource = 'dark';
   const win = new BrowserWindow({
     show: false,
     width: 1200,
@@ -1827,6 +1836,53 @@ app.whenReady().then(async () => {
     await ui(`[...document.querySelectorAll('.export-picker button')].find((b) => b.textContent.startsWith('Файл чата MAI'))?.click()`);
     await wait(300);
     check('«Скачать чат» → файл чата MAI', sessCalls.some((c) => c.type === 'export' && c.id === 'test-session'), JSON.stringify(sessCalls));
+
+    console.log('\n[44] Тема: светлая, тёмная, как в системе (ADR 0074)');
+    const bgNow = () => ui(`getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()`);
+    nativeTheme.themeSource = 'light';
+    await wait(300);
+    const lightBg = await bgNow();
+    if (process.env.MAI_SHOT) {
+      win.webContents.invalidate();
+      await wait(1000);
+      fs.writeFileSync(process.env.MAI_SHOT, (await win.webContents.capturePage()).toPNG());
+    }
+    nativeTheme.themeSource = 'dark';
+    await wait(300);
+    const darkBg = await bgNow();
+    check('светлая и тёмная палитры по prefers-color-scheme', lightBg === '#f6f7fb' && darkBg === '#0f1117', `${lightBg} ${darkBg}`);
+    await ui(`document.querySelector('#settings-btn').click()`);
+    await wait(500);
+    const themeOptions = await ui(`(() => { const t = document.querySelector('.theme-select'); const v = [...t.options].map((o) => o.value).join(); t.value = 'system'; [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Сохранить').click(); return v; })()`);
+    await wait(400);
+    check('настройка «Тема» сохраняется', themeOptions === 'dark,light,system' && savedSettings.at(-1)?.theme === 'system', `${themeOptions} ${savedSettings.at(-1)?.theme}`);
+
+    console.log('\n[45] Статусная строка, !команда, доступность (ADR 0074)');
+    await wait(300);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await wait(300);
+    const status = await ui(`(() => { const s = document.querySelector('#statusline'); return { role: s.getAttribute('role'), text: s.textContent, branch: Boolean(s.querySelector('.status-branch')), mode: Boolean(s.querySelector('.status-mode')) }; })()`);
+    check('статусная строка: модель · режим · ветка, role=status', status.role === 'status' && /⎇ dev/.test(status.text) && status.mode, JSON.stringify(status));
+    await ui(`document.querySelector('#settings-btn').click()`);
+    await wait(500);
+    await ui(`(() => { document.querySelector('.statusline-item[data-item=context]').checked = true; document.querySelector('.statusline-item[data-item=cost]').checked = false; [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Сохранить').click(); })()`);
+    await wait(400);
+    check('состав строки сохраняется', JSON.stringify(savedSettings.at(-1)?.statusLine) === JSON.stringify(['model', 'mode', 'branch', 'context']), JSON.stringify(savedSettings.at(-1)?.statusLine));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '!npm test'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await wait(500);
+    check('!команда уходит в main без модели', directCalls.length === 1 && directCalls[0].command === 'npm test' && chatStarts.every((c) => c.text !== '!npm test'), JSON.stringify(directCalls));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; })()`);
+    // Окно: dialog с подписью, фокус внутри, Esc закрывает и возвращает фокус.
+    await ui(`document.querySelector('#settings-btn').focus(); document.querySelector('#settings-btn').click()`);
+    await wait(500);
+    const dlg = await ui(`(() => { const m = document.querySelector('.modal'); const id = m.getAttribute('aria-labelledby'); return { role: m.getAttribute('role'), modal: m.getAttribute('aria-modal'), title: document.getElementById(id)?.textContent, inside: m.contains(document.activeElement) }; })()`);
+    check('окно — role=dialog, aria-modal, подпись, фокус внутри', dlg.role === 'dialog' && dlg.modal === 'true' && dlg.title === 'Настройки' && dlg.inside, JSON.stringify(dlg));
+    await ui(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await wait(200);
+    const after = await ui(`({ open: Boolean(document.querySelector('.modal-backdrop')), focus: document.activeElement?.id })`);
+    check('Esc закрывает окно, фокус возвращается на кнопку', !after.open && after.focus === 'settings-btn', JSON.stringify(after));
+    const labels = await ui(`['settings-btn', 'attach', 'send', 'stop'].every((id) => document.getElementById(id)?.getAttribute('aria-label'))`);
+    check('кнопки-значки подписаны для читалок экрана', labels === true);
     await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; })()`);
   } catch (err) {
     fail += 1;

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, Notification } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, Notification, nativeTheme } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets, secretBox } from './lib/config.js';
-import { titleBarOptions } from './lib/window.js';
+import { titleBarOptions, windowColors, normalizeTheme } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
@@ -19,7 +19,7 @@ import { listAgentDefs } from './lib/agent-defs.js';
 import { normalizeShellSandbox } from './lib/shell-sandbox.js';
 import { createOAuthStore } from './lib/mcp-oauth.js';
 import { listTrash, restoreFromTrash, purgeTrash } from './lib/trash.js';
-import { disposeBackground } from './lib/tools/shell.js';
+import { disposeBackground, execute as executeShell } from './lib/tools/shell.js';
 import { normalizeRoots } from './lib/workroots.js';
 import { listConnectors, connectorServerConfig } from './lib/connectors.js';
 import { sessionResults, previewResult, resultFile } from './lib/results.js';
@@ -35,6 +35,7 @@ import { listPackages, packageDirs, packageHooks, packageMcpServers, installPack
 import { listRoles, installRole } from './lib/roles.js';
 import { wrapData } from './lib/injection.js';
 import { localConnectors } from './lib/local-connectors.js';
+import { currentBranch } from './lib/git-guard.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -341,8 +342,8 @@ function openBoardWindow(board, focus = '') {
     height: 900,
     minWidth: 1000,
     minHeight: 640,
-    backgroundColor: '#0f1117',
-    ...titleBarOptions(),
+    backgroundColor: windowColors(nativeTheme.shouldUseDarkColors).background,
+    ...titleBarOptions(process.platform, { dark: nativeTheme.shouldUseDarkColors }),
     title: `MAI Code — ${titles[board] || board}`,
     icon: path.join(__dirname, '..', 'assets', 'icon.ico'),
     autoHideMenuBar: true,
@@ -365,14 +366,30 @@ function openBoardWindow(board, focus = '') {
   return win.id;
 }
 
+/** Тема (CC7.16, ADR 0074): CSS следует prefers-color-scheme, а его задаёт nativeTheme. */
+function applyTheme(theme) {
+  nativeTheme.themeSource = normalizeTheme(theme);
+}
+nativeTheme.on('updated', () => {
+  const colors = windowColors(nativeTheme.shouldUseDarkColors);
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.setBackgroundColor(colors.background);
+      if (process.platform !== 'darwin') win.setTitleBarOverlay?.({ color: colors.color, symbolColor: colors.symbolColor });
+    } catch {
+      /* окно без полосы заголовка (PDF, браузер агента) */
+    }
+  }
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
     minWidth: 980,
     minHeight: 640,
-    backgroundColor: '#0f1117',
-    ...titleBarOptions(),
+    backgroundColor: windowColors(nativeTheme.shouldUseDarkColors).background,
+    ...titleBarOptions(process.platform, { dark: nativeTheme.shouldUseDarkColors }),
     title: 'MAI Code',
     icon: path.join(__dirname, '..', 'assets', 'icon.ico'),
     autoHideMenuBar: true,
@@ -409,6 +426,7 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('[secrets] не удалось зашифровать ключи:', err?.message || err);
   }
+  applyTheme(loadSettings().theme);
   createWindow();
   const settings = loadSettings();
   emitLog('MAI Code запущен', { attributes: { platform: process.platform, version: app.getVersion() } });
@@ -535,6 +553,7 @@ ipcMain.handle('settings:save', async (_e, patch) => {
   delete clean.baseURL;
   delete clean.model;
   const next = saveSettings(clean);
+  if ('theme' in (patch || {})) applyTheme(next.theme);
   if (patch.mcpServers) await mcp.sync(mcpConfigs(next.projectDir));
   return publicSettings();
 });
@@ -1187,6 +1206,41 @@ ipcMain.handle('sessions:rename', (_e, payload = {}) => {
 ipcMain.handle('sessions:fork', (_e, payload = {}) => {
   const session = forkSession(payload.id, { upTo: Number.isInteger(payload.upTo) ? payload.upTo : null });
   return session ? { ok: true, id: session.id, title: session.title } : { ok: false, error: 'Нет такого чата' };
+});
+
+// Ветка git для статусной строки (CC7.12).
+ipcMain.handle('git:branch', (_e, projectDir) => {
+  try {
+    return currentBranch(String(projectDir || loadSettings().projectDir || '')) || '';
+  } catch {
+    return '';
+  }
+});
+
+// `!команда` (CC7.10, ADR 0074): пользователь сам запускает команду в папке проекта,
+// без модели; вывод — в историю чата, агент увидит его следующим ходом.
+// Guardrails действуют и здесь. Только admin: это выполнение на машине.
+ipcMain.handle('shell:direct', async (event, payload = {}) => {
+  const command = String(payload.command || '').trim();
+  const session = getSession(payload.sessionId);
+  if (!command) return { ok: false, error: 'Пустая команда' };
+  if (!session) return { ok: false, error: 'Нет такого чата' };
+  const projectDir = session.projectDir || loadSettings().projectDir;
+  if (!projectDir || !fs.existsSync(projectDir)) return { ok: false, error: 'Сначала выберите папку проекта' };
+  const guard = checkCommand(command, { guardrails: loadSettings().guardrails });
+  if (!guard.allowed) return { ok: false, error: `Guardrails заблокировали команду: ${guard.reason}` };
+  const output = await executeShell(command, projectDir, {});
+  audit({ at: new Date().toISOString(), tool: 'shell:direct', source: 'user', cls: 'exec', subject: command.slice(0, 300), decision: 'allow' });
+  const fresh = getSession(session.id);
+  fresh.messages.push({
+    role: 'user',
+    content: `Я сам выполнил команду в папке проекта (без тебя), вот вывод — учти его:\n\n${output}`,
+    display: `!${command}\n\n${output.length > 4000 ? `${output.slice(0, 4000)}\n…` : output}`,
+    direct: true,
+  });
+  if (!fresh.title || fresh.title === 'Новый чат') fresh.title = `!${command}`.slice(0, 60);
+  saveSession(fresh);
+  return { ok: true, output };
 });
 
 // Экспорт и импорт чата файлом (CC6.9): JSON с историей, без чекпоинтов и вложений.

@@ -53,6 +53,8 @@ export const IPC_SCHEMAS = {
   'packages:uninstall': [S],
   'roles:install': [S],
   'sessions:rename': [{ id: S, title: S }],
+  'shell:direct': [{ sessionId: S, command: S }],
+  'git:branch': [S_],
   'sessions:fork': [{ id: S, upTo: ANY }],
   'sessions:exportFile': [S],
   'connectors:localToggle': [{ id: S, enabled: B }],
