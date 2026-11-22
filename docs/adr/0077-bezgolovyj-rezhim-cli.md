@@ -39,6 +39,9 @@ CI, cron и цепочек команд нужен такой же запуск 
 - `bin/mai.mjs` (`"bin": { "mai": … }`) — запуск из терминала через Electron из
   `node_modules`; на Linux без дисплея добавляет `--ozone-platform=headless`.
   Флаги Chromium ставятся после пути приложения, иначе перезапуск их теряет.
+  `-p -` (задача из stdin) читает лаунчер и передаёт файлом
+  (`MAI_CLI_PROMPT_FILE`): главный процесс Electron на Windows stdin не
+  получает. Найдено падением smoke-cli на Windows CI.
   Установленное приложение: `"MAI Code.exe" --cli -p "…"`.
 
 ## Альтернативы

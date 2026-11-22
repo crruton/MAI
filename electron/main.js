@@ -1774,7 +1774,9 @@ async function runCli(opts) {
     return 2;
   }
   const started = Date.now();
-  const prompt = opts.fromStdin ? (await readStdin()).trim() : opts.prompt;
+  // stdin: лаунчер `mai` кладёт его в файл (Electron на Windows stdin не читает).
+  const fromFile = process.env.MAI_CLI_PROMPT_FILE && fs.existsSync(process.env.MAI_CLI_PROMPT_FILE) ? fs.readFileSync(process.env.MAI_CLI_PROMPT_FILE, 'utf8') : null;
+  const prompt = opts.fromStdin ? (fromFile ?? (await readStdin())).trim() : opts.prompt;
   if (!prompt) {
     err('mai: пустая задача');
     return 2;

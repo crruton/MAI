@@ -66,11 +66,14 @@ fs.writeFileSync(
 );
 setTrust(data, project, 'trusted');
 
+// Через лаунчер `mai` (stdin читает он) или напрямую через Electron.
 const run = (args, { stdin = null } = {}) =>
   new Promise((resolve) => {
-    const child = spawn(electronPath, ['--no-sandbox', `--user-data-dir=${data}`, root, '--cli', ...args], {
+    const cmd = stdin !== null ? process.execPath : electronPath;
+    const argv = stdin !== null ? [path.join(root, 'bin', 'mai.mjs'), `--user-data-dir=${data}`, ...args] : ['--no-sandbox', `--user-data-dir=${data}`, root, '--cli', ...args];
+    const child = spawn(cmd, argv, {
       cwd: project,
-      env: { ...process.env, ELECTRON_DISABLE_SANDBOX: '1', MAI_CLI_CWD: project },
+      env: { ...process.env, ELECTRON_DISABLE_SANDBOX: '1', MAI_NO_SANDBOX: '1', MAI_CLI_CWD: project },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
