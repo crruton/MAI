@@ -303,6 +303,24 @@ ipcMain.handle('connectors:remove', (_e, id) => {
 });
 // Глубина рассуждений (раздел [38]).
 ipcMain.handle('models:caps', (_e, key) => ({ id: key, tools: true, vision: false, reasoning: true, effort: ['low', 'medium', 'high'], temperature: false, transport: 'auto', context: null }));
+// Проекты (раздел [40]).
+const projCalls = [];
+let projects = [{ id: 'pr1', name: 'Отчётность', primaryDir: '/p/reports', extraDirs: ['/p/exports'], instructions: 'для финдиректора', connectors: ['gmail'], kind: 'task' }];
+let activeProject = null;
+let picks = ['/p/new-main', '/p/new-extra'];
+ipcMain.handle('projects:list', () => ({ projects, active: activeProject }));
+ipcMain.handle('projects:pickDir', () => picks.shift() || null);
+ipcMain.handle('projects:save', (_e, payload) => {
+  projCalls.push({ type: 'save', ...payload });
+  const project = { ...payload, id: payload.id || 'pr2', extraDirs: payload.extraDirs || [], connectors: payload.connectors || [] };
+  projects = [...projects.filter((p) => p.id !== project.id), project];
+  return { ok: true, project };
+});
+ipcMain.handle('projects:activate', (_e, id) => {
+  projCalls.push({ type: 'activate', id });
+  activeProject = id;
+  return { ok: true, project: projects.find((p) => p.id === id) || null };
+});
 const savedSettings = [];
 ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
@@ -1410,10 +1428,10 @@ app.whenReady().then(async () => {
     await win.webContents.executeJavaScript(`document.querySelector('#settings-btn').click()`);
     await new Promise((r) => setTimeout(r, 600));
     const box = await win.webContents.executeJavaScript(`(() => {
-      const d = document.querySelector('.shell-sandbox-docker');
+      const d = document.querySelector('.shell-sandbox-mode');
       if (!d) return { found: false };
-      const before = { docker: d.checked, network: document.querySelector('.shell-sandbox-network').value };
-      d.checked = true;
+      const before = { docker: d.value !== 'off', network: document.querySelector('.shell-sandbox-network').value, options: [...d.options].map((o) => o.value).join() };
+      d.value = 'docker';
       document.querySelector('.shell-sandbox-image').value = 'python:3.12-slim';
       document.querySelector('.shell-sandbox-network').value = 'bridge';
       document.querySelector('.shell-sandbox-host').value = 'git *\\n\\n  gh *  ';
@@ -1421,7 +1439,7 @@ app.whenReady().then(async () => {
       return { found: true, before };
     })()`);
     check('раздел «Команды агента» в настройках', box.found === true, JSON.stringify(box));
-    check('по умолчанию выключено, сеть выключена', box.before?.docker === false && box.before?.network === 'none', JSON.stringify(box));
+    check('по умолчанию выключено, сеть выключена; есть «только в Задаче»', box.before?.docker === false && box.before?.network === 'none' && box.before?.options === 'off,docker,tasks', JSON.stringify(box));
     await new Promise((r) => setTimeout(r, 400));
     const sb = savedSettings.at(-1)?.shellSandbox;
     check('сохраняется mode/image/network/hostCommands', sb?.mode === 'docker' && sb?.image === 'python:3.12-slim' && sb?.network === 'bridge' && sb?.hostCommands?.join('|') === 'git *|gh *', JSON.stringify(sb));
@@ -1651,6 +1669,26 @@ app.whenReady().then(async () => {
     check('/review 42: gh pr diff 42, только чтение, файл:строка', /gh pr diff 42/.test(review?.text) && /файлы не меняй/.test(review?.text) && /`файл:строка`/.test(review?.text));
     const local = await slash('/review');
     check('/review без номера — git diff HEAD', /git diff HEAD/.test(local?.text));
+
+    console.log('\n[40] Проекты (ADR 0065)');
+    await win.webContents.executeJavaScript(`document.querySelector('#projects-btn').click()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const prow = await win.webContents.executeJavaScript(`document.querySelector('.project-row')?.textContent || ''`);
+    check('проект в списке: папки, вид, коннекторы', /Отчётность/.test(prow) && /\/p\/reports \+ ещё 1/.test(prow) && /Задача/.test(prow) && /gmail/.test(prow), prow);
+    await win.webContents.executeJavaScript(`document.querySelector('.project-open').click()`);
+    await new Promise((r) => setTimeout(r, 500));
+    check('«Открыть» — проект в main и вид «Задача» для нового чата', projCalls.some((c) => c.type === 'activate' && c.id === 'pr1') && kindCalls.some((c) => c.kind === 'task' && !c.sessionId), JSON.stringify({ projCalls, kindCalls: kindCalls.slice(-2) }));
+    await win.webContents.executeJavaScript(`document.querySelector('.project-new').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    await win.webContents.executeJavaScript(`document.querySelector('.project-pick').click()`);
+    await new Promise((r) => setTimeout(r, 200));
+    await win.webContents.executeJavaScript(`document.querySelector('.project-add-dir').click()`);
+    await new Promise((r) => setTimeout(r, 200));
+    await win.webContents.executeJavaScript(`(() => { document.querySelector('.project-name-input').value = 'Новый'; document.querySelector('.project-instructions').value = 'правила'; document.querySelector('.project-kind').value = 'code'; document.querySelector('.project-sandbox').value = 'docker'; document.querySelector('.project-save').click(); })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const savedProject = projCalls.find((c) => c.type === 'save');
+    check('новый проект: папки из диалога, инструкции, вид', savedProject?.name === 'Новый' && savedProject.primaryDir === '/p/new-main' && savedProject.extraDirs.join() === '/p/new-extra' && savedProject.instructions === 'правила' && savedProject.kind === 'code' && savedProject.sandbox === 'docker', JSON.stringify(savedProject));
+    await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

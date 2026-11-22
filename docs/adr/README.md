@@ -77,3 +77,10 @@ ADR фиксируют решения, которые дорого менять:
 | [0059](0059-git-potok.md) | Git-поток: защита веток, /commit, /review | accepted | 2026-11-21 |
 | [0060](0060-shemy-ipc.md) | Проверка данных IPC | accepted | 2026-11-21 |
 | [0061](0061-ostanovka-agenta.md) | Остановка агента: прерываемые инструменты и сторож простоя | accepted | 2026-11-22 |
+| [0062](0062-doski-i-artefakty-bez-poteri.md) | Доски и артефакты без потери правок | accepted | 2026-11-22 |
+| [0063](0063-trassirovka-agenta.md) | Трассировка цикла агента | accepted | 2026-11-22 |
+| [0064](0064-revizor-subagent.md) | Ревизор знает режим и проверяет файлы сам | accepted | 2026-11-22 |
+| [0065](0065-proekty.md) | Проекты | accepted | 2026-11-22 |
+| [0066](0066-prezentacii-pptx.md) | Презентации PPTX | accepted | 2026-11-22 |
+| [0067](0067-pdf-iz-markdown.md) | PDF из Markdown через Chromium | accepted | 2026-11-22 |
+| [0068](0068-prevyu-dokumenta-dlya-samoproverki.md) | Превью документа для самопроверки агентом | accepted | 2026-11-22 |

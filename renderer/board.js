@@ -785,7 +785,14 @@ function bindKanban() {
 
 async function saveSection(section) {
   try {
-    const data = await api.boards.save({ projectDir: state.projectDir, section, data: state.boards[section] });
+    const data = await api.boards.save({ projectDir: state.projectDir, section, data: state.boards[section], rev: state.boards.revs?.[section] ?? 0 });
+    if (data?.conflict) {
+      // Другое окно уже сохранило эту секцию: показываем свежую версию, правку повторить вручную.
+      state.boards = data.boards;
+      render();
+      toast('Доску изменили в другом окне — показана свежая версия, повторите правку', 'err');
+      return false;
+    }
     state.boards = data;
     return true;
   } catch (err) {

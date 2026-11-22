@@ -81,7 +81,8 @@ export const shellTools = [
       const cwd = resolveCwd(ctx, args.cwd);
       const command = effectiveCommand(ctx, args);
       // Песочница для команд (ADR 0040): docker, хост по списку или отказ, если Docker недоступен.
-      const plan = sandboxPlan(command, ctx.shellSandbox, { dockerAvailable: Boolean(ctx.dockerAvailable?.()) });
+      // Docker проверяется, только если песочница действительно нужна.
+      const plan = sandboxPlan(command, ctx.shellSandbox, { dockerAvailable: ctx.shellSandbox?.mode === 'docker' && Boolean(ctx.dockerAvailable?.()) });
       if (plan.where === 'blocked') return `$ ${command}\n\n${plan.why}`;
       const container =
         plan.where === 'docker'

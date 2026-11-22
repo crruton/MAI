@@ -69,6 +69,29 @@ function fakeClient(script, bodies) {
   });
 }
 
+/** Клиент: основной сценарий и сценарий субагентов по типу из системного промпта. */
+const routed = (mainScript, subScript, log) => {
+  let mi = 0;
+  const si = {};
+  return () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          const system = body.messages[0].content;
+          const sub = /Ты — субагент «(\w+)»/.exec(system)?.[1];
+          const task = body.messages[1]?.content || '';
+          log.push({ sub: sub || null, tools: body.tools.map((t) => t.function.name), at: Date.now(), messages: body.messages });
+          if (!sub) return stream(mainScript[Math.min(mi++, mainScript.length - 1)]);
+          const key = `${sub}:${task}`;
+          si[key] = (si[key] || 0) + 1;
+          await new Promise((r) => setTimeout(r, 150)); // чтобы параллельность была видна по времени
+          return stream(subScript(sub, task, si[key]));
+        },
+      },
+    },
+  });
+};
+
 function fakeMcp() {
   const calls = [];
   return {
@@ -657,27 +680,6 @@ console.log('\n[17] Субагенты: свой контекст, итог ро
 {
   fs.writeFileSync(path.join(project, 'sub.txt'), 'исходный', 'utf8');
   // Один фейковый провайдер: субагента узнаём по системному промпту.
-  const routed = (mainScript, subScript, log) => {
-    let mi = 0;
-    const si = {};
-    return () => ({
-      chat: {
-        completions: {
-          create: async (body) => {
-            const system = body.messages[0].content;
-            const sub = /Ты — субагент «(\w+)»/.exec(system)?.[1];
-            const task = body.messages[1]?.content || '';
-            log.push({ sub: sub || null, tools: body.tools.map((t) => t.function.name), at: Date.now(), messages: body.messages });
-            if (!sub) return stream(mainScript[Math.min(mi++, mainScript.length - 1)]);
-            const key = `${sub}:${task}`;
-            si[key] = (si[key] || 0) + 1;
-            await new Promise((r) => setTimeout(r, 150)); // чтобы параллельность была видна по времени
-            return stream(subScript(sub, task, si[key]));
-          },
-        },
-      },
-    });
-  };
   const log = [];
   const history = await runAgent(
     base({
@@ -1070,6 +1072,123 @@ console.log('\n[25] Сторож простоя: молчащий шлюз пр�
   );
   check("живой ответ не прерывается", history.at(-1)?.content === "абв", String(history.at(-1)?.content));
 }
+console.log('\n[26] Трассировка: прогон → шаг → инструмент → субагент (F22)');
+{
+  const { createTracer } = await import('../electron/lib/tracer.js');
+  const spans = [];
+  const tracer = createTracer((name, sp) => spans.push({ name, ...sp }));
+  fs.writeFileSync(path.join(project, 'trace.txt'), 'x', 'utf8');
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'x' }],
+      mcp: fakeMcp(),
+      tracer,
+      agentDefs: BUILTIN_AGENTS,
+      clientFactory: routed(
+        [{ calls: [{ name: 'read_file', args: { path: 'trace.txt' } }, { name: 'agent', args: { type: 'explore', prompt: 'найди' } }] }, { text: 'готово' }],
+        () => ({ text: 'нашёл' }),
+        [],
+      ),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const by = (n) => spans.filter((s) => s.name === n);
+  const run = by('agent.run')[0];
+  const tools = by('agent.tool');
+  const read = tools.find((t) => t.attributes['agent.tool'] === 'read_file');
+  const agentTool = tools.find((t) => t.attributes['agent.tool'] === 'agent');
+  const sub = by('agent.subagent')[0];
+  check('один прогон, шаги — его дети', run && !run.parentSpanId && by('agent.step').length >= 2 && by('agent.step').every((s) => s.parentSpanId === run.spanId || s.parentSpanId === sub?.spanId), JSON.stringify(spans.map((s) => [s.name, s.parentSpanId?.slice(0, 4)])));
+  check('инструмент: класс и решение PolicyEngine', read?.attributes['agent.tool.class'] === 'read' && read.attributes['agent.decision'] === 'allow' && read.attributes['agent.tool.ok'] === true, JSON.stringify(read?.attributes));
+  check('субагент — внутри спана инструмента agent', sub && sub.parentSpanId === agentTool?.spanId && sub.attributes['agent.subagent'] === 'explore');
+  check('всё в одном trace', spans.every((s) => s.traceId === tracer.traceId));
+}
+
+console.log('\n[27] Ревизор: режим и проверка изменённых файлов сам (F5)');
+{
+  fs.writeFileSync(path.join(project, 'rev.txt'), 'старое', 'utf8');
+  const reviewerBodies = [];
+  let mainStep = 0;
+  let reviews = 0;
+  const factory = (options) => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          const system = body.messages[0].content;
+          if (options.baseURL === 'http://reviewer') {
+            reviewerBodies.push(JSON.parse(JSON.stringify(body)));
+            if (!body.stream) return { choices: [{ message: { content: '{"verdict":"approve","reason":"ок"}' } }] };
+            // Ревизор-субагент: сначала читает файл, потом выносит вердикт.
+            const sawTool = body.messages.some((m) => m.role === 'tool');
+            if (!sawTool) return stream({ calls: [{ name: 'read_file', args: { path: 'rev.txt' } }] });
+            reviews += 1;
+            return stream({ text: reviews === 1 ? '{"verdict":"revise","reason":"в файле опечатка","instructions":"исправь слово"}' : '{"verdict":"approve","reason":"теперь верно"}' });
+          }
+          void system;
+          mainStep += 1;
+          if (mainStep === 1) return stream({ calls: [{ name: 'read_file', args: { path: 'rev.txt' } }] });
+          if (mainStep === 2) return stream({ calls: [{ name: 'write_file', args: { path: 'rev.txt', content: 'новое' } }] });
+          return stream({ text: `готово ${mainStep}` });
+        },
+      },
+    },
+  });
+  const history = await runAgent(
+    base({
+      settings: { maxIterations: 10, permissions: {} },
+      messages: [{ role: 'user', content: 'поправь файл' }],
+      mcp: fakeMcp(),
+      clientFactory: factory,
+      reviewer: { provider: { baseURL: 'http://reviewer', apiKey: 'r', name: 'rev' }, model: 'gpt-5', maxRounds: 2 },
+      policy: { getMode: () => 'bypass', getRules: () => ({}) },
+    }),
+  );
+  const subBodies = reviewerBodies.filter((b) => b.stream);
+  check('ревизор-субагент читал изменённый файл', subBodies.some((b) => b.tools?.some((t) => t.function.name === 'read_file')) && subBodies.every((b) => !b.tools?.some((t) => ['write_file', 'edit_file', 'run_shell', 'delete_file'].includes(t.function.name))), JSON.stringify(subBodies.map((b) => (b.tools || []).map((t) => t.function.name))));
+  check('в задании ревизора — список изменённых файлов', /Изменённые файлы:\n- rev\.txt/.test(subBodies[0]?.messages?.[1]?.content || ''));
+  check('замечание ревизора — отдельной ролью, затем принято', history.some((m) => m.role === 'review' && /опечатка/.test(m.content)) && reviews === 2, JSON.stringify(history.map((m) => m.role)));
+  // «План»: без изменений — обычный ревизор с контекстом режима, без temperature у gpt-5.
+  reviewerBodies.length = 0;
+  mainStep = 99;
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'план' }],
+      mcp: fakeMcp(),
+      clientFactory: factory,
+      reviewer: { provider: { baseURL: 'http://reviewer', apiKey: 'r', name: 'rev' }, model: 'gpt-5', maxRounds: 1 },
+      policy: { getMode: () => 'plan', getRules: () => ({}) },
+    }),
+  );
+  const plain = reviewerBodies.find((b) => !b.stream);
+  check('в «Плане» ревизор знает режим и не требует правок кода', /Режим «План»/.test(plain?.messages?.[0]?.content || '') && /Не требуй правок кода/.test(plain.messages[0].content));
+  check('gpt-5: без temperature', plain && plain.temperature === undefined, JSON.stringify(plain && Object.keys(plain)));
+}
+
+console.log('\n[28] Проект: инструкции в промпте и только его коннекторы (CW1.5)');
+{
+  const bodies = [];
+  const mcp2 = {
+    status: () => [{ name: 'gmail', status: 'ready', tools: ['read'] }, { name: 'slack', status: 'ready', tools: ['post'] }],
+    toolSchemas: () => [
+      { type: 'function', function: { name: 'mcp__gmail__read', description: 'r', parameters: { type: 'object' } }, annotations: { readOnlyHint: true } },
+      { type: 'function', function: { name: 'mcp__slack__post', description: 'p', parameters: { type: 'object' } }, annotations: {} },
+    ],
+    call: async () => 'ok',
+  };
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'x' }],
+      mcp: mcp2,
+      project: { id: 'p1', name: 'Отчётность', instructions: 'ОСОБОЕ-ПРАВИЛО-ПРОЕКТА', connectors: ['gmail'] },
+      clientFactory: fakeClient([{ text: 'ок' }], bodies),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const tools = (bodies[0].tools || []).map((t) => t.function.name);
+  check('инструкции проекта в системном промпте', /# Проект «Отчётность»/.test(bodies[0].messages[0].content) && /ОСОБОЕ-ПРАВИЛО-ПРОЕКТА/.test(bodies[0].messages[0].content));
+  check('только коннекторы проекта', tools.includes('mcp__gmail__read') && !tools.includes('mcp__slack__post') && tools.includes('read_file'), tools.join(','));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

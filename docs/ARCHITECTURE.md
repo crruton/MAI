@@ -393,6 +393,16 @@ ADR 0049. `electron/lib/documents.js`: `buildDocx`, `buildXlsx` (`sheetsToXlsx` 
 `create_document` (write, precheck формата, preview текста), `read_document`
 (read; есть в наборе субагентов explore/plan).
 
+PDF (ADR 0067): `export/html.js` — `markdownToHtml` (A4, CSP); `pdf-render.js` —
+`renderPdf(BrowserWindow, html)`: скрытое окно без JS и сети, `printToPDF`.
+В инструмент попадает как `ctx.renderPdf` из `agentSettings` main.
+
+Превью (ADR 0068): `preview_document` → `documentHtml` (docx/pptx/xlsx/csv/md →
+HTML, слайды — `slidesToHtml`) → `ctx.renderPng` (`renderPng` в `pdf-render.js`:
+окно вне экрана, страницы A4 в PNG); PDF — `pdftoppm`. Инструмент возвращает
+`{ content, images }`, `runToolCall` отдаёт `images`, цикл агента прикладывает
+их к сообщению инструмента (`attachToolImages`).
+
 ### Результаты задачи
 
 ADR 0047. `touchedFiles(dataDir, sessionId)` (checkpoints.js) →
@@ -461,6 +471,36 @@ ADR 0038. `electron/lib/settings-levels.js`: `readManaged()` (файл орга�
 `scope: 'local'`; `permissions:explain({ sessionId, tool, subject })` возвращает
 решение `evaluate` и уровни найденного правила. Ответ на запрос
 `remember: 'local'` пишет правило в `settings.local.json` (admin, доверенная папка).
+
+## Проекты
+
+ADR 0065. `createProjectStore(dataDir)` (`projects.json`, `checkDir`),
+`projectPrompt`, `connectorAllowed` в `projects.js`. main: `activeProjectFor(dir)`
+по `settings.activeProject`; `chat:start` передаёт `project` в `runAgent` и
+объединяет его `extraDirs` с папками чата. IPC `projects:list` (any),
+`projects:pickDir | save | remove | activate` (admin).
+
+## Ревизор
+
+ADR 0064. После финального ответа: `touched` (файлы `write`/`delete` прогона)
+не пуст и `reviewer.verify !== false` — `runAgent` субагента `reviewer`
+(`REVIEWER_TOOLS`, режим `plan`, `VERIFY_PROMPT`), вердикт — `parseVerdict`;
+иначе `reviewAnswer({ mode, kind, requestOptions })`.
+
+## Трассировка агента
+
+ADR 0063. `runAgent` — обёртка над `runAgentInner`: спан `agent.run`
+(`agent.subagent` для субагента, родитель — `parentSpan`), внутри — `agent.step`
+вокруг запроса с повторами и `agent.tool` вокруг `runToolCall` (спан доступен
+инструменту как `ctx.span`). `tracer` — из `agentTracer()` в main
+(`createTracer(emitSpan)` или `NO_TRACER`).
+
+## Доски и артефакты
+
+ADR 0062. `saveBoards` — атомарно, `revs` по секциям; `saveBoardSection(dir,
+section, value, rev)` возвращает `{ conflict, boards }` при чужой записи.
+`artifacts.js`: `withIndexLock` (через `file-lock.js`) вокруг изменений индекса,
+`gcBlobs` после `deleteArtifact`.
 
 ## Проверка данных IPC
 
@@ -541,6 +581,8 @@ IPC-каналы: `ocr:status`, `ocr:recognize`. Подробности — [OCR
 | `markdown.js` | разбор Markdown в блоки и Markdown → простой текст |
 | `docx.js` | WordprocessingML: заголовки, таблицы, код моношрифтом |
 | `xlsx.js` | SpreadsheetML: каждая таблица — отдельный лист |
+| `pptx.js` | PresentationML: слайды из списка или Markdown (ADR 0066) |
+| `html.js` | Markdown → HTML для печати в PDF (ADR 0067) |
 | `index.js` | выбор формата, безопасное имя файла, сборка чата |
 
 DOCX и XLSX собираются без внешних библиотек: это ZIP с XML внутри, а `zlib`

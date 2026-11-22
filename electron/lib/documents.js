@@ -11,6 +11,7 @@
 import { readZip } from './export/unzip.js';
 import { markdownToDocx } from './export/docx.js';
 import { sheetsToXlsx, markdownToXlsx } from './export/xlsx.js';
+import { slidesToPptx, markdownToSlides } from './export/pptx.js';
 
 const decode = (text) =>
   String(text)
@@ -133,6 +134,31 @@ export function sheetsToText(sheets) {
     .map((sheet) => {
       const lines = sheet.rows.map((row, i) => `${i + 1}: ${row.map((v) => (typeof v === 'string' && /[;\n]/.test(v) ? JSON.stringify(v) : String(v))).join(' ; ')}`);
       return `## Лист «${sheet.name}» (строк: ${sheet.rows.length}${sheet.truncated ? ', показаны первые' : ''})\n${lines.join('\n')}`;
+    })
+    .join('\n\n');
+}
+
+/** Презентация (CW2.3, ADR 0066): слайды или Markdown (# / ## — слайд, «- » — пункты). */
+export function buildPptx({ slides, markdown, title } = {}) {
+  const list = Array.isArray(slides) && slides.length ? slides : markdownToSlides(markdown);
+  return slidesToPptx(list.length ? list : [{ title: title || 'Презентация' }], { title });
+}
+
+/** PPTX → Markdown по слайдам: заголовок и текст фигур в порядке слайдов. */
+export function pptxToMarkdown(buffer) {
+  const files = readZip(buffer);
+  const slides = [...files.keys()].filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n)).sort((a, b) => Number(/(\d+)\.xml$/.exec(a)[1]) - Number(/(\d+)\.xml$/.exec(b)[1]));
+  if (!slides.length) throw new Error('В файле нет слайдов — это не PPTX');
+  return slides
+    .map((name, i) => {
+      const xml = files.get(name).toString('utf8');
+      const shapes = [...xml.matchAll(/<p:sp>([\s\S]*?)<\/p:sp>/g)].map((m) =>
+        [...m[1].matchAll(/<a:p>([\s\S]*?)<\/a:p>/g)]
+          .map((p) => [...p[1].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((t) => decode(t[1])).join(''))
+          .filter((t) => t.trim()),
+      ).filter((lines) => lines.length);
+      const [title, ...rest] = shapes;
+      return [`## Слайд ${i + 1}: ${title?.join(' ') || 'без заголовка'}`, ...rest.flat().map((t) => `- ${t}`)].join('\n');
     })
     .join('\n\n');
 }

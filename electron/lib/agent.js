@@ -21,12 +21,15 @@ import { todoTools } from './tools/todo.js';
 import { nestedInstructions, projectInstructions } from './instructions.js';
 import { agentToolSchema, isReadOnlyDef, NEVER_FOR_SUBAGENT } from './agent-defs.js';
 import { listSkills, readAgents, readMemory } from './skills.js';
-import { reviewAnswer } from './reviewer.js';
+import { reviewAnswer, reviewContext, parseVerdict, VERIFY_PROMPT } from './reviewer.js';
 import { modePrompt } from './permissions.js';
-import { effectiveMode, mergeRules } from './policy.js';
+import { effectiveMode, mergeRules, classifyTool } from './policy.js';
 import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
 import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DELAYS } from './retry.js';
 import { modelCapabilities, requestOptions } from './capabilities.js';
+import { NO_TRACER } from './tracer.js';
+import { projectPrompt, connectorAllowed } from './projects.js';
+import { effectiveSandbox } from './shell-sandbox.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
 import { runToolCall, toolEntry } from './tool-runner.js';
 import { attachImages, attachToolImages, isImageRejected, supportsVision, isImageFile } from './vision.js';
@@ -46,6 +49,9 @@ const BASE_PROMPT = `Ты — MAI Code, агент для программиро
 - После изменений проверяй результат (тесты, сборка, линтер), если это возможно.
 - Не коммить в git и не удалять данные без явной просьбы.`;
 
+/** Инструменты ревизора-субагента (F5): только чтение. */
+const REVIEWER_TOOLS = ['read_file', 'read_document', 'preview_document', 'list_files', 'glob', 'grep'];
+
 /** Режим «Задача» (CW1.1, ADR 0046): работа с документами и данными, не с кодом. */
 const TASK_PROMPT = `Ты — MAI, помощник для рабочих задач на компьютере пользователя: документы, таблицы, заметки, отчёты, письма, разбор файлов.
 
@@ -53,7 +59,8 @@ const TASK_PROMPT = `Ты — MAI, помощник для рабочих зад
 - Отвечай по-русски, ясно и без жаргона программистов: пользователь может не быть разработчиком.
 - Сначала пойми задачу. Если не хватает важного (для кого документ, формат, срок, какие файлы брать), спроси через ask_user с вариантами.
 - Перед работой посмотри файлы в рабочих папках инструментами list_files и read_file. Не выдумывай содержимое файлов.
-- Документы Word и таблицы Excel создавай инструментом create_document (.docx из Markdown, .xlsx из листов с формулами), читай — read_document.
+- Документы Word, PDF, презентации PowerPoint и таблицы Excel создавай инструментом create_document (.docx и .pdf из Markdown, .pptx из слайдов, .xlsx из листов с формулами), читай — read_document.
+- Перед сдачей документа посмотри на него инструментом preview_document (если модель видит картинки): вёрстка, обрезанные таблицы, пустые слайды, опечатки в заголовках. Нашёл ошибку — исправь и посмотри снова.
 - Результат сохраняй файлом в рабочей папке и назови путь. Не перезаписывай файлы пользователя: создавай новый файл рядом (например, «отчёт (итог).md»), если тебя явно не попросили изменить исходный.
 - Удаляй только инструментом delete_file и только когда об этом попросили.
 - Для задачи из трёх шагов и больше веди список задач инструментом todo_write.
@@ -329,7 +336,28 @@ async function* abortableStream(stream, signal) {
   }
 }
 
-export async function runAgent({
+/**
+ * Прогон агента. Обёртка открывает спан прогона (F22, ADR 0063) и закрывает его
+ * при любом выходе; субагент вкладывается в спан вызвавшего его инструмента.
+ */
+export async function runAgent(options) {
+  const tracer = options.tracer || NO_TRACER;
+  const runSpan = tracer.start(
+    options.subagent ? 'agent.subagent' : 'agent.run',
+    { 'agent.model': options.model, 'agent.kind': options.kind || 'code', 'agent.subagent': options.subagent?.def?.name },
+    options.parentSpan || null,
+  );
+  try {
+    const history = await runAgentInner({ ...options, tracer, runSpan });
+    runSpan.end({ 'agent.messages': history.length, 'agent.stopped': Boolean(options.signal?.aborted) });
+    return history;
+  } catch (err) {
+    runSpan.end({}, options.signal?.aborted ? 'остановлено' : err?.message || String(err));
+    throw err;
+  }
+}
+
+async function runAgentInner({
   settings,
   provider,
   projectDir,
@@ -361,6 +389,10 @@ export async function runAgent({
   fallback = null,
   // Глубина рассуждений (CC7.11): '' — по умолчанию модели, low | medium | high.
   effort = '',
+  tracer = NO_TRACER,
+  runSpan = null,
+  // Проект Cowork (CW1.5, ADR 0065): инструкции и разрешённые коннекторы.
+  project = null,
 }) {
   let usingFallback = false;
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
@@ -398,6 +430,8 @@ export async function runAgent({
   const skillGrants = [];
   // Отметки «файл прочитан» живут весь прогон, а не одну итерацию (CC1.2).
   const readFiles = new Map();
+  // Изменённые за прогон файлы — ревизор проверит их сам (F5).
+  const touched = new Set();
   // Признаки prompt injection в прочитанном (CC2.10): до конца прогона «Авто» спрашивает про действия.
   let taint = null;
   const currentMode = () => effectiveMode(policy?.getMode ? policy.getMode() : permissionMode || settings.permissionMode, role);
@@ -468,6 +502,9 @@ export async function runAgent({
       kind,
       fallback: usingFallback ? null : fallback,
       effort,
+      tracer,
+      parentSpan: ctx.span || runSpan,
+      project,
       subagent: { def },
     });
     const final = [...subHistory].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '(субагент не вернул текст)';
@@ -482,7 +519,8 @@ export async function runAgent({
       : null;
 
   const buildTools = (mode) => {
-    const fromMcp = mcp.toolSchemas().map((schema) =>
+    // Проект (CW1.5): только его коннекторы.
+    const fromMcp = mcp.toolSchemas().filter((schema) => connectorAllowed(project, schema.function.name)).map((schema) =>
       toolEntry(schema, {
         source: 'mcp',
         annotations: schema.annotations,
@@ -549,6 +587,7 @@ export async function runAgent({
     const tools = buildTools(mode);
     const system =
       systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs, kind }) +
+      projectPrompt(project) +
       (subagent
         ? `\n\n# Ты — субагент «${subagent.def.name}»\n${subagent.def.prompt || ''}\nПользователь этот диалог не видит: родительский агент получит только твой последний ответ. ` +
           'Заверши работу одним итоговым сообщением: что найдено или сделано, пути файлов, что не удалось.'
@@ -725,6 +764,9 @@ export async function runAgent({
         await runTurn(buildRequest(false));
       }
     };
+    // Спан шага (F22): запрос к модели с повторами.
+    const stepSpan = tracer.start('agent.step', { 'agent.model': model, 'agent.iteration': iteration + 1 }, runSpan);
+    let retries = 0;
     try {
       // Повторы при временных сбоях (CC13.3) и запасная модель (CC13.2), ADR 0057.
       for (let retry = 0; ; retry += 1) {
@@ -740,6 +782,7 @@ export async function runAgent({
             emit({ type: 'notice', level: 'warn', text: `${model}: ${describeError(err)} — повтор через ${Math.round(wait / 1000)} с (${retry + 1} из ${RETRY_DELAYS.length})` });
             await sleep(wait, signal);
             resetTurn();
+            retries += 1;
             continue;
           }
           if (clean && fallback?.provider && !usingFallback && needsFallback(err)) {
@@ -762,7 +805,17 @@ export async function runAgent({
       }
       // Сторож оборвал поток: пустой ответ — не успех, а простой шлюза.
       if (guard.timedOut() && !signal.aborted) throw new Error('Модель не отвечала');
+      stepSpan.end({
+        'agent.model': model,
+        'agent.transport': useResponses ? 'responses' : 'chat',
+        'agent.retries': retries,
+        'agent.fallback': usingFallback,
+        'agent.tool_calls': validCalls.length,
+        'gen_ai.usage.input_tokens': turnUsage?.input ?? turnUsage?.prompt_tokens,
+        'gen_ai.usage.output_tokens': turnUsage?.output ?? turnUsage?.completion_tokens,
+      });
     } catch (err) {
+      stepSpan.end({ 'agent.model': model, 'agent.retries': retries }, signal.aborted ? 'остановлено' : err?.message || String(err));
       // Простой превращаем в понятную ошибку: иначе пользователь видит
       // «Request was aborted» и не понимает, что делать.
       if (guard.timedOut() && !signal.aborted) {
@@ -817,15 +870,51 @@ export async function runAgent({
         reviewRound += 1;
         emit({ type: 'review:start', round: reviewRound, model: reviewer.model || model });
         let verdict;
+        const reviewModel = reviewer.model || model;
+        const reviewCaps = modelCapabilities(reviewModel, reviewer.provider);
         try {
-          verdict = await reviewAnswer({
-            client: reviewerClient,
-            model: reviewer.model || model,
-            task,
-            answer: content,
-            signal,
-            temperature: 0,
-          });
+          if (touched.size && reviewer.verify !== false) {
+            // Ревизор-субагент (F5, ADR 0064): читает изменённые файлы сам, ничего не меняет.
+            const sub = await runAgent({
+              settings: { ...settings, maxIterations: 12 },
+              provider: reviewer.provider,
+              projectDir,
+              model: reviewModel,
+              messages: [
+                {
+                  role: 'user',
+                  content: `${VERIFY_PROMPT}\n${reviewContext({ mode: currentMode(), kind })}\n\nЗадача:\n${task.slice(0, 8000)}\n\nОтвет агента:\n${String(content).slice(0, 12000)}\n\nИзменённые файлы:\n${[...touched].slice(0, 50).map((f) => `- ${f}`).join('\n')}`,
+                },
+              ],
+              emit: (e) => (e.type === 'notice' ? emit(e) : undefined),
+              approve: async () => ({ allow: false, message: 'Ревизор только читает' }),
+              signal,
+              mcp,
+              pluginTools: [],
+              transforms: [],
+              policy: { role: policyCtx.role, getMode: () => 'plan', getRules: () => ({}) },
+              trusted,
+              clientFactory,
+              extraDirs,
+              kind,
+              tracer,
+              parentSpan: runSpan,
+              subagent: { def: { name: 'reviewer', description: 'ревизор', tools: REVIEWER_TOOLS, prompt: VERIFY_PROMPT } },
+            });
+            const final = [...sub].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+            verdict = parseVerdict(final) || { verdict: 'approve', reason: 'Ревизор не вернул вердикт — ответ принят', instructions: '' };
+          } else {
+            verdict = await reviewAnswer({
+              client: reviewerClient,
+              model: reviewModel,
+              task,
+              answer: content,
+              signal,
+              mode: currentMode(),
+              kind,
+              requestOptions: reviewCaps.temperature ? { temperature: 0 } : {},
+            });
+          }
         } catch (err) {
           verdict = {
             verdict: 'approve',
@@ -860,8 +949,13 @@ export async function runAgent({
       allowOutsideProject: settings.allowOutsideProject,
       guardrails: settings.guardrails,
       repowise: settings.repowise,
-      shellSandbox: settings.shellSandbox,
+      // Песочница с учётом вида чата и проекта (CW1.3).
+      shellSandbox: effectiveSandbox(settings.shellSandbox, { kind, project }),
       trashDir: settings.trashDir,
+      // PDF из Markdown через Chromium (CW2.4) — функция из main.
+      renderPdf: settings.renderPdf,
+      renderPng: settings.renderPng,
+      previewDir: settings.previewDir,
       // Защищённые ветки (CC11.6): по умолчанию main и master.
       protectedBranches: Array.isArray(settings.protectedBranches) ? settings.protectedBranches : undefined,
       // Поиск: провайдер и ключ из настроек (ADR 0056).
@@ -912,7 +1006,22 @@ export async function runAgent({
               }
             },
           };
-          outcome = await runToolCall({ entry, args, ctx: callCtx, policy: policyCtx, approve, audit, hooks });
+          // Спан инструмента (F22): класс, решение PolicyEngine, подтверждение, время.
+          const toolSpan = tracer.start('agent.tool', { 'agent.tool': entry.name, 'agent.tool.class': entry.cls, 'agent.tool.source': entry.source }, runSpan);
+          callCtx.span = toolSpan;
+          try {
+            outcome = await runToolCall({ entry, args, ctx: callCtx, policy: policyCtx, approve, audit, hooks });
+            toolSpan.end({
+              'agent.decision': outcome.decision?.action,
+              'agent.decision.source': outcome.decision?.source,
+              'agent.decision.risk': outcome.decision?.risk,
+              'agent.approved': outcome.approved,
+              'agent.tool.ok': outcome.ok !== false,
+            });
+          } catch (err) {
+            toolSpan.end({}, err?.message || String(err));
+            throw err;
+          }
         }
       }
       return { call, args, outcome };
@@ -947,10 +1056,11 @@ export async function runAgent({
           audit?.({ at: new Date().toISOString(), tool: call.function.name, source: 'injection', cls: 'read', subject: String(taint.path).slice(0, 300), decision: 'taint', reason: hit.why, snippet: hit.snippet });
         }
       }
+      if (outcome.ok !== false && typeof args?.path === 'string' && ['write', 'delete'].includes(classifyTool(call.function.name))) touched.add(args.path);
       emit({ type: 'tool_result', id: call.id, name: call.function.name, content: outcome.content, ok: outcome.ok, diff: outcome.diff || null });
       // read_file картинки (CC1.3): путь — в результат, сама картинка уйдёт в запрос.
-      let images = null;
-      if (call.function.name === 'read_file' && outcome.ok !== false && isImageFile(args?.path) && /^Изображение /.test(String(outcome.content))) {
+      let images = Array.isArray(outcome.images) && outcome.images.length ? outcome.images : null;
+      if (!images && call.function.name === 'read_file' && outcome.ok !== false && isImageFile(args?.path) && /^Изображение /.test(String(outcome.content))) {
         try {
           images = [resolveIn(toolCtx.roots, args.path, { allowOutside: Boolean(settings.allowOutsideProject) })];
         } catch {

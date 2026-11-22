@@ -100,11 +100,9 @@ export function emitLog(message, { severity = 'INFO', attributes = {} } = {}) {
   void post(cfg, '/v1/logs', payload);
 }
 
-export function emitSpan(name, { startMs, endMs, attributes = {}, error = '' } = {}) {
+export function emitSpan(name, { startMs, endMs, attributes = {}, error = '', traceId = hex(16), spanId = hex(8), parentSpanId } = {}) {
   const cfg = config();
   if (!cfg.enabled) return;
-  const traceId = hex(16);
-  const spanId = hex(8);
   const start = BigInt(Math.round(startMs || Date.now())) * 1_000_000n;
   const end = BigInt(Math.round(endMs || Date.now())) * 1_000_000n;
   const payload = {
@@ -118,6 +116,7 @@ export function emitSpan(name, { startMs, endMs, attributes = {}, error = '' } =
               {
                 traceId,
                 spanId,
+                ...(parentSpanId ? { parentSpanId } : {}),
                 name,
                 kind: 1,
                 startTimeUnixNano: String(start),

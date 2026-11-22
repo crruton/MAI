@@ -148,12 +148,47 @@ export function loadBoards(projectDir) {
   return data;
 }
 
+export const BOARD_SECTIONS = ['delivery', 'architecture', 'runners', 'quality'];
+
+/**
+ * Атомарная запись (F9, ADR 0062): временный файл и rename — окно, читающее
+ * доску, не увидит её наполовину записанной. Номер версии растёт только у
+ * изменившихся секций: правки разных секций из разных окон не конфликтуют.
+ */
 export function saveBoards(projectDir, data) {
   const file = boardsFile(projectDir);
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  let stored = null;
+  try {
+    stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    stored = null;
+  }
+  const revs = { ...(stored?.revs || {}) };
+  for (const section of BOARD_SECTIONS) {
+    if (JSON.stringify(stored?.[section] ?? null) !== JSON.stringify(data[section] ?? null)) revs[section] = (revs[section] || 0) + 1;
+  }
+  data.revs = revs;
   data.updatedAt = new Date().toISOString();
-  fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+  const temp = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(data, null, 2), 'utf8');
+  fs.renameSync(temp, file);
   return data;
+}
+
+/**
+ * Сохранение секции из окна: `rev` — версия, которую окно видело. Другое окно
+ * успело сохранить эту секцию — конфликт и свежие данные вместо перезаписи.
+ */
+export function saveBoardSection(projectDir, section, value, rev) {
+  if (!BOARD_SECTIONS.includes(section)) throw new Error('Неизвестная секция доски');
+  const current = loadBoards(projectDir);
+  const now = current.revs?.[section] || 0;
+  if (rev !== undefined && rev !== null && Number(rev) !== now) {
+    return { conflict: true, section, boards: current };
+  }
+  current[section] = value;
+  return saveBoards(projectDir, current);
 }
 
 /* ---------- mermaid / plantuml ---------- */

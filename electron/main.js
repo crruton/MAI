@@ -25,6 +25,9 @@ import { listConnectors, connectorServerConfig } from './lib/connectors.js';
 import { sessionResults, previewResult, resultFile } from './lib/results.js';
 import { createScheduleStore, isDue, nextRunAt, describeSchedule } from './lib/scheduler.js';
 import { modelCapabilities } from './lib/capabilities.js';
+import { createTracer, NO_TRACER } from './lib/tracer.js';
+import { createProjectStore } from './lib/projects.js';
+import { renderPdf, renderPng } from './lib/pdf-render.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
@@ -51,6 +54,7 @@ import {
 import {
   loadBoards,
   saveBoards,
+  saveBoardSection,
   generateViews,
   saveBaseline,
   scanQuality,
@@ -218,9 +222,14 @@ function agentSettings(settings) {
   return {
     ...settings,
     shellSandbox,
-    dockerAvailable: shellSandbox.mode === 'docker' ? dockerReady : () => false,
+    // Docker нужен и для режима «только в Задаче», и для проектов с песочницей (CW1.3).
+    dockerAvailable: dockerReady,
     // Корзина для delete_file (CW1.4).
     trashDir: path.join(dataDir(), 'trash'),
+    // PDF для create_document (CW2.4, ADR 0067).
+    renderPdf: (html) => renderPdf(BrowserWindow, html),
+    renderPng: (html, options) => renderPng(BrowserWindow, html, options),
+    previewDir: path.join(app.getPath('temp'), 'mai-previews'),
     // Длинный вывод инструментов — в файл (CC1.13).
     outputDir: path.join(dataDir(), 'tool-output'),
   };
@@ -840,7 +849,8 @@ ipcMain.handle('project:pick', async () => {
   if (result.canceled || !result.filePaths[0]) return null;
   // Процесс плагинов старого проекта держит его папку (cwd): останавливаем после текущих вызовов.
   retirePluginHosts();
-  saveSettings({ projectDir: result.filePaths[0] });
+  // Просто папка — без проекта Cowork (ADR 0065).
+  saveSettings({ projectDir: result.filePaths[0], activeProject: null });
   return result.filePaths[0];
 });
 
@@ -1162,6 +1172,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
           provider: resolvedReviewer.provider,
           model: resolvedReviewer.modelId,
           maxRounds: Math.max(0, Math.min(5, Number(settings.reviewer.maxRounds ?? 2))),
+          // Ревизор сам читает изменённые файлы (F5, ADR 0064); false — проверяет только текст ответа.
+          verify: settings.reviewer.verify !== false,
         };
       }
     } catch {
@@ -1197,6 +1209,9 @@ ipcMain.handle('chat:start', async (event, payload) => {
   }
   session.model = model;
   session.projectDir = projectDir;
+  // Проект Cowork (CW1.5): чат помнит проект, если папка — его основная.
+  const project = activeProjectFor(projectDir);
+  if (project && !session.projectId) session.projectId = project.id;
   // Вложения прикрепляют до создания сессии, поэтому они лежат в `draft`.
   // Переносим их в папку сессии и правим пути в тексте запроса.
   const adopted = adoptDraftUploads(projectDir, session.id);
@@ -1258,6 +1273,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
         trusted,
         // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Трассировка прогона в OTLP (F22, ADR 0063), если телеметрия включена.
+        tracer: agentTracer(),
         // Запасная модель при сбое основной (ADR 0057).
         fallback: fallbackFor(settings, activeKey),
         // Глубина рассуждений из поля ввода (CC7.11).
@@ -1268,8 +1285,9 @@ ipcMain.handle('chat:start', async (event, payload) => {
         // Типы субагентов: встроенные и свои (проекта — только доверенная папка, ADR 0036).
         agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(projectDir), 'agents') }),
         skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
-        extraDirs: (getSession(session.id)?.extraDirs || []).filter((d) => fs.existsSync(d)),
+        extraDirs: [...new Set([...(project?.extraDirs || []), ...(getSession(session.id)?.extraDirs || [])])].filter((d) => fs.existsSync(d)),
         kind: getSession(session.id)?.kind || 'code',
+        project,
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -1319,6 +1337,11 @@ ipcMain.handle('chat:start', async (event, payload) => {
 let scheduleStoreInstance = null;
 const scheduleStore = () => (scheduleStoreInstance ||= createScheduleStore(dataDir()));
 const scheduledRunning = new Set();
+
+/** Трассировщик прогона (F22): спаны agent.run/step/tool в OTLP; телеметрия выключена — пустой. */
+function agentTracer() {
+  return telemetryStatus().enabled ? createTracer(emitSpan) : NO_TRACER;
+}
 
 /** Запасная модель (ADR 0057): settings.fallbackModel = «провайдер/модель», с ключом и не та же, что основная. */
 function fallbackFor(settings, primaryKey) {
@@ -1392,6 +1415,8 @@ async function runScheduled(task, { reason = 'schedule' } = {}) {
       audit,
       trusted: true,
       contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+      // Трассировка прогона в OTLP (F22, ADR 0063), если телеметрия включена.
+      tracer: agentTracer(),
       // Запасная модель при сбое основной (ADR 0057).
       fallback: fallbackFor(settings, task.model || settings.activeModel),
       checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
@@ -1734,6 +1759,47 @@ ipcMain.handle('packages:toggle', async (_e, payload = {}) => {
   retirePluginHosts();
   await mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
   return { ok: true };
+});
+
+/* ---------- проекты (CW1.5, ADR 0065) ---------- */
+
+let projectStoreInstance = null;
+const projectStore = () => (projectStoreInstance ||= createProjectStore(dataDir()));
+
+/** Активный проект, если выбранная папка — его основная. */
+function activeProjectFor(projectDir) {
+  const id = loadSettings().activeProject;
+  const project = id ? projectStore().get(id) : null;
+  return project && projectDir && path.resolve(project.primaryDir) === path.resolve(projectDir) ? project : null;
+}
+
+ipcMain.handle('projects:list', () => ({ projects: projectStore().list(), active: loadSettings().activeProject || null }));
+/** Выбор папки для проекта в системном диалоге: путь из окна только из этого диалога. */
+ipcMain.handle('projects:pickDir', async (event) => {
+  const picked = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), { properties: ['openDirectory'] });
+  return picked.canceled ? null : picked.filePaths[0] || null;
+});
+ipcMain.handle('projects:save', (_e, payload = {}) => {
+  try {
+    const project = projectStore().save(payload);
+    audit({ at: new Date().toISOString(), tool: 'projects:save', source: 'user', cls: 'write', subject: `${project.name} · ${project.primaryDir}`, decision: 'allow' });
+    return { ok: true, project };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+ipcMain.handle('projects:remove', (_e, id) => {
+  projectStore().remove(String(id));
+  if (loadSettings().activeProject === id) saveSettings({ activeProject: null });
+  return { ok: true };
+});
+/** Открыть проект: основная папка становится текущей, новые чаты — с его папками, видом и инструкциями. */
+ipcMain.handle('projects:activate', (_e, id) => {
+  const project = id ? projectStore().get(String(id)) : null;
+  if (id && !project) return { ok: false, error: 'Проект не найден' };
+  retirePluginHosts();
+  saveSettings(project ? { projectDir: project.primaryDir, activeProject: project.id } : { activeProject: null });
+  return { ok: true, project };
 });
 
 /* ---------- рабочие папки чата (CW1.2, ADR 0045) ---------- */
@@ -2428,12 +2494,8 @@ ipcMain.handle('boards:load', (_e, payload) => {
 
 ipcMain.handle('boards:save', (_e, payload) => {
   requireAdmin();
-  const projectDir = projectOf(payload);
-  const allowed = ['delivery', 'architecture', 'runners', 'quality'];
-  if (!allowed.includes(payload.section)) throw new Error('Неизвестная секция доски');
-  const data = loadBoards(projectDir);
-  data[payload.section] = payload.data;
-  return saveBoards(projectDir, data);
+  // Версия секции (F9, ADR 0062): правка поверх чужого сохранения — конфликт, а не потеря.
+  return saveBoardSection(projectOf(payload), payload.section, payload.data, payload.rev);
 });
 
 ipcMain.handle('boards:views', async (_e, payload) => {
@@ -2567,6 +2629,8 @@ ipcMain.handle('boards:correction', async (event, payload) => {
     model: payload.model || settings.activeModel,
     projectDir,
   });
+  // Самокоррекция работает в проекте папки, если он открыт (CW1.5).
+  const project = activeProjectFor(projectDir);
   const prompt = correctionPrompt(projectDir, selected);
   session.messages.push({ role: 'user', content: prompt });
   saveSession(session);
@@ -2608,12 +2672,15 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         trusted,
         // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Трассировка прогона в OTLP (F22, ADR 0063), если телеметрия включена.
+        tracer: agentTracer(),
         // Запасная модель при сбое основной (ADR 0057).
         fallback: fallbackFor(settings, payload.model || settings.activeModel),
         // Чекпоинты правок для отката (CC6.1).
         checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
-        extraDirs: (getSession(session.id)?.extraDirs || []).filter((d) => fs.existsSync(d)),
+        extraDirs: [...new Set([...(project?.extraDirs || []), ...(getSession(session.id)?.extraDirs || [])])].filter((d) => fs.existsSync(d)),
         kind: getSession(session.id)?.kind || 'code',
+        project,
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { withFileLock } from './file-lock.js';
 import { listSkills, readAgents } from './skills.js';
 import { pluginDirs } from './plugins.js';
 
@@ -80,7 +81,43 @@ function readIndex(projectDir) {
 function writeIndex(projectDir, index) {
   ensureRoot(projectDir);
   index.updatedAt = new Date().toISOString();
-  fs.writeFileSync(indexPath(projectDir), JSON.stringify(index, null, 2), 'utf8');
+  // Атомарно (F11, ADR 0062): читающий не увидит половину файла.
+  const file = indexPath(projectDir);
+  const temp = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(index, null, 2), 'utf8');
+  fs.renameSync(temp, file);
+}
+
+/* ---------- блокировка индекса (F11, ADR 0062) ---------- */
+
+/** Изменение индекса под файловой блокировкой: два окна или процесса не перезапишут правки друг друга. */
+export function withIndexLock(projectDir, fn) {
+  ensureRoot(projectDir);
+  return withFileLock(path.join(artifactsRoot(projectDir), 'index.lock'), fn, { busyMessage: 'Хранилище артефактов занято другим процессом — повторите позже' });
+}
+
+/** Удаляет блобы, на которые не ссылается ни одна версия ни одного артефакта. */
+export function gcBlobs(projectDir) {
+  return withIndexLock(projectDir, () => {
+    const index = readIndex(projectDir);
+    const used = new Set(Object.values(index.artifacts).flatMap((a) => (a.versions || []).map((v) => v.hash)));
+    const dir = path.join(artifactsRoot(projectDir), 'blobs');
+    let removed = 0;
+    let bytes = 0;
+    for (const name of fs.readdirSync(dir)) {
+      const hash = name.replace(/\.[^.]*$/, '');
+      if (used.has(hash)) continue;
+      const full = path.join(dir, name);
+      try {
+        bytes += fs.statSync(full).size;
+        fs.rmSync(full, { force: true });
+        removed += 1;
+      } catch {
+        /* файл занят — в следующий раз */
+      }
+    }
+    return { removed, bytes };
+  });
 }
 
 function hashOf(content) {
@@ -144,7 +181,11 @@ export function readArtifact(projectDir, id) {
   return { ...summary(entry, index), content, meta: entry.meta || {} };
 }
 
-export function writeArtifact(projectDir, { id, kind = 'note', name, title, content = '', meta = {}, note = '' }) {
+export function writeArtifact(projectDir, options) {
+  return withIndexLock(projectDir, () => writeArtifactUnlocked(projectDir, options));
+}
+
+function writeArtifactUnlocked(projectDir, { id, kind = 'note', name, title, content = '', meta = {}, note = '' }) {
   if (!KINDS.includes(kind)) throw new Error(`Неизвестный тип артефакта: ${kind}`);
   const index = readIndex(projectDir);
   const now = new Date().toISOString();
@@ -239,17 +280,22 @@ export function restoreArtifact(projectDir, id, version) {
 }
 
 export function deleteArtifact(projectDir, id) {
-  const index = readIndex(projectDir);
-  const entry = index.artifacts[id];
-  if (!entry) return false;
-  delete index.artifacts[id];
-  writeIndex(projectDir, index);
-  try {
-    fs.rmSync(mirrorPath(projectDir, entry), { force: true });
-  } catch {
-    /* зеркала может не быть */
-  }
-  return true;
+  const removed = withIndexLock(projectDir, () => {
+    const index = readIndex(projectDir);
+    const entry = index.artifacts[id];
+    if (!entry) return false;
+    delete index.artifacts[id];
+    writeIndex(projectDir, index);
+    try {
+      fs.rmSync(mirrorPath(projectDir, entry), { force: true });
+    } catch {
+      /* зеркала может не быть */
+    }
+    return true;
+  });
+  // Блобы удалённого артефакта больше никому не нужны (F11).
+  if (removed) gcBlobs(projectDir);
+  return removed;
 }
 
 function tokenize(text) {

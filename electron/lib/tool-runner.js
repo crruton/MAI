@@ -256,7 +256,9 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
       },
       args,
     );
-    let content = spillOutput(ctx, entry.name, String(result));
+    // Встроенный инструмент может вернуть { content, images } — картинки для модели (CW2.5).
+    const images = builtin && result && typeof result === 'object' && Array.isArray(result.images) ? result.images : null;
+    let content = spillOutput(ctx, entry.name, String(images ? result.content : result));
     if (hookNote) content = `${content}\n\n[Хук PreToolUse]\n${hookNote}`;
     // PostToolUse: контекст от хука дописывается к результату; block — замечание агенту.
     if (hooks?.has('PostToolUse', entry.name)) {
@@ -264,7 +266,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
       if (post.context.length) content = `${content}\n\n[Хук PostToolUse]\n${post.context.join('\n')}`;
       if (post.decision === 'block') content = `${content}\n\n[Хук PostToolUse: ${post.reason || 'результат не принят'}. Исправь и проверь снова.]`;
     }
-    return { ok: true, content, decision, approved: true, diff: shortDiff };
+    return { ok: true, content, decision, approved: true, diff: shortDiff, ...(images ? { images } : {}) };
   } catch (err) {
     return { ok: false, content: `Ошибка: ${err?.message || String(err)}`, decision, approved: true };
   }

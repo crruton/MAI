@@ -16,7 +16,7 @@ import path from 'node:path';
 import { splitCommand } from './policy.js';
 
 export const DEFAULT_SHELL_SANDBOX = {
-  mode: 'off', // off | docker
+  mode: 'off', // off | docker | tasks (Docker только в чатах «Задача», CW1.3)
   image: 'node:22-bookworm-slim',
   network: 'none', // none | bridge
   memory: '2g',
@@ -32,7 +32,7 @@ const CPUS_RE = /^\d{1,3}(?:\.\d{1,2})?$/;
 export function normalizeShellSandbox(raw = {}) {
   const value = raw && typeof raw === 'object' ? raw : {};
   return {
-    mode: value.mode === 'docker' ? 'docker' : 'off',
+    mode: ['docker', 'tasks'].includes(value.mode) ? value.mode : 'off',
     image: IMAGE_RE.test(String(value.image || '')) ? String(value.image) : DEFAULT_SHELL_SANDBOX.image,
     network: value.network === 'bridge' ? 'bridge' : 'none',
     memory: SIZE_RE.test(String(value.memory || '')) ? String(value.memory) : DEFAULT_SHELL_SANDBOX.memory,
@@ -61,9 +61,20 @@ export function hostAllowed(command, masks = []) {
  * Где выполнится команда.
  * @returns {{ where: 'host'|'docker'|'blocked', why: string }}
  */
+/**
+ * Действующий режим для чата (CW1.3, ADR 0066): `tasks` — Docker в чатах
+ * «Задача», хост в «Коде»; у проекта своя настройка сильнее общей.
+ */
+export function effectiveSandbox(config, { kind = 'code', project = null } = {}) {
+  const cfg = normalizeShellSandbox(config);
+  const override = project?.sandbox;
+  const mode = override === 'docker' || override === 'off' ? override : cfg.mode === 'tasks' ? (kind === 'task' ? 'docker' : 'off') : cfg.mode;
+  return { ...cfg, mode };
+}
+
 export function sandboxPlan(command, config, { dockerAvailable = false } = {}) {
   const cfg = normalizeShellSandbox(config);
-  if (cfg.mode !== 'docker') return { where: 'host', why: 'песочница выключена' };
+  if (cfg.mode !== 'docker') return { where: 'host', why: cfg.mode === 'tasks' ? 'песочница только для чатов «Задача»' : 'песочница выключена' };
   if (hostAllowed(command, cfg.hostCommands)) return { where: 'host', why: 'команда из списка «на хосте»' };
   if (!dockerAvailable) {
     return {
