@@ -254,6 +254,81 @@ function parseArgs(raw) {
   }
 }
 
+/** Сколько ждём первого байта и паузы между чанками, прежде чем считать ход зависшим. */
+const IDLE_TIMEOUT_MS = 120_000;
+
+/** Пауза для сообщений: 120000 → «120 с», 300 → «0.3 с». */
+function seconds(ms) {
+  return ms >= 1000 ? `${Math.round(ms / 1000)} с` : `${(ms / 1000).toFixed(1)} с`;
+}
+
+/**
+ * Сторож простоя одного хода модели.
+ *
+ * Раньше `for await` по стриму ждал бесконечно: если шлюз принимал соединение
+ * и молчал, агент висел без сообщений, а кнопка «Стоп» не помогала, потому что
+ * запрос уже был отправлен. Сторож даёт свой signal, который рвётся по тишине,
+ * и позволяет отличить простой от остановки пользователем.
+ */
+function idleGuard(signal, ms, onIdle) {
+  const local = new AbortController();
+  let timedOut = false;
+  let timer = null;
+  const onAbort = () => local.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  const touch = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timedOut = true;
+      onIdle();
+      local.abort();
+    }, ms);
+  };
+  const stop = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    signal?.removeEventListener('abort', onAbort);
+  };
+  touch();
+  return { signal: local.signal, touch, stop, timedOut: () => timedOut };
+}
+
+/**
+ * Обёртка потока: каждый `next()` рвётся по сигналу.
+ *
+ * SDK получает signal, но не все шлюзы и не все версии SDK его соблюдают:
+ * `for await` тогда ждёт вечно. Обёртка гарантирует выход по тишине.
+ * Закрытие потока не ожидается: `return()` зависшего генератора сам ждёт
+ * ответа шлюза, а нам нужен немедленный выход.
+ */
+async function* abortableStream(stream, signal) {
+  const iterator = stream[Symbol.asyncIterator]();
+  const close = () => {
+    try {
+      iterator.return?.()?.catch?.(() => {});
+    } catch {
+      /* поток уже закрыт */
+    }
+  };
+  try {
+    for (;;) {
+      if (signal?.aborted) return;
+      const next = iterator.next();
+      const aborted = new Promise((resolve) => {
+        const onAbort = () => resolve({ aborted: true });
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
+      });
+      const result = await Promise.race([next, aborted]);
+      if (result?.aborted) return;
+      if (result.done) return;
+      yield result.value;
+    }
+  } finally {
+    close();
+  }
+}
+
 export async function runAgent({
   settings,
   provider,
@@ -411,7 +486,7 @@ export async function runAgent({
       toolEntry(schema, {
         source: 'mcp',
         annotations: schema.annotations,
-        run: (_ctx, args) => mcp.call(schema.function.name, args),
+        run: (ctx, args) => mcp.call(schema.function.name, args, ctx?.signal),
       }),
     );
     // Субагент (CC8): только инструменты своего типа, без диалога и вложенных субагентов.
@@ -530,6 +605,16 @@ export async function runAgent({
     let validCalls = [];
     let turnUsage = null;
 
+    // Сторож простоя на один ход: тишина в стриме дольше idleMs
+    // означает зависший шлюз, а не долгую работу модели.
+    const idleMs = Number(settings.idleTimeoutMs) > 0 ? Number(settings.idleTimeoutMs) : IDLE_TIMEOUT_MS;
+    const guard = idleGuard(signal, idleMs, () => {
+      emit({
+        type: 'notice',
+        text: `Модель молчит дольше ${seconds(idleMs)} — ход прерван. Повторите запрос.`,
+      });
+    });
+
     const runTurn = async (requestMessages) => {
       const runViaResponses = async () => {
         const { system: instructions, rest } = splitSystem(requestMessages);
@@ -541,8 +626,9 @@ export async function runAgent({
           tools: caps.tools ? toResponseTools(tools) : [],
           temperature: caps.temperature ? settings.temperature ?? 0.3 : null,
           effort: effortSupported && caps.effort.includes(effort) ? effort : '',
-          signal,
+          signal: guard.signal,
           emit,
+          touch: guard.touch,
         });
         content = turn.content;
         reasoning = turn.reasoning;
@@ -568,7 +654,7 @@ export async function runAgent({
           try {
             stream = await client.chat.completions.create(
               streamUsage ? { ...body, stream_options: { include_usage: true } } : body,
-              { signal },
+              { signal: guard.signal },
             );
           } catch (err) {
             // Шлюз не знает reasoning_effort — повторяем без него и больше не шлём (CC7.11).
@@ -576,17 +662,18 @@ export async function runAgent({
               effortSupported = false;
               delete body.reasoning_effort;
               emit({ type: 'notice', text: `${model}: шлюз не принимает глубину рассуждений — без неё` });
-              stream = await client.chat.completions.create(streamUsage ? { ...body, stream_options: { include_usage: true } } : body, { signal });
+              stream = await client.chat.completions.create(streamUsage ? { ...body, stream_options: { include_usage: true } } : body, { signal: guard.signal });
             } else {
               if (!streamUsage || !isStreamOptionsRejected(err)) throw err;
               streamUsage = false;
-              stream = await client.chat.completions.create(body, { signal });
+              stream = await client.chat.completions.create(body, { signal: guard.signal });
             }
           }
 
           const calls = [];
-          for await (const chunk of stream) {
+          for await (const chunk of abortableStream(stream, guard.signal)) {
             if (signal.aborted) break;
+            guard.touch();
             if (chunk.usage) turnUsage = normalizeUsage(chunk.usage);
             const delta = chunk.choices?.[0]?.delta;
             if (!delta) continue;
@@ -610,7 +697,7 @@ export async function runAgent({
           validCalls = calls.filter((c) => c && c.name);
         } catch (err) {
           // Шлюз требует /v1/responses — повторяем этот же шаг новым транспортом.
-          if (signal.aborted || !isResponsesRequired(err)) throw err;
+          if (signal.aborted || guard.timedOut() || !isResponsesRequired(err)) throw err;
           useResponses = true;
           content = '';
           reasoning = '';
@@ -638,39 +725,54 @@ export async function runAgent({
         await runTurn(buildRequest(false));
       }
     };
-    // Повторы при временных сбоях (CC13.3) и запасная модель (CC13.2), ADR 0057.
-    for (let retry = 0; ; retry += 1) {
-      try {
-        await attempt();
-        break;
-      } catch (err) {
-        if (signal.aborted) throw err;
-        // Повторяем, только если модель ещё ничего не показала: иначе текст в ленте задвоится.
-        const clean = !content && !reasoning && !validCalls.length;
-        if (clean && isTransient(err) && retry < RETRY_DELAYS.length) {
-          const wait = retryDelay(err, retry);
-          emit({ type: 'notice', level: 'warn', text: `${model}: ${describeError(err)} — повтор через ${Math.round(wait / 1000)} с (${retry + 1} из ${RETRY_DELAYS.length})` });
-          await sleep(wait, signal);
-          resetTurn();
-          continue;
+    try {
+      // Повторы при временных сбоях (CC13.3) и запасная модель (CC13.2), ADR 0057.
+      for (let retry = 0; ; retry += 1) {
+        try {
+          await attempt();
+          break;
+        } catch (err) {
+          if (signal.aborted || guard.timedOut()) throw err;
+          // Повторяем, только если модель ещё ничего не показала: иначе текст в ленте задвоится.
+          const clean = !content && !reasoning && !validCalls.length;
+          if (clean && isTransient(err) && retry < RETRY_DELAYS.length) {
+            const wait = retryDelay(err, retry);
+            emit({ type: 'notice', level: 'warn', text: `${model}: ${describeError(err)} — повтор через ${Math.round(wait / 1000)} с (${retry + 1} из ${RETRY_DELAYS.length})` });
+            await sleep(wait, signal);
+            resetTurn();
+            continue;
+          }
+          if (clean && fallback?.provider && !usingFallback && needsFallback(err)) {
+            usingFallback = true;
+            const failed = model;
+            client = makeClient(clientOptions(fallback.provider));
+            model = fallback.model;
+            provider = fallback.provider;
+            caps = modelCapabilities(model, provider);
+            useResponses = caps.transport === 'responses';
+            useImages = caps.vision;
+            resetTurn();
+            retry = -1;
+            emit({ type: 'notice', level: 'warn', text: `${failed} недоступна (${describeError(err)}) — дальше отвечает запасная модель ${fallback.label || model}` });
+            emit({ type: 'model:fallback', from: failed, to: fallback.label || model });
+            continue;
+          }
+          throw err;
         }
-        if (clean && fallback?.provider && !usingFallback && needsFallback(err)) {
-          usingFallback = true;
-          const failed = model;
-          client = makeClient(clientOptions(fallback.provider));
-          model = fallback.model;
-          provider = fallback.provider;
-          caps = modelCapabilities(model, provider);
-          useResponses = caps.transport === 'responses';
-          useImages = caps.vision;
-          resetTurn();
-          retry = -1;
-          emit({ type: 'notice', level: 'warn', text: `${failed} недоступна (${describeError(err)}) — дальше отвечает запасная модель ${fallback.label || model}` });
-          emit({ type: 'model:fallback', from: failed, to: fallback.label || model });
-          continue;
-        }
-        throw err;
       }
+      // Сторож оборвал поток: пустой ответ — не успех, а простой шлюза.
+      if (guard.timedOut() && !signal.aborted) throw new Error('Модель не отвечала');
+    } catch (err) {
+      // Простой превращаем в понятную ошибку: иначе пользователь видит
+      // «Request was aborted» и не понимает, что делать.
+      if (guard.timedOut() && !signal.aborted) {
+        throw new Error(
+          `Модель не отвечала ${seconds(idleMs)} — ход прерван. Проверьте провайдера и повторите запрос.`,
+        );
+      }
+      throw err;
+    } finally {
+      guard.stop();
     }
 
     const assistantMessage = { role: 'assistant', content: content || null, model };

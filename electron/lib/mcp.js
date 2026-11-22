@@ -10,15 +10,27 @@ import { createOAuthProvider, startCallbackServer, DEFAULT_CALLBACK_PORT, NeedsL
  * Для HTTP — OAuth (ADR 0041): вход только по кнопке «Войти», токены в
  * зашифрованном хранилище, обновление токена — в SDK.
  */
-function withTimeout(promise, ms, message) {
+function withTimeout(promise, ms, message, signal) {
   let timer = null;
+  let onAbort = null;
   return Promise.race([
     promise,
     new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error(message)), ms);
     }),
+    // Остановка пользователем рвёт ожидание сразу, а не через 120 с.
+    ...(signal
+      ? [
+          new Promise((_, reject) => {
+            onAbort = () => reject(new Error('Остановлено пользователем'));
+            if (signal.aborted) onAbort();
+            else signal.addEventListener('abort', onAbort, { once: true });
+          }),
+        ]
+      : []),
   ]).finally(() => {
     if (timer) clearTimeout(timer);
+    if (onAbort) signal.removeEventListener('abort', onAbort);
   });
 }
 
@@ -214,7 +226,7 @@ export class McpManager {
     return schemas;
   }
 
-  async call(toolName, args) {
+  async call(toolName, args, signal) {
     const match = /^mcp__(.+?)__(.+)$/.exec(toolName);
     if (!match) throw new Error(`Не MCP-инструмент: ${toolName}`);
     const [, serverKey, rawTool] = match;
@@ -228,6 +240,7 @@ export class McpManager {
       entry.client.callTool({ name: tool.name, arguments: args || {} }),
       120_000,
       `MCP ${serverKey}: инструмент ${rawTool} не ответил за 120 с`,
+      signal,
     );
     const parts = (result.content || []).map((c) =>
       c.type === 'text' ? c.text : c.type === 'resource' ? `[resource ${c.resource?.uri}]` : `[${c.type}]`,
