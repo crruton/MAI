@@ -33,7 +33,7 @@
 | `electron/lib/sessions.js`, `session-store.js` | `sessions/<id>.json`, `sessions/index.json` (ADR 0034) |
 | `electron/lib/agent.js` | цикл агента, стриминг, вызов инструментов |
 | `electron/lib/skills.js` | навыки, `AGENTS.md` |
-| `electron/lib/mcp.js` | MCP-менеджер (stdio + streamable HTTP) |
+| `electron/lib/mcp.js` | MCP-менеджер (stdio, streamable HTTP, SSE; инструменты, ресурсы, промпты) |
 | `electron/lib/plugins.js` | загрузка локальных плагинов |
 | `electron/lib/tools/fs.js` | чтение, поиск, запись, правка файлов |
 | `electron/lib/tools/shell.js` | `run_shell` |
@@ -103,6 +103,14 @@ main кладёт резолвер в `state.approvals` и отправляет 
 `McpManager` держит по клиенту на сервер. Имена инструментов нормализуются в
 `mcp__<server>__<tool>`, чтобы не конфликтовать с встроенными. При вызове имя разбирается
 обратно, ищется сервер и оригинальное имя инструмента.
+
+Ресурсы и промпты (ADR 0071): `listResources`/`readResource`, `listPrompts`/
+`getPrompt`. `chat:start` → `resolveResourceMentions` (commands.js) → текст
+ресурса в рамке `wrapData`; `commands:list` добавляет промпты (`source: 'mcp'`),
+`commands:expand` → `promptArgs` → `getPrompt`. IPC `mcp:resources` — для
+подсказки `@`. Транспорт — `declaredTransport(config)` (`transport` или `type`),
+без указания — streamable HTTP с переходом на SSE, если `initialize` упал не
+из-за входа.
 
 OAuth (ADR 0041): `new McpManager({ oauth: { store, openBrowser, callbackPort } })`.
 `connect()` передаёт HTTP-транспорту `authProvider` без `onAuthorize` — при 401

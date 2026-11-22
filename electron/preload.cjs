@@ -190,6 +190,7 @@ contextBridge.exposeInMainWorld('mai', {
     saveLocal: (payload) => invoke('mcp:saveLocal', payload),
     login: (name, projectDir) => invoke('mcp:login', name, projectDir),
     connectors: () => invoke('connectors:list'),
+    resources: () => invoke('mcp:resources'),
     addConnector: (id, token) => invoke('connectors:add', { id, token }),
     removeConnector: (id) => invoke('connectors:remove', id),
     logout: (name) => invoke('mcp:logout', name),

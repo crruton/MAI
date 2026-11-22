@@ -3173,7 +3173,7 @@ function renderSuggest() {
               el('code', { text: `/${item.name}` }),
               item.argumentHint ? el('span', { class: 'hint-text', text: item.argumentHint }) : null,
               el('span', { class: 'suggest-desc', text: item.description || '' }),
-              item.source !== 'builtin' ? el('span', { class: 'suggest-source', text: { project: 'проект', global: 'глобальная', skill: 'навык' }[item.source] || '' }) : null,
+              item.source !== 'builtin' ? el('span', { class: 'suggest-source', text: { project: 'проект', global: 'глобальная', skill: 'навык', mcp: 'MCP' }[item.source] || '' }) : null,
             ]
           : [el('span', { class: 'suggest-path', text: item })],
       ),
@@ -3199,12 +3199,20 @@ async function updateSuggest() {
     return;
   }
   const mention = /(^|\s)@([^\s@]*)$/.exec(before);
-  if (mention && state.projectDir) {
+  if (mention) {
     const query = mention[2];
     const start = before.length - query.length - 1;
     clearTimeout(suggest.timer);
     suggest.timer = setTimeout(async () => {
-      const items = await api.files.search(state.projectDir, query).catch(() => []);
+      const files = state.projectDir ? await api.files.search(state.projectDir, query).catch(() => []) : [];
+      // Ресурсы MCP (CC9.3, ADR 0071): `@сервер:uri`.
+      const q = query.toLowerCase();
+      const resources = (await api.mcp.resources?.().catch(() => []) || [])
+        .map((r) => `${r.server}:${r.uri}`)
+        .filter((ref) => ref.toLowerCase().includes(q))
+        .slice(0, 10);
+      const items = [...files, ...resources];
+      if (!items.length) return closeSuggest();
       // Курсор мог уйти, пока шёл поиск.
       const now = input.value.slice(0, input.selectionStart ?? input.value.length);
       if (!/(^|\s)@([^\s@]*)$/.test(now)) return;

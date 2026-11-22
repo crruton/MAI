@@ -71,7 +71,10 @@ ipcMain.handle('commands:list', () => [
   { name: 'init', description: 'AGENTS.md', source: 'builtin' },
   { name: 'review', description: 'Ревью изменений', argumentHint: '<путь>', source: 'project' },
   { name: 'handoff', description: 'навык передачи', argumentHint: '<задача>', source: 'skill' },
+  { name: 'mcp__db__review', description: 'Ревью кода', argumentHint: '<file> [focus]', source: 'mcp' },
 ]);
+// Ресурсы MCP (раздел [42]).
+ipcMain.handle('mcp:resources', () => [{ server: 'db', uri: 'db://schema', name: 'Схема', description: '', mimeType: 'text/plain' }]);
 ipcMain.handle('commands:expand', (_e, payload) => {
   expandCalls.push(payload);
   return { ok: true, prompt: `Ревью ${payload.args}` };
@@ -1739,6 +1742,20 @@ app.whenReady().then(async () => {
     const inputText = await ui(`document.querySelector('#input').value`);
     const modalGone = await ui(`!document.querySelector('.role-cards, .onboarding-examples')`);
     check('роль без коннекторов; пример задачи — в поле ввода, мастер закрыт', noConn && inputText === 'Сверь выписку банка с реестром' && modalGone, JSON.stringify({ noConn, inputText, modalGone }));
+
+    console.log('\n[42] MCP: ресурсы @сервер:uri и промпты /mcp__… (ADR 0071)');
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = 'смотри @sch'; i.setSelectionRange(i.value.length, i.value.length); i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await wait(500);
+    const resItems = await ui(`[...document.querySelectorAll('#suggest .suggest-item')].map((b) => b.textContent).join('|')`);
+    check('@ подсказывает ресурс MCP', resItems === 'db:db://schema', resItems);
+    await ui(`(() => { const i = document.querySelector('#input'); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })); })()`);
+    await wait(200);
+    check('выбор вставляет @сервер:uri', (await ui(`document.querySelector('#input').value`)) === 'смотри @db:db://schema ');
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '/mcp__'; i.setSelectionRange(6, 6); i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await wait(400);
+    const promptItem = await ui(`document.querySelector('#suggest .suggest-item')?.textContent || ''`);
+    check('промпт MCP в списке команд с аргументами и меткой', /\/mcp__db__review/.test(promptItem) && /<file> \[focus\]/.test(promptItem) && /MCP$/.test(promptItem), promptItem);
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
     await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; })()`);
   } catch (err) {
     fail += 1;

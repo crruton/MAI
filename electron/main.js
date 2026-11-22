@@ -33,6 +33,7 @@ import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalize
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { listRoles, installRole } from './lib/roles.js';
+import { wrapData } from './lib/injection.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -85,7 +86,7 @@ import { trustState, setTrust, removeTrust, listTrust, inspectProject } from './
 import { guardIpc } from './lib/ipc-permissions.js';
 import { isImageFile } from './lib/vision.js';
 import { acquireProject } from './lib/project-lock.js';
-import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions } from './lib/commands.js';
+import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions, promptArgs, resolveResourceMentions } from './lib/commands.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
@@ -887,13 +888,29 @@ ipcMain.handle('commands:list', (_e, projectDir) => {
   const customNames = new Set(custom.map((c) => c.name.toLowerCase()));
   // /commit и /review можно заменить своей командой (ADR 0059).
   const builtins = BUILTIN_COMMANDS.filter((c) => !(c.overridable && customNames.has(c.name)));
-  return [...builtins.map((c) => ({ ...c, source: 'builtin' })), ...custom, ...skills];
+  // Промпты MCP-серверов (CC9.4, ADR 0071): /mcp__сервер__промпт.
+  const prompts = mcp.listPrompts().map((p) => ({
+    name: p.command,
+    description: p.description || `промпт ${p.name} сервера ${p.server}`,
+    argumentHint: p.arguments.map((a) => (a.required ? `<${a.name}>` : `[${a.name}]`)).join(' '),
+    source: 'mcp',
+  }));
+  return [...builtins.map((c) => ({ ...c, source: 'builtin' })), ...custom, ...skills, ...prompts];
 });
 
 /** Своя команда или навык → текст запроса агенту. */
-ipcMain.handle('commands:expand', (_e, payload = {}) => {
+ipcMain.handle('commands:expand', async (_e, payload = {}) => {
   const dir = payload.projectDir || loadSettings().projectDir;
   const name = String(payload.name || '').toLowerCase();
+  // Промпт MCP (CC9.4): сервер собирает текст запроса из аргументов.
+  const prompt = mcp.listPrompts().find((p) => p.command.toLowerCase() === name);
+  if (prompt) {
+    try {
+      return { ok: true, source: 'mcp', prompt: await mcp.getPrompt(prompt.command, promptArgs(prompt.arguments, payload.args)) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  }
   const trusted = isTrusted(dir);
   const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(dir), 'commands') }).find((c) => c.name.toLowerCase() === name);
   if (custom) return { ok: true, prompt: expandTemplate(custom.body, payload.args), source: custom.source };
@@ -908,6 +925,9 @@ ipcMain.handle('commands:expand', (_e, payload = {}) => {
   }
   return { ok: false, error: `Команда /${payload.name} не найдена` };
 });
+
+/** Ресурсы MCP для подсказки `@сервер:uri` (CC9.3). */
+ipcMain.handle('mcp:resources', () => mcp.listResources().map(({ server, uri, name, description, mimeType }) => ({ server, uri, name, description, mimeType })));
 
 ipcMain.handle('files:search', (_e, payload = {}) => {
   const dir = payload.projectDir || loadSettings().projectDir;
@@ -1237,6 +1257,19 @@ ipcMain.handle('chat:start', async (event, payload) => {
   const mentions = payload.text ? resolveMentions(projectDir, payload.text) : [];
   if (mentions.length) {
     payload.text = `${payload.text}\n\n[Упомянуты: ${mentions.map((m) => `${m.path}${m.dir ? ' (папка)' : ''}`).join(', ')}. Прочитай их через read_file или list_files.]`;
+  }
+  // Ресурсы MCP `@сервер:uri` (CC9.3): содержимое — в запрос, в рамке данных.
+  const resources = payload.text ? resolveResourceMentions(payload.text, mcp.listResources()).slice(0, 5) : [];
+  // В чате показываем запрос как написан, без содержимого ресурсов.
+  if (resources.length && !payload.displayText) payload.displayText = payload.text;
+  for (const res of resources) {
+    let body;
+    try {
+      body = await mcp.readResource(res.server, res.uri);
+    } catch (err) {
+      body = `(не прочитан: ${err?.message || err})`;
+    }
+    payload.text = `${payload.text}\n\n[Ресурс MCP ${res.server}:${res.uri}]\n${wrapData(`mcp:${res.server}`, body)}`;
   }
   // Пути изображений из вложений: в сессии храним путь, base64 собирается на запрос (F1).
   const images = (Array.isArray(payload.images) ? payload.images : [])

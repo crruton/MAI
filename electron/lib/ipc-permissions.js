@@ -184,6 +184,7 @@ export const IPC_PERMISSIONS = {
   'mcp:remove': ADMIN,
   'mcp:login': ADMIN,
   'connectors:list': ANY,
+  'mcp:resources': ANY,
   'connectors:add': ADMIN,
   'connectors:remove': ADMIN,
   'mcp:logout': ADMIN,
