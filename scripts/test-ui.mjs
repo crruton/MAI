@@ -396,6 +396,21 @@ const INTERRUPTED = {
 };
 ipcMain.handle('sessions:get', (_e, id) => (id === TEST_SESSION.id ? TEST_SESSION : id === INTERRUPTED.id ? INTERRUPTED : null));
 
+// Git: /pr, /security-review, /worktree (раздел [46]).
+const wtCalls = [];
+ipcMain.handle('worktree:list', () => ({ ok: true, repo: '/repo', items: [{ dir: '/repo', branch: 'main', main: true }, { dir: '/data/wt/fix', branch: 'mai/wt-fix', main: false }] }));
+ipcMain.handle('worktree:create', (_e, payload) => {
+  wtCalls.push({ type: 'create', ...payload });
+  return { ok: true, dir: '/data/wt/new-task', branch: 'mai/wt-new-task', repo: '/repo' };
+});
+ipcMain.handle('worktree:open', (_e, dir) => {
+  wtCalls.push({ type: 'open', dir });
+  return { ok: true, dir };
+});
+ipcMain.handle('worktree:remove', (_e, payload) => {
+  wtCalls.push({ type: 'remove', ...payload });
+  return { ok: true, branch: 'mai/wt-fix' };
+});
 // Статусная строка и `!команда` (раздел [45]).
 ipcMain.handle('git:branch', () => 'dev');
 const directCalls = [];
@@ -1883,6 +1898,19 @@ app.whenReady().then(async () => {
     check('Esc закрывает окно, фокус возвращается на кнопку', !after.open && after.focus === 'settings-btn', JSON.stringify(after));
     const labels = await ui(`['settings-btn', 'attach', 'send', 'stop'].every((id) => document.getElementById(id)?.getAttribute('aria-label'))`);
     check('кнопки-значки подписаны для читалок экрана', labels === true);
+
+    console.log('\n[46] Git: /pr, /security-review, /worktree (ADR 0076)');
+    const sec = await slash('/security-review 7');
+    check('/security-review 7: gh pr diff, только чтение, путь атаки и уверенность', /gh pr diff 7/.test(sec?.text) && /файлы не меняй/.test(sec?.text) && /путь атаки/.test(sec?.text) && /уверенность/.test(sec?.text), sec?.text?.slice(0, 200));
+    const pr = await slash('/pr для релиза');
+    check('/pr: шаблон репозитория, не пушить в защищённую, без merge', /pull_request_template/.test(pr?.text) && /в защищённую ветку не пушь/.test(pr?.text) && /Не мерджи PR/.test(pr?.text) && /для релиза/.test(pr?.text), pr?.text?.slice(0, 200));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '/worktree'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await wait(500);
+    const wtRows = await ui(`[...document.querySelectorAll('.worktree-row')].map((r) => r.querySelector('b').textContent + ':' + Boolean(r.querySelector('.worktree-remove'))).join('|')`);
+    check('/worktree: основная папка и копии, убрать — только копию', wtRows === 'основная папка:false|mai/wt-fix:true', wtRows);
+    await ui(`(() => { document.querySelector('.worktree-name').value = 'new task'; document.querySelector('.worktree-create').click(); })()`);
+    await wait(600);
+    check('«Создать и открыть» — новая копия, чат в ней', wtCalls.some((c) => c.type === 'create' && c.name === 'new task'), JSON.stringify(wtCalls));
     await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; })()`);
   } catch (err) {
     fail += 1;

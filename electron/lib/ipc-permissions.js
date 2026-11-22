@@ -189,6 +189,11 @@ export const IPC_PERMISSIONS = {
   'sessions:rename': ANY,
   'shell:direct': ADMIN,
   'git:branch': ANY,
+  // Рабочие копии для чатов (CC11.5).
+  'worktree:list': ANY,
+  'worktree:create': ADMIN,
+  'worktree:open': ADMIN,
+  'worktree:remove': ADMIN,
   'sessions:fork': ANY,
   'sessions:exportFile': ANY,
   'sessions:importFile': ANY,

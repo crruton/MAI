@@ -77,6 +77,10 @@ contextBridge.exposeInMainWorld('mai', {
   // Ветка git для статусной строки (CC7.12).
   git: {
     branch: (projectDir) => invoke('git:branch', projectDir),
+    worktrees: (projectDir) => invoke('worktree:list', projectDir),
+    createWorktree: (projectDir, name) => invoke('worktree:create', { projectDir, name }),
+    openWorktree: (dir) => invoke('worktree:open', dir),
+    removeWorktree: (repo, dir) => invoke('worktree:remove', { repo, dir }),
   },
   sessions: {
     list: (options) => invoke('sessions:list', options),

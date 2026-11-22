@@ -51,10 +51,11 @@ export function repoRoot(dir) {
  * Новая рабочая копия: `<baseDir>/<id>` на ветке `mai/agent-<id>` от HEAD.
  * @returns {{ id, dir, branch, repo, base }}
  */
-export function createWorktree({ repo, baseDir, id = crypto.randomBytes(4).toString('hex') }) {
+export function createWorktree({ repo, baseDir, id = crypto.randomBytes(4).toString('hex'), branchPrefix = 'mai/agent-' }) {
   if (!/^[a-z0-9-]{1,40}$/.test(id)) throw new Error('Неверный id рабочей копии');
   const dir = path.join(baseDir, id);
-  const branch = `mai/agent-${id}`;
+  if (fs.existsSync(dir)) throw new Error(`Рабочая копия «${id}» уже есть`);
+  const branch = `${branchPrefix}${id}`;
   fs.mkdirSync(baseDir, { recursive: true });
   const base = git(repo, ['rev-parse', 'HEAD']).stdout.trim();
   git(repo, ['worktree', 'add', '-b', branch, dir, base]);
@@ -161,4 +162,31 @@ export function removeWorktree(wt, { keepBranch = false } = {}) {
   if (fs.existsSync(wt.dir)) fs.rmSync(wt.dir, { recursive: true, force: true });
   git(wt.repo, ['worktree', 'prune'], { allowFail: true });
   if (!keepBranch) git(wt.repo, ['branch', '-D', wt.branch], { allowFail: true });
+}
+
+/**
+ * Рабочие копии репозитория (CC11.5): [{ dir, branch, head, main }].
+ * `main` — основная папка репозитория.
+ */
+export function listWorktrees(repo) {
+  const out = git(repo, ['worktree', 'list', '--porcelain']).stdout;
+  const items = [];
+  let cur = null;
+  for (const line of out.split('\n')) {
+    if (line.startsWith('worktree ')) {
+      cur = { dir: realPath(line.slice(9).trim()), branch: '', head: '', main: items.length === 0 };
+      items.push(cur);
+    } else if (cur && line.startsWith('HEAD ')) cur.head = line.slice(5).trim();
+    else if (cur && line.startsWith('branch ')) cur.branch = line.slice(7).trim().replace(/^refs\/heads\//, '');
+  }
+  return items;
+}
+
+/** Имя копии для `/worktree <имя>`: латиница, цифры и дефис. */
+export function worktreeId(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
 }

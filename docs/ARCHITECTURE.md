@@ -383,7 +383,10 @@ ADR 0059. `pushViolation(command, { protectedBranches, branchOf })` в
 'protected-branch'`) для класса `exec`. `ctx.protectedBranches` — из
 `settings.protectedBranches` (по умолчанию `DEFAULT_PROTECTED`). `/commit` и
 `/review` — шаблоны `commitPrompt`/`reviewPrompt` в renderer; `overridable` в
-`BUILTIN_COMMANDS` уступает своей команде с тем же именем.
+`BUILTIN_COMMANDS` уступает своей команде с тем же именем. ADR 0076: `/pr` и
+`/security-review` — `prPrompt`/`securityReviewPrompt`; `/worktree` — IPC
+`worktree:list|create|open|remove` поверх `worktree.js` (`listWorktrees`,
+`branchPrefix: 'mai/wt-'`), копии в `<данные>/worktrees/`.
 
 ### Возможности модели
 

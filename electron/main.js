@@ -36,6 +36,7 @@ import { listRoles, installRole } from './lib/roles.js';
 import { wrapData } from './lib/injection.js';
 import { localConnectors } from './lib/local-connectors.js';
 import { currentBranch } from './lib/git-guard.js';
+import { repoRoot, realPath, createWorktree, listWorktrees, removeWorktree, worktreeId } from './lib/worktree.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -898,6 +899,61 @@ ipcMain.handle('project:pick', async () => {
   // Просто папка — без проекта Cowork (ADR 0065).
   saveSettings({ projectDir: result.filePaths[0], activeProject: null });
   return result.filePaths[0];
+});
+
+// ---------- рабочие копии для чатов (CC11.5, ADR 0076) ----------
+
+const worktreesDir = () => path.join(dataDir(), 'worktrees');
+
+ipcMain.handle('worktree:list', (_e, projectDir) => {
+  const repo = repoRoot(String(projectDir || loadSettings().projectDir || ''));
+  if (!repo) return { ok: false, error: 'Папка проекта — не git-репозиторий с коммитами' };
+  const ours = realPath(worktreesDir());
+  return { ok: true, repo, items: listWorktrees(repo).map((w) => ({ ...w, ours: w.dir.startsWith(ours) })) };
+});
+
+/** Новая копия на ветке `mai/wt-<имя>` и переход в неё: новый чат работает там. */
+ipcMain.handle('worktree:create', (_e, payload = {}) => {
+  const source = String(payload.projectDir || loadSettings().projectDir || '');
+  const repo = repoRoot(source);
+  if (!repo) return { ok: false, error: 'Папка проекта — не git-репозиторий с коммитами' };
+  const id = worktreeId(payload.name) || `wt-${crypto.randomBytes(3).toString('hex')}`;
+  try {
+    const wt = createWorktree({ repo, baseDir: path.join(worktreesDir(), path.basename(repo)), id, branchPrefix: 'mai/wt-' });
+    // Копия доверенного репозитория — того же доверия: код в ней тот же.
+    if (isTrusted(repo)) setTrust(dataDir(), wt.dir, 'trusted');
+    const dir = path.join(wt.dir, path.relative(repo, realPath(source)));
+    retirePluginHosts();
+    saveSettings({ projectDir: dir, activeProject: null });
+    audit({ at: new Date().toISOString(), tool: 'worktree:create', source: 'user', cls: 'write', subject: `${wt.branch} ← ${repo}`, decision: 'allow' });
+    return { ok: true, dir, branch: wt.branch, repo };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('worktree:open', (_e, dir) => {
+  const target = realPath(String(dir || ''));
+  if (!fs.existsSync(target)) return { ok: false, error: 'Папки нет' };
+  retirePluginHosts();
+  saveSettings({ projectDir: target, activeProject: null });
+  return { ok: true, dir: target };
+});
+
+/** Убрать копию: несохранённое коммитится в её ветку, ветка остаётся. Основную папку — нельзя. */
+ipcMain.handle('worktree:remove', (_e, payload = {}) => {
+  const repo = repoRoot(String(payload.repo || ''));
+  const dir = realPath(String(payload.dir || ''));
+  const item = repo ? listWorktrees(repo).find((w) => w.dir === dir) : null;
+  if (!item || item.main) return { ok: false, error: 'Это не рабочая копия этого репозитория' };
+  try {
+    removeWorktree({ repo, dir, branch: item.branch }, { keepBranch: true });
+    removeTrust(dataDir(), dir);
+    if (realPath(loadSettings().projectDir || '') === dir) saveSettings({ projectDir: repo, activeProject: null });
+    return { ok: true, branch: item.branch };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
 });
 
 // ---------- слэш-команды и упоминания файлов (CC7.7–CC7.9) ----------

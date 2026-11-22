@@ -1825,6 +1825,101 @@ function reviewPrompt(args = '') {
   ].join('\n');
 }
 
+/** Ревью безопасности (CC11.4): то же, что /review, с фокусом на уязвимостях. */
+function securityReviewPrompt(args = '') {
+  const pr = /^\s*#?(\d+)\s*$/.exec(args)?.[1];
+  const target = pr
+    ? `pull request #${pr}: получи изменения командой \`gh pr diff ${pr}\` (если gh нет — \`git fetch origin pull/${pr}/head\` и diff с основной веткой)`
+    : args
+      ? `изменения: ${args}`
+      : 'текущие изменения: `git diff HEAD` и новые файлы из `git status`';
+  return [
+    `Сделай ревью безопасности — ${target}.`,
+    'Только читай: файлы не меняй, ничего не запускай кроме команд git/gh для получения diff. Контекст — соседний код (read_file, grep): откуда приходят данные и куда уходят.',
+    'Ищи уязвимости, которые вносят именно эти изменения: инъекции (SQL, команд ОС, шаблонов, путей — path traversal), XSS, SSRF, небезопасная десериализация, обход проверки прав и аутентификации, IDOR, секреты в коде и логах, слабая криптография, небезопасные настройки по умолчанию, гонки при проверке прав, опасные зависимости.',
+    'Для каждой находки: **критично / высокий / средний / низкий**, уверенность (высокая / средняя), `файл:строка`, путь атаки — откуда приходит недоверенный ввод и что получает атакующий, и исправление.',
+    'Не включай теоретическое без пути атаки, стиль и «хорошо бы» — только то, что можно эксплуатировать. Нет находок — так и скажи. В конце — одна строка общего вывода.',
+  ].join('\n');
+}
+
+/** Pull request (CC11.2): ветка, push, описание по шаблону репозитория, gh/glab. */
+function prPrompt(args = '') {
+  const attribution = String(state.settings?.gitAttribution || '').trim();
+  return [
+    'Создай pull request с текущей работой.',
+    '1. Посмотри `git status`, текущую ветку, `git remote -v` и `git log` относительно основной ветки (`origin/HEAD`). Незакоммиченные изменения — сначала спроси, коммитить ли их (как /commit).',
+    '2. Если ты на основной или защищённой ветке (main, master) — создай новую ветку с понятным именем; в защищённую ветку не пушь.',
+    '3. Найди шаблон описания: `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE/*`, `docs/pull_request_template.md`, `PULL_REQUEST_TEMPLATE.md` (для GitLab — `.gitlab/merge_request_templates/*`). Есть шаблон — заполни его разделы по сути изменений; пункты про секреты, токены, внутренние адреса пропусти. Нет — коротко: что и зачем, как проверено.',
+    '4. Заголовок — короткая суть изменений, как первая строка хорошего коммита.',
+    attribution ? `5. В конце описания добавь подпись:\n${attribution}` : '5. Подпись агента в описание не добавляй.',
+    '6. Отправь ветку: `git push -u origin <ветка>`. Создай PR: GitHub — `gh pr create --title … --body-file <файл>`, GitLab — `glab mr create --title … --description …`; описание — через файл во временной папке. Нет gh/glab — дай ссылку на создание PR из вывода push и готовый текст описания.',
+    '7. В ответе — ссылка на PR и итог. Не мерджи PR, не меняй историю (amend, rebase, force push).',
+    args ? `Уточнение от меня: ${args}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/* ---------- рабочие копии для чатов (CC11.5, ADR 0076) ---------- */
+
+async function openWorktrees(name = '') {
+  if (name) {
+    const r = await api.git.createWorktree(state.projectDir, name);
+    if (!r?.ok) return toast(r?.error || 'Не удалось создать рабочую копию', 'err');
+    await switchToDir(r.dir);
+    toast(`Чат в рабочей копии: ветка ${r.branch}. Основная папка не меняется.`);
+    return;
+  }
+  const info = await api.git.worktrees(state.projectDir);
+  if (!info?.ok) return toast(info?.error || 'Рабочие копии недоступны', 'err');
+  const input = el('input', { class: 'worktree-name', placeholder: 'имя, например fix-login' });
+  const view = openModal({
+    title: 'Рабочие копии (git worktree)',
+    body: [
+      el('p', { class: 'hint-text', text: 'Отдельная папка на своей ветке от последнего коммита: можно вести параллельную задачу, не трогая основную. Новый чат откроется в копии.' }),
+      el(
+        'div',
+        { class: 'worktree-list' },
+        info.items.map((w) =>
+          el('div', { class: `worktree-row${w.dir === state.projectDir ? ' active' : ''}`, 'data-dir': w.dir }, [
+            el('div', { class: 'package-info' }, [el('b', { text: w.main ? 'основная папка' : w.branch || '(без ветки)' }), el('div', { class: 'hint-text', text: w.dir })]),
+            el('button', { class: 'btn ghost small worktree-open', type: 'button', text: 'Открыть', onclick: async () => { view.close(); await api.git.openWorktree(w.dir); await switchToDir(w.dir); } }),
+            w.main
+              ? null
+              : el('button', {
+                  class: 'btn ghost small worktree-remove',
+                  type: 'button',
+                  text: 'Убрать',
+                  title: 'Папка удаляется; несохранённое коммитится в её ветку, ветка остаётся',
+                  onclick: async () => {
+                    if (!window.confirm(`Убрать рабочую копию ${w.branch}? Несохранённое будет закоммичено в ветку, ветка останется.`)) return;
+                    const r = await api.git.removeWorktree(info.repo, w.dir);
+                    if (!r?.ok) return toast(r.error, 'err');
+                    view.close();
+                    if (state.projectDir === w.dir) await switchToDir(info.repo);
+                    toast(`Копия убрана, ветка ${r.branch} осталась`);
+                  },
+                }),
+          ]),
+        ),
+      ),
+      field('Новая копия', input),
+    ],
+    footer: [el('button', { class: 'btn primary worktree-create', type: 'button', text: 'Создать и открыть', onclick: async () => { const n = input.value.trim(); if (!n) return; view.close(); await openWorktrees(n); } })],
+  });
+}
+
+/** Перейти в папку (копию) и начать в ней новый чат. */
+async function switchToDir(dir) {
+  state.settings = await api.settings.get();
+  state.projectDir = dir;
+  updateChrome();
+  newChat();
+  await refreshSessions();
+  refreshBranch();
+  await refreshTrust();
+}
+
 async function loadCommands() {
   try {
     state.commands = await api.commands.list(state.projectDir);
@@ -1917,6 +2012,18 @@ async function runSlash(text) {
     case 'review':
       clear();
       await send({ text: reviewPrompt(args), display: `/review${args ? ` ${args}` : ''}` });
+      return;
+    case 'security-review':
+      clear();
+      await send({ text: securityReviewPrompt(args), display: `/security-review${args ? ` ${args}` : ''}` });
+      return;
+    case 'pr':
+      clear();
+      await send({ text: prPrompt(args), display: `/pr${args ? ` ${args}` : ''}` });
+      return;
+    case 'worktree':
+      clear();
+      await openWorktrees(args.trim());
       return;
     case 'memory':
       clear();

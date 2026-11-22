@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { repoRoot, createWorktree, worktreeChanges, applyChanges, removeWorktree } from '../electron/lib/worktree.js';
+import { repoRoot, createWorktree, worktreeChanges, applyChanges, removeWorktree, listWorktrees, worktreeId } from '../electron/lib/worktree.js';
 
 let pass = 0;
 let fail = 0;
@@ -82,6 +82,21 @@ try {
   bad = e.message;
 }
 check('id с путём — отказ', /Неверный id/.test(bad));
+
+console.log('[4] копии для чатов (/worktree)');
+check('имя копии из ввода', worktreeId('Fix Login!') === 'fix-login' && worktreeId('  ') === '' && worktreeId('Почини') === '');
+const user = createWorktree({ repo, baseDir: path.join(tmp, 'chats'), id: 'fix-login', branchPrefix: 'mai/wt-' });
+const list = listWorktrees(repo);
+check('список: основная папка первой, копия со своей веткой', list[0].main && list[0].dir === repo && list.some((w) => !w.main && w.branch === 'mai/wt-fix-login' && w.dir === user.dir), JSON.stringify(list));
+let dup = '';
+try {
+  createWorktree({ repo, baseDir: path.join(tmp, 'chats'), id: 'fix-login', branchPrefix: 'mai/wt-' });
+} catch (e) {
+  dup = e.message;
+}
+check('та же копия второй раз — понятный отказ', /уже есть/.test(dup), dup);
+removeWorktree(user, { keepBranch: true });
+check('убрана, ветка осталась', !listWorktrees(repo).some((w) => w.dir === user.dir) && git(repo, 'branch', '--list', 'mai/wt-fix-login').stdout.includes('mai/wt-fix-login'));
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
