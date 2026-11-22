@@ -51,6 +51,7 @@ import {
 import {
   loadBoards,
   saveBoards,
+  saveBoardSection,
   generateViews,
   saveBaseline,
   scanQuality,
@@ -2428,12 +2429,8 @@ ipcMain.handle('boards:load', (_e, payload) => {
 
 ipcMain.handle('boards:save', (_e, payload) => {
   requireAdmin();
-  const projectDir = projectOf(payload);
-  const allowed = ['delivery', 'architecture', 'runners', 'quality'];
-  if (!allowed.includes(payload.section)) throw new Error('Неизвестная секция доски');
-  const data = loadBoards(projectDir);
-  data[payload.section] = payload.data;
-  return saveBoards(projectDir, data);
+  // Версия секции (F9, ADR 0062): правка поверх чужого сохранения — конфликт, а не потеря.
+  return saveBoardSection(projectOf(payload), payload.section, payload.data, payload.rev);
 });
 
 ipcMain.handle('boards:views', async (_e, payload) => {

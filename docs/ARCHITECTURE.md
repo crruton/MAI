@@ -462,6 +462,13 @@ ADR 0038. `electron/lib/settings-levels.js`: `readManaged()` (файл орга�
 решение `evaluate` и уровни найденного правила. Ответ на запрос
 `remember: 'local'` пишет правило в `settings.local.json` (admin, доверенная папка).
 
+## Доски и артефакты
+
+ADR 0062. `saveBoards` — атомарно, `revs` по секциям; `saveBoardSection(dir,
+section, value, rev)` возвращает `{ conflict, boards }` при чужой записи.
+`artifacts.js`: `withIndexLock` (через `file-lock.js`) вокруг изменений индекса,
+`gcBlobs` после `deleteArtifact`.
+
 ## Проверка данных IPC
 
 ADR 0060. `guardIpc` перед матрицей прав вызывает `validateIpc(channel, args)`
