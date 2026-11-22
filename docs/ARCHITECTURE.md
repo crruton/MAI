@@ -462,6 +462,14 @@ ADR 0038. `electron/lib/settings-levels.js`: `readManaged()` (файл орга�
 решение `evaluate` и уровни найденного правила. Ответ на запрос
 `remember: 'local'` пишет правило в `settings.local.json` (admin, доверенная папка).
 
+## Трассировка агента
+
+ADR 0063. `runAgent` — обёртка над `runAgentInner`: спан `agent.run`
+(`agent.subagent` для субагента, родитель — `parentSpan`), внутри — `agent.step`
+вокруг запроса с повторами и `agent.tool` вокруг `runToolCall` (спан доступен
+инструменту как `ctx.span`). `tracer` — из `agentTracer()` в main
+(`createTracer(emitSpan)` или `NO_TRACER`).
+
 ## Доски и артефакты
 
 ADR 0062. `saveBoards` — атомарно, `revs` по секциям; `saveBoardSection(dir,

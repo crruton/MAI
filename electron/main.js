@@ -25,6 +25,7 @@ import { listConnectors, connectorServerConfig } from './lib/connectors.js';
 import { sessionResults, previewResult, resultFile } from './lib/results.js';
 import { createScheduleStore, isDue, nextRunAt, describeSchedule } from './lib/scheduler.js';
 import { modelCapabilities } from './lib/capabilities.js';
+import { createTracer, NO_TRACER } from './lib/tracer.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
@@ -1259,6 +1260,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
         trusted,
         // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Трассировка прогона в OTLP (F22, ADR 0063), если телеметрия включена.
+        tracer: agentTracer(),
         // Запасная модель при сбое основной (ADR 0057).
         fallback: fallbackFor(settings, activeKey),
         // Глубина рассуждений из поля ввода (CC7.11).
@@ -1320,6 +1323,11 @@ ipcMain.handle('chat:start', async (event, payload) => {
 let scheduleStoreInstance = null;
 const scheduleStore = () => (scheduleStoreInstance ||= createScheduleStore(dataDir()));
 const scheduledRunning = new Set();
+
+/** Трассировщик прогона (F22): спаны agent.run/step/tool в OTLP; телеметрия выключена — пустой. */
+function agentTracer() {
+  return telemetryStatus().enabled ? createTracer(emitSpan) : NO_TRACER;
+}
 
 /** Запасная модель (ADR 0057): settings.fallbackModel = «провайдер/модель», с ключом и не та же, что основная. */
 function fallbackFor(settings, primaryKey) {
@@ -1393,6 +1401,8 @@ async function runScheduled(task, { reason = 'schedule' } = {}) {
       audit,
       trusted: true,
       contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+      // Трассировка прогона в OTLP (F22, ADR 0063), если телеметрия включена.
+      tracer: agentTracer(),
       // Запасная модель при сбое основной (ADR 0057).
       fallback: fallbackFor(settings, task.model || settings.activeModel),
       checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
@@ -2605,6 +2615,8 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         trusted,
         // Размер контекста модели — для индикатора и автокомпакции (CC5.1, CC5.3).
         contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+        // Трассировка прогона в OTLP (F22, ADR 0063), если телеметрия включена.
+        tracer: agentTracer(),
         // Запасная модель при сбое основной (ADR 0057).
         fallback: fallbackFor(settings, payload.model || settings.activeModel),
         // Чекпоинты правок для отката (CC6.1).

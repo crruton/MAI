@@ -27,6 +27,7 @@ import { effectiveMode, mergeRules } from './policy.js';
 import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
 import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DELAYS } from './retry.js';
 import { modelCapabilities, requestOptions } from './capabilities.js';
+import { NO_TRACER } from './tracer.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
 import { runToolCall, toolEntry } from './tool-runner.js';
 import { attachImages, attachToolImages, isImageRejected, supportsVision, isImageFile } from './vision.js';
@@ -329,7 +330,28 @@ async function* abortableStream(stream, signal) {
   }
 }
 
-export async function runAgent({
+/**
+ * Прогон агента. Обёртка открывает спан прогона (F22, ADR 0063) и закрывает его
+ * при любом выходе; субагент вкладывается в спан вызвавшего его инструмента.
+ */
+export async function runAgent(options) {
+  const tracer = options.tracer || NO_TRACER;
+  const runSpan = tracer.start(
+    options.subagent ? 'agent.subagent' : 'agent.run',
+    { 'agent.model': options.model, 'agent.kind': options.kind || 'code', 'agent.subagent': options.subagent?.def?.name },
+    options.parentSpan || null,
+  );
+  try {
+    const history = await runAgentInner({ ...options, tracer, runSpan });
+    runSpan.end({ 'agent.messages': history.length, 'agent.stopped': Boolean(options.signal?.aborted) });
+    return history;
+  } catch (err) {
+    runSpan.end({}, options.signal?.aborted ? 'остановлено' : err?.message || String(err));
+    throw err;
+  }
+}
+
+async function runAgentInner({
   settings,
   provider,
   projectDir,
@@ -361,6 +383,8 @@ export async function runAgent({
   fallback = null,
   // Глубина рассуждений (CC7.11): '' — по умолчанию модели, low | medium | high.
   effort = '',
+  tracer = NO_TRACER,
+  runSpan = null,
 }) {
   let usingFallback = false;
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
@@ -468,6 +492,8 @@ export async function runAgent({
       kind,
       fallback: usingFallback ? null : fallback,
       effort,
+      tracer,
+      parentSpan: ctx.span || runSpan,
       subagent: { def },
     });
     const final = [...subHistory].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '(субагент не вернул текст)';
@@ -725,6 +751,9 @@ export async function runAgent({
         await runTurn(buildRequest(false));
       }
     };
+    // Спан шага (F22): запрос к модели с повторами.
+    const stepSpan = tracer.start('agent.step', { 'agent.model': model, 'agent.iteration': iteration + 1 }, runSpan);
+    let retries = 0;
     try {
       // Повторы при временных сбоях (CC13.3) и запасная модель (CC13.2), ADR 0057.
       for (let retry = 0; ; retry += 1) {
@@ -740,6 +769,7 @@ export async function runAgent({
             emit({ type: 'notice', level: 'warn', text: `${model}: ${describeError(err)} — повтор через ${Math.round(wait / 1000)} с (${retry + 1} из ${RETRY_DELAYS.length})` });
             await sleep(wait, signal);
             resetTurn();
+            retries += 1;
             continue;
           }
           if (clean && fallback?.provider && !usingFallback && needsFallback(err)) {
@@ -762,7 +792,17 @@ export async function runAgent({
       }
       // Сторож оборвал поток: пустой ответ — не успех, а простой шлюза.
       if (guard.timedOut() && !signal.aborted) throw new Error('Модель не отвечала');
+      stepSpan.end({
+        'agent.model': model,
+        'agent.transport': useResponses ? 'responses' : 'chat',
+        'agent.retries': retries,
+        'agent.fallback': usingFallback,
+        'agent.tool_calls': validCalls.length,
+        'gen_ai.usage.input_tokens': turnUsage?.input ?? turnUsage?.prompt_tokens,
+        'gen_ai.usage.output_tokens': turnUsage?.output ?? turnUsage?.completion_tokens,
+      });
     } catch (err) {
+      stepSpan.end({ 'agent.model': model, 'agent.retries': retries }, signal.aborted ? 'остановлено' : err?.message || String(err));
       // Простой превращаем в понятную ошибку: иначе пользователь видит
       // «Request was aborted» и не понимает, что делать.
       if (guard.timedOut() && !signal.aborted) {
@@ -912,7 +952,22 @@ export async function runAgent({
               }
             },
           };
-          outcome = await runToolCall({ entry, args, ctx: callCtx, policy: policyCtx, approve, audit, hooks });
+          // Спан инструмента (F22): класс, решение PolicyEngine, подтверждение, время.
+          const toolSpan = tracer.start('agent.tool', { 'agent.tool': entry.name, 'agent.tool.class': entry.cls, 'agent.tool.source': entry.source }, runSpan);
+          callCtx.span = toolSpan;
+          try {
+            outcome = await runToolCall({ entry, args, ctx: callCtx, policy: policyCtx, approve, audit, hooks });
+            toolSpan.end({
+              'agent.decision': outcome.decision?.action,
+              'agent.decision.source': outcome.decision?.source,
+              'agent.decision.risk': outcome.decision?.risk,
+              'agent.approved': outcome.approved,
+              'agent.tool.ok': outcome.ok !== false,
+            });
+          } catch (err) {
+            toolSpan.end({}, err?.message || String(err));
+            throw err;
+          }
         }
       }
       return { call, args, outcome };

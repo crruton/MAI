@@ -69,6 +69,29 @@ function fakeClient(script, bodies) {
   });
 }
 
+/** Клиент: основной сценарий и сценарий субагентов по типу из системного промпта. */
+const routed = (mainScript, subScript, log) => {
+  let mi = 0;
+  const si = {};
+  return () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          const system = body.messages[0].content;
+          const sub = /Ты — субагент «(\w+)»/.exec(system)?.[1];
+          const task = body.messages[1]?.content || '';
+          log.push({ sub: sub || null, tools: body.tools.map((t) => t.function.name), at: Date.now(), messages: body.messages });
+          if (!sub) return stream(mainScript[Math.min(mi++, mainScript.length - 1)]);
+          const key = `${sub}:${task}`;
+          si[key] = (si[key] || 0) + 1;
+          await new Promise((r) => setTimeout(r, 150)); // чтобы параллельность была видна по времени
+          return stream(subScript(sub, task, si[key]));
+        },
+      },
+    },
+  });
+};
+
 function fakeMcp() {
   const calls = [];
   return {
@@ -657,27 +680,6 @@ console.log('\n[17] Субагенты: свой контекст, итог ро
 {
   fs.writeFileSync(path.join(project, 'sub.txt'), 'исходный', 'utf8');
   // Один фейковый провайдер: субагента узнаём по системному промпту.
-  const routed = (mainScript, subScript, log) => {
-    let mi = 0;
-    const si = {};
-    return () => ({
-      chat: {
-        completions: {
-          create: async (body) => {
-            const system = body.messages[0].content;
-            const sub = /Ты — субагент «(\w+)»/.exec(system)?.[1];
-            const task = body.messages[1]?.content || '';
-            log.push({ sub: sub || null, tools: body.tools.map((t) => t.function.name), at: Date.now(), messages: body.messages });
-            if (!sub) return stream(mainScript[Math.min(mi++, mainScript.length - 1)]);
-            const key = `${sub}:${task}`;
-            si[key] = (si[key] || 0) + 1;
-            await new Promise((r) => setTimeout(r, 150)); // чтобы параллельность была видна по времени
-            return stream(subScript(sub, task, si[key]));
-          },
-        },
-      },
-    });
-  };
   const log = [];
   const history = await runAgent(
     base({
@@ -1070,6 +1072,38 @@ console.log('\n[25] Сторож простоя: молчащий шлюз пр�
   );
   check("живой ответ не прерывается", history.at(-1)?.content === "абв", String(history.at(-1)?.content));
 }
+console.log('\n[26] Трассировка: прогон → шаг → инструмент → субагент (F22)');
+{
+  const { createTracer } = await import('../electron/lib/tracer.js');
+  const spans = [];
+  const tracer = createTracer((name, sp) => spans.push({ name, ...sp }));
+  fs.writeFileSync(path.join(project, 'trace.txt'), 'x', 'utf8');
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'x' }],
+      mcp: fakeMcp(),
+      tracer,
+      agentDefs: BUILTIN_AGENTS,
+      clientFactory: routed(
+        [{ calls: [{ name: 'read_file', args: { path: 'trace.txt' } }, { name: 'agent', args: { type: 'explore', prompt: 'найди' } }] }, { text: 'готово' }],
+        () => ({ text: 'нашёл' }),
+        [],
+      ),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const by = (n) => spans.filter((s) => s.name === n);
+  const run = by('agent.run')[0];
+  const tools = by('agent.tool');
+  const read = tools.find((t) => t.attributes['agent.tool'] === 'read_file');
+  const agentTool = tools.find((t) => t.attributes['agent.tool'] === 'agent');
+  const sub = by('agent.subagent')[0];
+  check('один прогон, шаги — его дети', run && !run.parentSpanId && by('agent.step').length >= 2 && by('agent.step').every((s) => s.parentSpanId === run.spanId || s.parentSpanId === sub?.spanId), JSON.stringify(spans.map((s) => [s.name, s.parentSpanId?.slice(0, 4)])));
+  check('инструмент: класс и решение PolicyEngine', read?.attributes['agent.tool.class'] === 'read' && read.attributes['agent.decision'] === 'allow' && read.attributes['agent.tool.ok'] === true, JSON.stringify(read?.attributes));
+  check('субагент — внутри спана инструмента agent', sub && sub.parentSpanId === agentTool?.spanId && sub.attributes['agent.subagent'] === 'explore');
+  check('всё в одном trace', spans.every((s) => s.traceId === tracer.traceId));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();
