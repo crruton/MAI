@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { buildDocx, buildXlsx, docxToMarkdown, readXlsx, sheetsToText } from '../electron/lib/documents.js';
+import { buildDocx, buildXlsx, buildPptx, docxToMarkdown, pptxToMarkdown, readXlsx, sheetsToText } from '../electron/lib/documents.js';
+import { markdownToSlides } from '../electron/lib/export/pptx.js';
 import { readZip } from '../electron/lib/export/unzip.js';
 import { createZip } from '../electron/lib/export/zip.js';
 import { documentTools } from '../electron/lib/tools/documents.js';
@@ -101,6 +102,22 @@ check('csv: BOM для Excel, ; и кавычки', csv.startsWith('﻿Имя;К
 out = await runToolCall({ entry: entry('read_document'), args: { path: '../secret.docx' }, ctx, policy });
 check('вне рабочих папок — отказ', /вне проекта/.test(out.content), out.content);
 
+console.log('[4б] PPTX (CW2.3)');
+const deckMd = '# Итоги квартала\nОтдел продаж\n\n## Выручка\n- Рост 12% <важно> & "кавычки"\n  - Москва +20%\n- План выполнен\n\n## Дальше\n- Найм';
+const slides = markdownToSlides(deckMd);
+check('Markdown → слайды: титульный, пункты с уровнями', slides.length === 3 && slides[0].subtitle === 'Отдел продаж' && slides[1].bullets[1].level === 1, JSON.stringify(slides));
+const pptx = buildPptx({ markdown: deckMd });
+const back = pptxToMarkdown(pptx);
+check('PPTX туда-обратно: заголовки и пункты, спецсимволы', /## Слайд 1: Итоги квартала/.test(back) && /- Рост 12% <важно> & "кавычки"/.test(back) && /## Слайд 3: Дальше\n- Найм/.test(back), back);
+const pfiles = readZip(pptx);
+check('части PowerPoint: презентация, мастер, макет, тема, 3 слайда', ['ppt/presentation.xml', 'ppt/slideMasters/slideMaster1.xml', 'ppt/slideLayouts/slideLayout1.xml', 'ppt/theme/theme1.xml', 'ppt/slides/slide3.xml'].every((n) => pfiles.has(n)));
+out = await runToolCall({ entry: entry('create_document'), args: { path: 'Отчёт.pptx', slides: [{ title: 'Титул', subtitle: 'подзаголовок' }, { title: 'Пункты', bullets: ['один', { text: 'два', level: 1 }] }] }, ctx, policy: { getMode: () => 'bypass', getRules: () => ({}) } });
+check('create_document .pptx', /Создан документ/.test(out.content), out.content);
+out = await runToolCall({ entry: entry('read_document'), args: { path: 'Отчёт.pptx' }, ctx, policy });
+check('read_document .pptx', /## Слайд 2: Пункты\n- один\n- два/.test(out.content), out.content);
+out = await runToolCall({ entry: entry('create_document'), args: { path: 'пусто.pptx' }, ctx, policy: { getMode: () => 'bypass', getRules: () => ({}) } });
+check('pptx без слайдов — отказ', /нужны slides/.test(out.content));
+
 console.log('[5] сторонний читатель (LibreOffice, если установлен)');
 const soffice = spawnSync(process.platform === 'win32' ? 'soffice.exe' : 'soffice', ['--version'], { encoding: 'utf8', timeout: 20000 });
 if (soffice.status === 0) {
@@ -114,6 +131,9 @@ if (soffice.status === 0) {
   spawnSync('soffice', ['--headless', '--convert-to', 'txt:Text (encoded):UTF8', '--outdir', outDir, path.join(outDir, 'doc.docx')], { timeout: 90000 });
   const txt = fs.existsSync(path.join(outDir, 'doc.txt')) ? fs.readFileSync(path.join(outDir, 'doc.txt'), 'utf8') : '';
   check('LibreOffice открывает docx', /Отчёт/.test(txt) && /Текст абзаца/.test(txt), JSON.stringify(txt));
+  fs.writeFileSync(path.join(outDir, 'deck.pptx'), buildPptx({ markdown: '# Титул\nподзаголовок\n\n## Слайд два\n- пункт' }));
+  spawnSync('soffice', ['--headless', '--convert-to', 'pdf', '--outdir', outDir, path.join(outDir, 'deck.pptx')], { timeout: 90000 });
+  check('LibreOffice открывает pptx', fs.existsSync(path.join(outDir, 'deck.pdf')) && fs.statSync(path.join(outDir, 'deck.pdf')).size > 1000);
 } else {
   console.log('  —    LibreOffice не установлен, пропуск');
 }

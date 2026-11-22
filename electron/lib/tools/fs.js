@@ -159,7 +159,7 @@ export const fsTools = [
         if (typeof ctx.vision === 'function' && !ctx.vision()) return `Текущая модель не принимает изображения: ${file}. Текст на картинке можно распознать OCR или выбрать модель со зрением.`;
         return `Изображение ${file} (${stat.size} байт) — показано модели следующим сообщением.`;
       }
-      if (ext === '.docx' || ext === '.xlsx') return `Документ ${path.basename(file)} читай инструментом read_document — он покажет текст и таблицы.`;
+      if (ext === '.docx' || ext === '.xlsx' || ext === '.pptx') return `Документ ${path.basename(file)} читай инструментом read_document — он покажет текст и таблицы.`;
       if (ext === '.pdf') {
         if (stat.size > 50 * 1024 * 1024) throw new Error(`PDF слишком большой: ${stat.size} байт`);
         const text = extractPdf(fs.readFileSync(file));
