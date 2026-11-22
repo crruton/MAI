@@ -3505,6 +3505,8 @@ async function openSettings() {
     value: settings.reviewer?.model || '',
     placeholder: 'провайдер/модель или пусто — модель агента',
   });
+  const reviewerVerify = el('input', { type: 'checkbox', class: 'reviewer-verify' });
+  reviewerVerify.checked = settings.reviewer?.verify !== false;
   const reviewerRounds = el('input', {
     type: 'number',
     min: '0',
@@ -3637,6 +3639,7 @@ async function openSettings() {
       el('label', { class: 'field' }, [
         el('span', { text: 'Ревизор: вторая модель проверяет ответ' }),
         el('label', { class: 'hint-text' }, [reviewerEnabled, ' включить approve/revise']),
+        el('label', { class: 'hint-text' }, [reviewerVerify, ' если агент менял файлы — ревизор сам их читает (только чтение)']),
       ]),
       el('div', { class: 'row' }, [
         field('Модель ревизора', reviewerModel),
@@ -3735,6 +3738,7 @@ async function openSettings() {
               enabled: reviewerEnabled.checked,
               model: reviewerModel.value.trim(),
               maxRounds: Math.max(0, Math.min(5, Number(reviewerRounds.value || 0))),
+              verify: reviewerVerify.checked,
             },
             guardrails: {
               enabled: guardEnabled.checked,

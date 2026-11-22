@@ -1104,6 +1104,66 @@ console.log('\n[26] Трассировка: прогон → шаг → инст
   check('всё в одном trace', spans.every((s) => s.traceId === tracer.traceId));
 }
 
+console.log('\n[27] Ревизор: режим и проверка изменённых файлов сам (F5)');
+{
+  fs.writeFileSync(path.join(project, 'rev.txt'), 'старое', 'utf8');
+  const reviewerBodies = [];
+  let mainStep = 0;
+  let reviews = 0;
+  const factory = (options) => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          const system = body.messages[0].content;
+          if (options.baseURL === 'http://reviewer') {
+            reviewerBodies.push(JSON.parse(JSON.stringify(body)));
+            if (!body.stream) return { choices: [{ message: { content: '{"verdict":"approve","reason":"ок"}' } }] };
+            // Ревизор-субагент: сначала читает файл, потом выносит вердикт.
+            const sawTool = body.messages.some((m) => m.role === 'tool');
+            if (!sawTool) return stream({ calls: [{ name: 'read_file', args: { path: 'rev.txt' } }] });
+            reviews += 1;
+            return stream({ text: reviews === 1 ? '{"verdict":"revise","reason":"в файле опечатка","instructions":"исправь слово"}' : '{"verdict":"approve","reason":"теперь верно"}' });
+          }
+          void system;
+          mainStep += 1;
+          if (mainStep === 1) return stream({ calls: [{ name: 'read_file', args: { path: 'rev.txt' } }] });
+          if (mainStep === 2) return stream({ calls: [{ name: 'write_file', args: { path: 'rev.txt', content: 'новое' } }] });
+          return stream({ text: `готово ${mainStep}` });
+        },
+      },
+    },
+  });
+  const history = await runAgent(
+    base({
+      settings: { maxIterations: 10, permissions: {} },
+      messages: [{ role: 'user', content: 'поправь файл' }],
+      mcp: fakeMcp(),
+      clientFactory: factory,
+      reviewer: { provider: { baseURL: 'http://reviewer', apiKey: 'r', name: 'rev' }, model: 'gpt-5', maxRounds: 2 },
+      policy: { getMode: () => 'bypass', getRules: () => ({}) },
+    }),
+  );
+  const subBodies = reviewerBodies.filter((b) => b.stream);
+  check('ревизор-субагент читал изменённый файл', subBodies.some((b) => b.tools?.some((t) => t.function.name === 'read_file')) && subBodies.every((b) => !b.tools?.some((t) => ['write_file', 'edit_file', 'run_shell', 'delete_file'].includes(t.function.name))), JSON.stringify(subBodies.map((b) => (b.tools || []).map((t) => t.function.name))));
+  check('в задании ревизора — список изменённых файлов', /Изменённые файлы:\n- rev\.txt/.test(subBodies[0]?.messages?.[1]?.content || ''));
+  check('замечание ревизора — отдельной ролью, затем принято', history.some((m) => m.role === 'review' && /опечатка/.test(m.content)) && reviews === 2, JSON.stringify(history.map((m) => m.role)));
+  // «План»: без изменений — обычный ревизор с контекстом режима, без temperature у gpt-5.
+  reviewerBodies.length = 0;
+  mainStep = 99;
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'план' }],
+      mcp: fakeMcp(),
+      clientFactory: factory,
+      reviewer: { provider: { baseURL: 'http://reviewer', apiKey: 'r', name: 'rev' }, model: 'gpt-5', maxRounds: 1 },
+      policy: { getMode: () => 'plan', getRules: () => ({}) },
+    }),
+  );
+  const plain = reviewerBodies.find((b) => !b.stream);
+  check('в «Плане» ревизор знает режим и не требует правок кода', /Режим «План»/.test(plain?.messages?.[0]?.content || '') && /Не требуй правок кода/.test(plain.messages[0].content));
+  check('gpt-5: без temperature', plain && plain.temperature === undefined, JSON.stringify(plain && Object.keys(plain)));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

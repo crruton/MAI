@@ -462,6 +462,13 @@ ADR 0038. `electron/lib/settings-levels.js`: `readManaged()` (файл орга�
 решение `evaluate` и уровни найденного правила. Ответ на запрос
 `remember: 'local'` пишет правило в `settings.local.json` (admin, доверенная папка).
 
+## Ревизор
+
+ADR 0064. После финального ответа: `touched` (файлы `write`/`delete` прогона)
+не пуст и `reviewer.verify !== false` — `runAgent` субагента `reviewer`
+(`REVIEWER_TOOLS`, режим `plan`, `VERIFY_PROMPT`), вердикт — `parseVerdict`;
+иначе `reviewAnswer({ mode, kind, requestOptions })`.
+
 ## Трассировка агента
 
 ADR 0063. `runAgent` — обёртка над `runAgentInner`: спан `agent.run`

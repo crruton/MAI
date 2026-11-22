@@ -21,9 +21,9 @@ import { todoTools } from './tools/todo.js';
 import { nestedInstructions, projectInstructions } from './instructions.js';
 import { agentToolSchema, isReadOnlyDef, NEVER_FOR_SUBAGENT } from './agent-defs.js';
 import { listSkills, readAgents, readMemory } from './skills.js';
-import { reviewAnswer } from './reviewer.js';
+import { reviewAnswer, reviewContext, parseVerdict, VERIFY_PROMPT } from './reviewer.js';
 import { modePrompt } from './permissions.js';
-import { effectiveMode, mergeRules } from './policy.js';
+import { effectiveMode, mergeRules, classifyTool } from './policy.js';
 import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
 import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DELAYS } from './retry.js';
 import { modelCapabilities, requestOptions } from './capabilities.js';
@@ -46,6 +46,9 @@ const BASE_PROMPT = `Ты — MAI Code, агент для программиро
 - Для задачи из трёх шагов и больше веди список задач инструментом todo_write и обновляй его по ходу.
 - После изменений проверяй результат (тесты, сборка, линтер), если это возможно.
 - Не коммить в git и не удалять данные без явной просьбы.`;
+
+/** Инструменты ревизора-субагента (F5): только чтение. */
+const REVIEWER_TOOLS = ['read_file', 'read_document', 'list_files', 'glob', 'grep'];
 
 /** Режим «Задача» (CW1.1, ADR 0046): работа с документами и данными, не с кодом. */
 const TASK_PROMPT = `Ты — MAI, помощник для рабочих задач на компьютере пользователя: документы, таблицы, заметки, отчёты, письма, разбор файлов.
@@ -422,6 +425,8 @@ async function runAgentInner({
   const skillGrants = [];
   // Отметки «файл прочитан» живут весь прогон, а не одну итерацию (CC1.2).
   const readFiles = new Map();
+  // Изменённые за прогон файлы — ревизор проверит их сам (F5).
+  const touched = new Set();
   // Признаки prompt injection в прочитанном (CC2.10): до конца прогона «Авто» спрашивает про действия.
   let taint = null;
   const currentMode = () => effectiveMode(policy?.getMode ? policy.getMode() : permissionMode || settings.permissionMode, role);
@@ -857,15 +862,51 @@ async function runAgentInner({
         reviewRound += 1;
         emit({ type: 'review:start', round: reviewRound, model: reviewer.model || model });
         let verdict;
+        const reviewModel = reviewer.model || model;
+        const reviewCaps = modelCapabilities(reviewModel, reviewer.provider);
         try {
-          verdict = await reviewAnswer({
-            client: reviewerClient,
-            model: reviewer.model || model,
-            task,
-            answer: content,
-            signal,
-            temperature: 0,
-          });
+          if (touched.size && reviewer.verify !== false) {
+            // Ревизор-субагент (F5, ADR 0064): читает изменённые файлы сам, ничего не меняет.
+            const sub = await runAgent({
+              settings: { ...settings, maxIterations: 12 },
+              provider: reviewer.provider,
+              projectDir,
+              model: reviewModel,
+              messages: [
+                {
+                  role: 'user',
+                  content: `${VERIFY_PROMPT}\n${reviewContext({ mode: currentMode(), kind })}\n\nЗадача:\n${task.slice(0, 8000)}\n\nОтвет агента:\n${String(content).slice(0, 12000)}\n\nИзменённые файлы:\n${[...touched].slice(0, 50).map((f) => `- ${f}`).join('\n')}`,
+                },
+              ],
+              emit: (e) => (e.type === 'notice' ? emit(e) : undefined),
+              approve: async () => ({ allow: false, message: 'Ревизор только читает' }),
+              signal,
+              mcp,
+              pluginTools: [],
+              transforms: [],
+              policy: { role: policyCtx.role, getMode: () => 'plan', getRules: () => ({}) },
+              trusted,
+              clientFactory,
+              extraDirs,
+              kind,
+              tracer,
+              parentSpan: runSpan,
+              subagent: { def: { name: 'reviewer', description: 'ревизор', tools: REVIEWER_TOOLS, prompt: VERIFY_PROMPT } },
+            });
+            const final = [...sub].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+            verdict = parseVerdict(final) || { verdict: 'approve', reason: 'Ревизор не вернул вердикт — ответ принят', instructions: '' };
+          } else {
+            verdict = await reviewAnswer({
+              client: reviewerClient,
+              model: reviewModel,
+              task,
+              answer: content,
+              signal,
+              mode: currentMode(),
+              kind,
+              requestOptions: reviewCaps.temperature ? { temperature: 0 } : {},
+            });
+          }
         } catch (err) {
           verdict = {
             verdict: 'approve',
@@ -1002,6 +1043,7 @@ async function runAgentInner({
           audit?.({ at: new Date().toISOString(), tool: call.function.name, source: 'injection', cls: 'read', subject: String(taint.path).slice(0, 300), decision: 'taint', reason: hit.why, snippet: hit.snippet });
         }
       }
+      if (outcome.ok !== false && typeof args?.path === 'string' && ['write', 'delete'].includes(classifyTool(call.function.name))) touched.add(args.path);
       emit({ type: 'tool_result', id: call.id, name: call.function.name, content: outcome.content, ok: outcome.ok, diff: outcome.diff || null });
       // read_file картинки (CC1.3): путь — в результат, сама картинка уйдёт в запрос.
       let images = null;

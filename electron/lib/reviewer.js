@@ -22,7 +22,24 @@ const REVIEW_PROMPT = `Ты — независимый ревизор ответ
 - revise — есть фактическая ошибка, пропущен шаг или ответ не решает задачу.
 - Если сомневаешься, выбирай approve.`;
 
-function parseVerdict(raw) {
+/** Как читать ответ в зависимости от режима и вида чата (F5, ADR 0064). */
+export function reviewContext({ mode = '', kind = 'code' } = {}) {
+  const lines = [];
+  if (mode === 'plan') lines.push('Режим «План»: агенту запрещено менять файлы. Оцени план — полноту, риски, проверяемость. Не требуй правок кода.');
+  if (mode === 'dontAsk') lines.push('Режим «Только разрешённое»: часть действий могла быть отклонена правилами — это не ошибка агента, если он честно об этом сказал.');
+  if (kind === 'task') lines.push('Это задача с документами, не программирование: оценивай результат (файлы, точность, полноту), а не код.');
+  return lines.join('\n');
+}
+
+/** Промпт ревизора-субагента: проверяет изменения инструментами чтения. */
+export const VERIFY_PROMPT = `Ты — независимый ревизор. Агент выполнил задачу и изменил файлы (список ниже).
+Проверь результат сам: прочитай изменённые файлы (read_file, read_document, grep), сверь с задачей и ответом агента.
+Ничего не меняй и не запускай. Не придирайся к стилю.
+В конце верни строго JSON без markdown:
+{"verdict": "approve" | "revise", "reason": "кратко, по-русски", "instructions": "что исправить, если revise"}
+revise — только при фактической ошибке, пропущенном шаге или если результат не решает задачу. Сомневаешься — approve.`;
+
+export function parseVerdict(raw) {
   const text = String(raw || '').trim();
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
@@ -40,16 +57,18 @@ function parseVerdict(raw) {
   }
 }
 
-export async function reviewAnswer({ client, model, task, answer, signal, temperature = 0 }) {
+export async function reviewAnswer({ client, model, task, answer, signal, temperature = 0, mode = '', kind = 'code', requestOptions: extra = null }) {
+  const context = reviewContext({ mode, kind });
   const messages = [
-    { role: 'system', content: REVIEW_PROMPT },
+    { role: 'system', content: context ? `${REVIEW_PROMPT}\n\n${context}` : REVIEW_PROMPT },
     {
       role: 'user',
       content: `Задача пользователя:\n${String(task || '').slice(0, 8000)}\n\nОтвет агента:\n${String(answer || '').slice(0, 24000)}`,
     },
   ];
   const response = await client.chat.completions.create(
-    { model, messages, temperature, max_tokens: 900 },
+    // temperature — только если модель её принимает (ADR 0058).
+    { model, messages, ...(extra || { temperature }), max_tokens: 900 },
     { signal },
   );
   const raw = response.choices?.[0]?.message?.content || '';

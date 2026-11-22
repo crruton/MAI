@@ -1164,6 +1164,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
           provider: resolvedReviewer.provider,
           model: resolvedReviewer.modelId,
           maxRounds: Math.max(0, Math.min(5, Number(settings.reviewer.maxRounds ?? 2))),
+          // Ревизор сам читает изменённые файлы (F5, ADR 0064); false — проверяет только текст ответа.
+          verify: settings.reviewer.verify !== false,
         };
       }
     } catch {
