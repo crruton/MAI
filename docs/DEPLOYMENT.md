@@ -43,6 +43,22 @@ npm.cmd run pack:tar       # tar.gz с исходниками (нужен npm и
 
 - Сборка под macOS возможна только на macOS (подпись и notarization не настроены).
 - Установщик не подписан сертификатом: Windows SmartScreen покажет предупреждение.
+  Если положить сертификат в секреты (`CSC_LINK`, `CSC_KEY_PASSWORD`), electron-builder
+  подпишет EXE сам.
+
+### Проверка на чистой машине
+
+Каждый push в CI собирает NSIS и portable на `windows-latest`, тихо ставит,
+запускает `MAI Code.exe --self-check` с PATH без Node.js и удаляет
+(`scripts/check-installer.ps1`, ADR 0095). То же — вручную на любой машине:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\mai-code\MAI Code.exe" --self-check=$env:TEMP\mai-check.json
+Get-Content $env:TEMP\mai-check.json
+```
+
+Отчёт перечисляет проверки (ресурсы, модули, папка данных, cmd.exe, DPAPI,
+системные сертификаты); код выхода 0 — всё в порядке.
 - Автообновления нет: новая версия — новый архив.
 - `pack:tar` и `pack:offline` требуют системный `tar` (есть в Windows 10+, Linux, macOS).
 

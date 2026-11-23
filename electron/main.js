@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, Notification, nativeTheme } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, Notification, nativeTheme, safeStorage } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -97,13 +97,18 @@ import { guardIpc } from './lib/ipc-permissions.js';
 import { isImageFile } from './lib/vision.js';
 import { acquireProject } from './lib/project-lock.js';
 import { isCliInvocation, parseCliArgs, CLI_HELP, streamLine, resultObject } from './lib/cli.js';
+import { isSelfCheck, selfCheckOut, runSelfCheck } from './lib/self-check.js';
+import { applySystemCa } from './lib/system-ca.js';
 import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions, promptArgs, resolveResourceMentions } from './lib/commands.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
-// Флаг --use-system-ca решает проблему, но его нужно передать до старта Node,
-// поэтому при первом запуске приложение перезапускает себя с этим флагом.
-if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !process.env.MAI_CODE_RELAUNCHED) {
+// Системные корни подключаются прямо в процессе (ADR 0095): NODE_OPTIONS в
+// собранном Electron игнорируется. Если API нет (старый Electron) — запасной путь:
+// перезапуск с --use-system-ca, как раньше.
+const SYSTEM_CA = applySystemCa();
+const NEEDS_RELAUNCH = !SYSTEM_CA && !String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !process.env.MAI_CODE_RELAUNCHED;
+if (NEEDS_RELAUNCH) {
   // В dev-режиме argv: [electron, путь-к-приложению, ...флаги], в упакованном:
   // [exe, ...флаги]. Нельзя резать одинаково, иначе упакованное приложение
   // теряет первый аргумент (например, --remote-debugging-port).
@@ -116,10 +121,10 @@ if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !proc
       NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --use-system-ca`.trim(),
       MAI_CODE_RELAUNCHED: '1',
     },
-    // CLI (CC12.1): вывод и код выхода дочернего процесса — наши.
-    ...(isCliInvocation(process.argv) ? { stdio: 'inherit' } : { detached: true, stdio: 'ignore' }),
+    // CLI (CC12.1) и самопроверка (F25): вывод и код выхода дочернего процесса — наши.
+    ...(isCliInvocation(process.argv) || isSelfCheck(process.argv) ? { stdio: 'inherit' } : { detached: true, stdio: 'ignore' }),
   });
-  if (isCliInvocation(process.argv)) child.on('exit', (code) => app.exit(code ?? 1));
+  if (isCliInvocation(process.argv) || isSelfCheck(process.argv)) child.on('exit', (code) => app.exit(code ?? 1));
   else {
     child.unref();
     app.exit(0);
@@ -446,9 +451,26 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // Самопроверка установленного приложения (F25, ADR 0095): без окна, отчёт JSON.
+  if (isSelfCheck(process.argv)) {
+    if (NEEDS_RELAUNCH) return;
+    const report = await runSelfCheck({ appPath: app.getAppPath(), userData: app.getPath('userData'), version: app.getVersion(), safeStorage, systemCa: SYSTEM_CA }).catch((err) => ({ ok: false, error: err?.message || String(err), checks: [] }));
+    const out = selfCheckOut(process.argv);
+    const text = JSON.stringify(report, null, 2);
+    if (out) {
+      try {
+        fs.writeFileSync(out, text, 'utf8');
+      } catch (err) {
+        console.error(`[self-check] не записан ${out}: ${err?.message || err}`);
+      }
+    }
+    console.log(text);
+    app.exit(report.ok ? 0 : 1);
+    return;
+  }
   if (CLI) {
     // Перезапуск с --use-system-ca ещё идёт — ответит дочерний процесс.
-    if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !process.env.MAI_CODE_RELAUNCHED) return;
+    if (NEEDS_RELAUNCH) return;
     app.exit(await runCli(CLI));
     return;
   }

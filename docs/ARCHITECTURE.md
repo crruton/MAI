@@ -433,8 +433,9 @@ ADR 0077. `cli.js` — `isCliInvocation`, `parseCliArgs`, `resultObject`,
 `streamLine`. В main константа `CLI` (разбор `process.argv`) переключает
 `whenReady` на `runCli`: окно, планировщик и навыки не запускаются; прогон —
 как у плановой задачи (`runAgent` с `policyFor`, хуками, чекпоинтами, сессией,
-`acquireProject`), `approve` отказывает, `emit` пишет stream-json. Перезапуск
-с `--use-system-ca` в CLI наследует stdio. Лаунчер — `bin/mai.mjs`.
+`acquireProject`), `approve` отказывает, `emit` пишет stream-json. Запасной
+перезапуск с `--use-system-ca` (если нет API `tls`, ADR 0095) в CLI наследует
+stdio. Лаунчер — `bin/mai.mjs`.
 
 ### Субагенты
 
@@ -790,5 +791,13 @@ IPC-каналы: `export:message` (один ответ) и `export:chat` (ве�
 ## Сертификаты
 
 Node в Electron не доверяет корпоративному корню Windows, поэтому `main.js` при старте
-проверяет `NODE_OPTIONS` и, если флага нет, перезапускает приложение с `--use-system-ca`
-(переменная `MAI_CODE_RELAUNCHED` защищает от цикла).
+вызывает `applySystemCa()` (`system-ca.js`, ADR 0095): встроенные + системные корни
+через `tls.setDefaultCACertificates`. В собранном Electron `NODE_OPTIONS` игнорируется,
+поэтому прежний перезапуск с `--use-system-ca` (`MAI_CODE_RELAUNCHED` против цикла)
+остался только запасным путём, если API нет (`NEEDS_RELAUNCH`).
+
+### Самопроверка установки
+
+ADR 0095. `self-check.js` — `isSelfCheck`, `selfCheckOut`, `runSelfCheck`; в main
+`--self-check` переключает `whenReady` на отчёт и выход. CI: задача `installer`
+и `scripts/check-installer.ps1`.
