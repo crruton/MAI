@@ -609,6 +609,17 @@ ipcMain.handle('updates:apply', (_e, payload) => {
   updateApplies.push(payload);
   return { ok: true, branch: 'mai/update-deps-202611231000', dir: '/wt/deps', installOk: true, testsRun: true, testsOk: true, command: 'npm test', output: 'Итог: 10 OK' };
 });
+// Чистильщик (раздел [60], N7).
+const cleanupCalls = [];
+ipcMain.handle('cleanup:plan', () => ({ stable: true, version: '0.3.0', since: '2026-11-15T10:00:00Z', bytes: 3 * 1024 * 1024, items: [
+  { id: 'навык:/d/skills/.previous/impeccable-4.8.1', kind: 'навык', path: '/d/skills/.previous/impeccable-4.8.1', bytes: 2 * 1024 * 1024, ageDays: 20, reason: 'старая копия навыка', removable: true },
+  { id: 'временное:/tmp/mai-previews', kind: 'временное', path: '/tmp/mai-previews', bytes: 1024 * 1024, ageDays: 3, reason: 'временная папка MAI', removable: true },
+  { id: 'worktree:/d/worktrees/r/wt', kind: 'рабочая копия', path: '/d/worktrees/r/wt', bytes: 10, ageDays: 30, reason: 'удалите через /worktree', removable: false },
+] }));
+ipcMain.handle('cleanup:apply', (_e, payload) => {
+  cleanupCalls.push(payload.ids);
+  return { ok: true, removed: payload.ids, skipped: [], bytes: 2 * 1024 * 1024, freed: '2,0 МБ' };
+});
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
   projectDir: root,
@@ -2222,6 +2233,17 @@ app.whenReady().then(async () => {
     await wait(600);
     const up2 = await ui(`document.querySelector('.updates-result')?.textContent || ''`);
     check('«Обновить на ветке» — openai@6.50.0, тесты прошли, проект не тронут', updateApplies[0]?.packages?.[0]?.name === 'openai' && updateApplies[0].packages[0].version === '6.50.0' && /✓ Стабильно: ветка mai\/update-deps/.test(up2) && /\/worktree/.test(up2), `${JSON.stringify(updateApplies)} ${up2}`);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`document.querySelector('#input').value = ''`);
+
+    console.log('\n[60] /cleanup — освободить место (N7, ADR 0103)');
+    await slashCmd('/cleanup');
+    await wait(600);
+    const cl = await ui(`({ status: document.querySelector('.cleanup-status')?.textContent || '', picks: document.querySelectorAll('.cleanup-pick').length, readonly: document.querySelectorAll('.cleanup-item.readonly').length, total: document.querySelector('.cleanup-total')?.textContent || '' })`);
+    check('стабильная версия, удаляемое отмечено, worktree — только показан', /стабильно/.test(cl.status) && cl.picks === 2 && cl.readonly === 1 && /освободится 3,0 МБ/.test(cl.total), JSON.stringify(cl));
+    await ui(`(() => { const c = document.querySelectorAll('.cleanup-pick')[1]; c.checked = false; c.dispatchEvent(new Event('change')); document.querySelector('.cleanup-apply').click(); })()`);
+    await wait(600);
+    check('удаляется только отмеченное', cleanupCalls.length === 1 && cleanupCalls[0].length === 1 && /impeccable-4.8.1/.test(cleanupCalls[0][0]), JSON.stringify(cleanupCalls));
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
     await ui(`document.querySelector('#input').value = ''`);
 

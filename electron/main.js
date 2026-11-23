@@ -42,6 +42,7 @@ import { currentBranch } from './lib/git-guard.js';
 import { repoRoot, realPath, createWorktree, listWorktrees, removeWorktree, worktreeId } from './lib/worktree.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills, skillVersion } from './lib/skills.js';
 import { scanUpdates, scanDue, installArgs } from './lib/update-scan.js';
+import { trackVersion, planCleanup, applyCleanup, formatBytes } from './lib/cleaner.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
 import { loadPlugins, pluginDirs } from './lib/plugins.js';
@@ -496,6 +497,8 @@ app.whenReady().then(async () => {
   createWindow();
   // Сканер обновлений (N6): раз в сутки, в фоне, через полторы минуты после старта.
   scheduleUpdateScan();
+  // Чистильщик (N7): отсчёт стабильной работы версии — с её первого запуска.
+  versionHistory();
   const settings = loadSettings();
   emitLog('MAI Code запущен', { attributes: { platform: process.platform, version: app.getVersion() } });
   mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
@@ -2935,12 +2938,59 @@ function scheduleUpdateScan() {
       const report = await runUpdateScan(loadSettings().projectDir);
       const urgent = report.items.filter((i) => i.risk === 'high');
       if (urgent.length) notify('background', { title: `Обновления: ${urgent.length} высокого риска`, body: urgent.slice(0, 3).map((i) => `${i.name}: ${i.note || i.latest}`).join('; ').slice(0, 200) }).catch(() => {});
+      // Чистильщик (N7): версия стабильна и есть что освободить (от 100 МБ) — подсказка.
+      const plan = cleanupPlan();
+      if (plan.stable && plan.bytes >= 100 * 1024 * 1024) notify('background', { title: `Можно освободить ${formatBytes(plan.bytes)}`, body: 'Старые копии, временные файлы и кеши — /cleanup' }).catch(() => {});
     } catch {
       /* сеть или npm недоступны — попробуем при следующем запуске */
     }
   }, Number(process.env.MAI_UPDATE_SCAN_DELAY_MS || 90_000));
   timer.unref?.();
 }
+
+// ---------- Чистильщик старых версий (N7, ADR 0103) ----------
+
+const versionFile = () => path.join(dataDir(), 'version-history.json');
+/** С какого момента работает текущая версия: запись при каждой смене версии. */
+function versionHistory() {
+  let history = null;
+  try {
+    history = JSON.parse(fs.readFileSync(versionFile(), 'utf8'));
+  } catch {
+    /* первый запуск */
+  }
+  const next = trackVersion(history, app.getVersion());
+  if (next !== history) {
+    try {
+      fs.writeFileSync(versionFile(), JSON.stringify(next, null, 2), 'utf8');
+    } catch {
+      /* только чтение — план всё равно строится */
+    }
+  }
+  return next;
+}
+
+function cleanupPlan() {
+  const settings = loadSettings();
+  const c = settings.cleaner || {};
+  let worktrees = [];
+  try {
+    const base = worktreesDir();
+    worktrees = fs.readdirSync(base, { withFileTypes: true }).filter((e) => e.isDirectory()).flatMap((repo) => fs.readdirSync(path.join(base, repo.name), { withFileTypes: true }).filter((w) => w.isDirectory()).map((w) => ({ dir: path.join(base, repo.name, w.name), branch: w.name })));
+  } catch {
+    /* рабочих копий нет */
+  }
+  return planCleanup({ dataDir: dataDir(), tmpDir: os.tmpdir(), history: versionHistory(), marketplaces: settings.marketplaces || [], worktrees, stableDays: c.stableDays ?? 3, previousDays: c.previousDays ?? 14, outputDays: c.outputDays ?? 7 });
+}
+
+ipcMain.handle('cleanup:plan', () => cleanupPlan());
+ipcMain.handle('cleanup:apply', (_e, payload = {}) => {
+  requireAdmin();
+  // План строится заново: удаляется только то, что в нём есть сейчас.
+  const result = applyCleanup(cleanupPlan(), Array.isArray(payload.ids) ? payload.ids : [], { dataDir: dataDir(), tmpDir: os.tmpdir() });
+  audit({ at: new Date().toISOString(), tool: 'cleanup', source: 'user', cls: 'delete', subject: `удалено ${result.removed.length}, ${formatBytes(result.bytes)}`, decision: 'allow' });
+  return { ok: true, ...result, freed: formatBytes(result.bytes) };
+});
 
 // ---------- Границы данных (N2, ADR 0098) ----------
 

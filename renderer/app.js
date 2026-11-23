@@ -1866,6 +1866,72 @@ function prPrompt(args = '') {
  * /signoff [fail] [контекст] (N1, ADR 0097): тесты проекта → статус коммита в
  * GitHub. Окно показывает шаги, вывод упавших тестов и итог.
  */
+const fmtBytes = (n) => {
+  if (n < 1024) return `${n} Б`;
+  const u = ['КБ', 'МБ', 'ГБ'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(v >= 10 ? 0 : 1).replace('.', ',')} ${u[i]}`;
+};
+
+/** /cleanup (N7, ADR 0103): старые копии, вывод, временное и кеши — по отметкам. */
+async function openCleanup() {
+  const plan = await api.cleanup.plan();
+  const picks = new Map();
+  const total = el('p', { class: 'cleanup-total' });
+  const update = () => {
+    const bytes = [...picks.values()].reduce((s, b) => s + b, 0);
+    total.textContent = picks.size ? `Выбрано: ${picks.size}, освободится ${fmtBytes(bytes)}` : 'Ничего не выбрано';
+    removeBtn.disabled = !picks.size;
+  };
+  const removeBtn = el('button', {
+    class: 'btn primary cleanup-apply',
+    type: 'button',
+    text: 'Удалить отмеченное',
+    onclick: async () => {
+      const res = await api.cleanup.apply([...picks.keys()]);
+      if (!res.ok) return toast(res.error || 'Не удалось', 'err');
+      toast(`Освобождено ${res.freed}${res.skipped.length ? `, пропущено ${res.skipped.length}` : ''}`, 'ok');
+      modal.close();
+      openCleanup();
+    },
+  });
+  const rows = plan.items.map((item) => {
+    const cb = item.removable ? el('input', { type: 'checkbox', class: 'cleanup-pick' }) : null;
+    if (cb) {
+      cb.checked = true;
+      picks.set(item.id, item.bytes);
+      cb.onchange = () => {
+        if (cb.checked) picks.set(item.id, item.bytes);
+        else picks.delete(item.id);
+        update();
+      };
+    }
+    return el('div', { class: `list-item cleanup-item${item.removable ? '' : ' readonly'}` }, [
+      cb,
+      el('div', { class: 'grow' }, [
+        el('div', { class: 'title', text: `${item.kind} · ${fmtBytes(item.bytes)} · ${item.ageDays} дн.` }),
+        el('div', { class: 'sub mono', text: item.path }),
+        el('div', { class: 'sub', text: item.reason }),
+      ]),
+    ]);
+  });
+  const status = plan.stable
+    ? `Версия ${plan.version} работает стабильно с ${new Date(plan.since).toLocaleDateString()} — старые копии можно удалять.`
+    : `Версия ${plan.version || '—'} работает с ${plan.since ? new Date(plan.since).toLocaleDateString() : 'сегодня'}: старые копии навыков удалятся, когда она проработает несколько дней без сбоев.`;
+  const modal = openModal({
+    title: 'Освободить место',
+    wide: true,
+    body: [el('p', { class: 'hint-text cleanup-status', text: status }), rows.length ? el('div', { class: 'cleanup-list' }, rows) : el('div', { class: 'empty-note', text: 'Удалять нечего.' }), total],
+    footer: [removeBtn, el('button', { class: 'btn ghost', type: 'button', text: 'Закрыть', onclick: () => modal.close() })],
+  });
+  update();
+}
+
 /**
  * /updates (N6, ADR 0102): обновления по риску; пакеты npm — обновить на
  * отдельной ветке с тестами, в проект — только после слияния.
@@ -2181,6 +2247,10 @@ async function runSlash(text) {
     case 'updates':
       clear();
       await openUpdates();
+      return;
+    case 'cleanup':
+      clear();
+      await openCleanup();
       return;
     case 'memory':
       clear();

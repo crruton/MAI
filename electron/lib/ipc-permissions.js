@@ -183,6 +183,9 @@ export const IPC_PERMISSIONS = {
   'updates:last': ANY,
   'updates:scan': ANY,
   'updates:apply': ADMIN,
+  // Чистильщик (N7): план — чтение, удаление — admin.
+  'cleanup:plan': ANY,
+  'cleanup:apply': ADMIN,
 
   // Docker-песочницы
   'sandbox:status': ANY,

@@ -71,6 +71,8 @@ const DEFAULTS = {
     command: 'multica',
   },
   // Локальный MAS: распознавание речи для кнопки микрофона.
+  // Чистильщик (N7): дни стабильной работы версии и возраст файлов.
+  cleaner: { stableDays: 3, previousDays: 14, outputDays: 7 },
   // Сканер обновлений (N6): раз в intervalHours после запуска.
   updateScan: { enabled: true, intervalHours: 24, releasesRepo: 'crruton/MAI' },
   // Фильтр секретов в запросах к модели (N3): mask | warn | block | off.

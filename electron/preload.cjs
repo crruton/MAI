@@ -190,6 +190,8 @@ contextBridge.exposeInMainWorld('mai', {
   signoff: { run: (payload) => invoke('signoff:run', payload) },
   // Границы данных (N2).
   privacy: { report: (payload) => invoke('privacy:report', payload) },
+  // Чистильщик старых версий (N7).
+  cleanup: { plan: () => invoke('cleanup:plan'), apply: (ids) => invoke('cleanup:apply', { ids }) },
   // Сканер обновлений (N6).
   updates: {
     last: () => invoke('updates:last'),

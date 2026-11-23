@@ -899,3 +899,8 @@ button { cursor: pointer; }
 .updates-item { display: flex; gap: 8px; align-items: flex-start; }
 .updates-item.risk-high { border-left: 3px solid var(--red, #e5484d); }
 .updates-result { max-height: 30vh; overflow: auto; }
+
+/* Чистильщик (N7) */
+.cleanup-list { display: grid; gap: 6px; max-height: 50vh; overflow: auto; margin: 8px 0; }
+.cleanup-item { display: flex; gap: 8px; align-items: flex-start; }
+.cleanup-item.readonly { opacity: 0.75; }

@@ -387,6 +387,13 @@ macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL чер�
 `runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
 «Система: …; оболочка run_shell: …».
 
+### Чистильщик
+
+ADR 0103. `cleaner.js` — `trackVersion`, `isStable`, `planCleanup`, `applyCleanup`,
+`formatBytes`. В main — `versionHistory` (`version-history.json`, при старте),
+`cleanupPlan`, IPC `cleanup:plan` (ANY) и `cleanup:apply` (ADMIN, план строится
+заново). В app.js — `openCleanup`.
+
 ### Сканер обновлений
 
 ADR 0102. `update-scan.js` — `bumpKind`, `parseOutdated`, `parseAudit`,
