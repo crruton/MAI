@@ -15,6 +15,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { removeTree } from './remove-tree.js';
 
 const MAX_PATCH = 2 * 1024 * 1024;
 
@@ -103,7 +104,7 @@ function mergeText(base, ours, theirs) {
     const res = spawnSync('git', ['merge-file', '-p', o, b, t], { maxBuffer: 64 * 1024 * 1024, windowsHide: true });
     return res.status === 0 ? res.stdout : null;
   } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
+    removeTree(tmp);
   }
 }
 
@@ -159,7 +160,7 @@ export function removeWorktree(wt, { keepBranch = false } = {}) {
     git(wt.dir, ['-c', 'user.name=MAI Code', '-c', 'user.email=mai@localhost', 'commit', '-q', '--no-verify', '-m', 'Изменения субагента (не слиты)'], { allowFail: true });
   }
   git(wt.repo, ['worktree', 'remove', '--force', wt.dir], { allowFail: true });
-  if (fs.existsSync(wt.dir)) fs.rmSync(wt.dir, { recursive: true, force: true });
+  if (fs.existsSync(wt.dir)) removeTree(wt.dir);
   git(wt.repo, ['worktree', 'prune'], { allowFail: true });
   if (!keepBranch) git(wt.repo, ['branch', '-D', wt.branch], { allowFail: true });
 }

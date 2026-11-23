@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { removeTree } from './remove-tree.js';
 
 export const MANIFEST = 'mai-package.json';
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
@@ -172,13 +173,13 @@ export function installPackage({ from, dataDir, replace = false, git = 'git', re
     const target = path.join(dataDir, 'packages', pkg.name);
     if (fs.existsSync(target)) {
       if (!replace) throw new Error(`Пакет «${pkg.name}» уже установлен`);
-      fs.rmSync(target, { recursive: true, force: true });
+      removeTree(target);
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     copyPackage(dir, target);
     return readPackage(target, 'global');
   } finally {
-    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+    if (tempDir) removeTree(tempDir);
   }
 }
 
@@ -186,6 +187,6 @@ export function uninstallPackage({ name, dataDir }) {
   if (!NAME_RE.test(String(name || ''))) throw new Error('Неверное имя пакета');
   const target = path.join(dataDir, 'packages', name);
   if (!fs.existsSync(path.join(target, MANIFEST))) throw new Error(`Пакет «${name}» не установлен глобально`);
-  fs.rmSync(target, { recursive: true, force: true });
+  removeTree(target);
   return true;
 }

@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { installPackage, readJson, NAME_RE } from './packages.js';
+import { removeTree } from './remove-tree.js';
 
 export const CATALOG = 'mai-marketplace.json';
 const GIT_RE = /^(https?:\/\/|git@|ssh:\/\/)|\.git$/;
@@ -60,14 +61,14 @@ export function refreshMarketplace(market, dataDir, { git = 'git' } = {}) {
   if (!isGitSource(market.url)) return { ok: fs.existsSync(path.join(catalogDir(market, dataDir), CATALOG)) };
   const dir = cacheDir(dataDir, market.name);
   const temp = `${dir}.${process.pid}.tmp`;
-  fs.rmSync(temp, { recursive: true, force: true });
+  removeTree(temp);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   const result = spawnSync(git, ['clone', '--depth', '1', '--', market.url, temp], { encoding: 'utf8', timeout: 120_000, windowsHide: true });
   if (result.status !== 0) {
-    fs.rmSync(temp, { recursive: true, force: true });
+    removeTree(temp);
     throw new Error(`Каталог ${market.name}: git clone не удался: ${(result.stderr || result.error?.message || '').trim().slice(0, 300)}`);
   }
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTree(dir);
   fs.renameSync(temp, dir);
   return { ok: true };
 }

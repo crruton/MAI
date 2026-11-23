@@ -15,6 +15,14 @@ import { createRecorder, rewindFiles, rewindPlan } from '../electron/lib/checkpo
 import { createHookRunner, normalizeHooks } from '../electron/lib/hooks.js';
 import { BUILTIN_AGENTS } from '../electron/lib/agent-defs.js';
 import { disposePluginHosts } from '../electron/lib/plugin-host.js';
+import { removeTree } from '../electron/lib/remove-tree.js';
+// Необработанная ошибка в main Electron не завершает процесс — CI видел бы «завис» вместо причины.
+for (const ev of ['unhandledRejection', 'uncaughtException']) {
+  process.on(ev, (err) => {
+    console.log(`  FAIL исключение (${ev}): ${err?.stack || err}`);
+    process.exit(1);
+  });
+}
 
 let pass = 0;
 let fail = 0;
@@ -1260,8 +1268,9 @@ console.log('\n[28] Проект: инструкции в промпте и то
   );
   const toolMsg = bodies.at(-1)?.messages?.find((m) => m.role === 'tool')?.content || '';
   check('не git — понятный отказ вместо правок в проекте', /не git-репозиторий/.test(toolMsg), toolMsg);
-  fs.rmSync(repo, { recursive: true, force: true });
-  fs.rmSync(plain, { recursive: true, force: true });
+  // В .git файлы «только для чтения»: на Windows Node 24 rmSync их не удаляет (ADR 0104).
+  removeTree(repo);
+  removeTree(plain);
 }
 
 {

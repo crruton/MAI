@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { dataDir } from './config.js';
+import { removeTree } from './remove-tree.js';
 
 function parseFrontmatter(raw) {
   const text = String(raw || '').replace(/^\uFEFF/, '');
@@ -144,7 +145,7 @@ export function installBundledSkills(sourceDir, { target = path.join(dataDir(), 
       const bundled = skillVersion(from);
       if (!bundled || compareSkillVersions(bundled, have) <= 0) continue;
       const backup = path.join(target, '.previous', `${entry.name}-${have || 'без-версии'}`);
-      fs.rmSync(backup, { recursive: true, force: true });
+      removeTree(backup);
       fs.mkdirSync(path.dirname(backup), { recursive: true });
       fs.renameSync(to, backup);
     }
@@ -174,7 +175,7 @@ export function createSkill(projectDir, { name, description, body, scope = 'proj
 
 export function deleteSkill(file) {
   const dir = path.dirname(file);
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTree(dir);
   return true;
 }
 

@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { removeTree } from './remove-tree.js';
 
 export const TRASH_DAYS = 30;
 const ID_RE = /^[0-9]{13}-[0-9a-f]{8}$/;
@@ -40,11 +41,11 @@ export function moveToTrash(target, trashDir, { projectDir = '' } = {}) {
     fs.renameSync(source, stored);
   } catch (err) {
     if (err.code !== 'EXDEV') {
-      fs.rmSync(dir, { recursive: true, force: true });
+      removeTree(dir);
       throw err;
     }
     fs.cpSync(source, stored, { recursive: true });
-    fs.rmSync(source, { recursive: true, force: true });
+    removeTree(source);
   }
   // order — для порядка удалений в одну миллисекунду.
   const meta = { id, original: source, name: path.basename(source), projectDir, deletedAt: new Date().toISOString(), order: Number(process.hrtime.bigint() % 1_000_000_000_000n), bytes, files, dir: fs.statSync(stored).isDirectory() };
@@ -80,7 +81,7 @@ export function restoreFromTrash(trashDir, id, { overwrite = false } = {}) {
   const stored = path.join(dir, meta.name);
   if (fs.existsSync(meta.original)) {
     if (!overwrite) throw new Error(`На месте уже есть ${meta.original}`);
-    fs.rmSync(meta.original, { recursive: true, force: true });
+    removeTree(meta.original);
   }
   fs.mkdirSync(path.dirname(meta.original), { recursive: true });
   try {
@@ -89,7 +90,7 @@ export function restoreFromTrash(trashDir, id, { overwrite = false } = {}) {
     if (err.code !== 'EXDEV') throw err;
     fs.cpSync(stored, meta.original, { recursive: true });
   }
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTree(dir);
   return meta;
 }
 
@@ -99,7 +100,7 @@ export function purgeTrash(trashDir, { id = null, all = false, days = TRASH_DAYS
   for (const item of listTrash(trashDir)) {
     const old = now - Date.parse(item.deletedAt) > days * 86_400_000;
     if (all || item.id === id || (!id && old)) {
-      fs.rmSync(path.join(trashDir, item.id), { recursive: true, force: true });
+      removeTree(path.join(trashDir, item.id));
       removed += 1;
     }
   }

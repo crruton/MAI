@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { resolveInside, assertNotSecret } from './fs.js';
+import { removeTree } from '../remove-tree.js';
 
 /**
  * Инструмент ocr (F19, ADR 0084): текст со скана или картинки — тем же OCR,
@@ -19,7 +20,7 @@ function pdfToImages(file, maxPages) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-ocr-'));
   const run = spawnSync('pdftoppm', ['-png', '-r', '200', '-f', '1', '-l', String(maxPages), file, path.join(dir, 'page')], { timeout: 120_000 });
   if (run.status !== 0) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    removeTree(dir);
     throw new Error(`pdftoppm: ${String(run.stderr || '').trim().slice(0, 200) || run.status}`);
   }
   return { dir, pages: fs.readdirSync(dir).filter((n) => n.endsWith('.png')).sort().map((n) => path.join(dir, n)) };
@@ -72,7 +73,7 @@ export const ocrTools = [
         }
         return `[OCR ${engine}] ${path.basename(file)}, страниц ${parts.length}:\n\n${parts.join('\n\n').slice(0, MAX_TEXT)}`;
       } finally {
-        fs.rmSync(images.dir, { recursive: true, force: true });
+        removeTree(images.dir);
       }
     },
   },

@@ -387,6 +387,12 @@ macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL чер�
 `runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
 «Система: …; оболочка run_shell: …».
 
+### Удаление папок
+
+ADR 0104. `remove-tree.js` — `removeTree(path)`: на Windows снимает «только
+чтение» (объекты git), затем `rmSync` с повторами. Все рекурсивные удаления в
+приложении идут через него.
+
 ### Чистильщик
 
 ADR 0103. `cleaner.js` — `trackVersion`, `isStable`, `planCleanup`, `applyCleanup`,

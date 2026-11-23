@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { removeTree } from './remove-tree.js';
 
 /**
  * Чистильщик старых версий (N7, ADR 0103). Удаляет то, что больше не нужно,
@@ -127,7 +128,7 @@ export function applyCleanup(plan, ids, { dataDir, tmpDir } = {}) {
       continue;
     }
     try {
-      fs.rmSync(full, { recursive: true, force: true });
+      removeTree(full);
       removed.push(item.path);
       bytes += item.bytes;
     } catch {

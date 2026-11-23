@@ -78,6 +78,7 @@ import {
 import { gitStatus, gitDiff, gitHead } from './lib/git.js';
 import { runStage } from './lib/deploy.js';
 import { checkCommand, redactSecrets } from './lib/guardrails.js';
+import { removeTree } from './lib/remove-tree.js';
 import { emitLog, emitSpan, telemetryStatus, flushMetrics } from './lib/telemetry.js';
 import * as infra from './lib/infra.js';
 import * as repowise from './lib/repowise.js';
@@ -1353,10 +1354,10 @@ ipcMain.handle('attachments:remove', (_e, payload) => {
     return { ok: false, error: 'путь вне папки вложений' };
   }
   try {
-    fs.rmSync(full, { recursive: true, force: true });
+    removeTree(full);
     fs.rmSync(`${full}.txt`, { force: true });
     fs.rmSync(`${full}.index.txt`, { force: true });
-    fs.rmSync(`${full}.extracted`, { recursive: true, force: true });
+    removeTree(`${full}.extracted`);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
@@ -2593,7 +2594,7 @@ ipcMain.handle('marketplace:add', (_e, payload = {}) => {
 
 ipcMain.handle('marketplace:remove', (_e, name) => {
   saveSettings({ marketplaces: marketplaces().filter((m) => m.name !== name) });
-  fs.rmSync(path.join(dataDir(), 'marketplaces', String(name).replace(/[^a-z0-9._-]/gi, '')), { recursive: true, force: true });
+  removeTree(path.join(dataDir(), 'marketplaces', String(name).replace(/[^a-z0-9._-]/gi, '')));
   return { ok: true, ...marketplaceView() };
 });
 

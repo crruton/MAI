@@ -257,7 +257,8 @@
   Electron ≤ 42.11.15), openai 6 → 7.62, electron-builder → 26.18, hono — `npm audit
   fix`, `minimatch` 7–11.0.8 в инструментах сборки — через `overrides`. `npm audit` —
   0 уязвимостей. `postinstall: install-electron`: Electron 45 сам бинарник при
-  установке не скачивает.
+  установке не скачивает. Удаление папок — `removeTree`: на Windows Node 24 не
+  удаляет файлы «только для чтения» (объекты git).
 
 - Данные от окна проверяются в main до обработчика (ADR 0060): структура для
   всех каналов (размеры, глубина, ключи `__proto__`/`constructor`/`prototype`)
