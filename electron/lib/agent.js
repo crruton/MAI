@@ -18,6 +18,10 @@ import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
 import { documentTools } from './tools/documents.js';
 import { browserTools } from './tools/browser.js';
+import { notebookTools } from './tools/notebook.js';
+import { diagnosticsTools } from './tools/diagnostics.js';
+import { runDiagnostics, formatDiagnostics } from './diagnostics.js';
+import { splitTools, deferredPrompt, searchTools, TOOL_SEARCH_SCHEMA } from './tool-search.js';
 import { webTools } from './tools/web.js';
 import { interactiveTools } from './tools/interactive.js';
 import { todoTools } from './tools/todo.js';
@@ -51,11 +55,12 @@ const BASE_PROMPT = `Ты — MAI Code, агент для программиро
 - Команды оболочки запускай только когда это действительно нужно. Что требует подтверждения, описано в разделе «Режим».
 - Если вызов отклонён, не повторяй его тем же способом: учти причину и пояснение пользователя.
 - Для задачи из трёх шагов и больше веди список задач инструментом todo_write и обновляй его по ходу.
-- После изменений проверяй результат (тесты, сборка, линтер), если это возможно.
+- После изменений проверяй результат: diagnostics (ошибки компилятора и линтера), тесты, сборка — если это возможно.
+- Ноутбуки .ipynb читай read_file (по ячейкам), меняй notebook_edit.
 - Не коммить в git и не удалять данные без явной просьбы.`;
 
 /** Инструменты ревизора-субагента (F5): только чтение. */
-const REVIEWER_TOOLS = ['read_file', 'read_document', 'preview_document', 'list_files', 'glob', 'grep'];
+const REVIEWER_TOOLS = ['read_file', 'read_document', 'preview_document', 'diagnostics', 'list_files', 'glob', 'grep'];
 
 /** Режим «Задача» (CW1.1, ADR 0046): работа с документами и данными, не с кодом. */
 const TASK_PROMPT = `Ты — MAI, помощник для рабочих задач на компьютере пользователя: документы, таблицы, заметки, отчёты, письма, разбор файлов.
@@ -75,7 +80,7 @@ const TASK_PROMPT = `Ты — MAI, помощник для рабочих зад
 - В конце коротко: что сделано, какие файлы созданы или изменены, что проверить пользователю.`;
 
 /** Инструменты, скрытые в режиме «Задача»: про код и репозиторий. */
-export const CODE_ONLY_TOOLS = new Set(['repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search']);
+export const CODE_ONLY_TOOLS = new Set(['diagnostics', 'repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search']);
 
 export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true, extraDirs = [], kind = 'code' }) {
   const agents = readAgents(projectDir);
@@ -436,6 +441,8 @@ async function runAgentInner({
   // Выключается settings.textToolProtocol = false — тогда агент только отвечает текстом.
   const textToolsAllowed = settings.textToolProtocol !== false;
   let textTools = !caps.tools && textToolsAllowed;
+  // Отложенные инструменты (CC1.12): какие схемы MCP/плагинов модель уже подгрузила.
+  const loadedTools = new Set();
   // Комбинированный режим (CC13.5): основная модель, пока «План» думает другой.
   let onPlanner = false;
   let baseRoute = null;
@@ -469,7 +476,7 @@ async function runAgentInner({
     getTaint: () => taint,
   };
 
-  const builtin = [...fsTools, ...documentTools, ...shellTools, ...backgroundTools, ...(settings.webTools === false ? [] : webTools), ...(settings.browser ? browserTools : []), ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
+  const builtin = [...fsTools, ...notebookTools, ...diagnosticsTools, ...documentTools, ...shellTools, ...backgroundTools, ...(settings.webTools === false ? [] : webTools), ...(settings.browser ? browserTools : []), ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
     toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview, assess: t.assess }),
   );
   const builtinNames = new Set(builtin.map((t) => t.name));
@@ -748,10 +755,26 @@ async function runAgentInner({
       useResponses = caps.transport === 'responses';
       useImages = caps.vision;
     }
-    const tools = buildTools(mode);
+    const allTools = buildTools(mode);
+    // Много MCP и плагинов (CC1.12): их схемы — по запросу через tool_search.
+    const { exposed, deferred } = splitTools(allTools, loadedTools, { over: settings.deferToolsOver ?? undefined });
+    const searchEntry = deferred.length
+      ? toolEntry(TOOL_SEARCH_SCHEMA, {
+          source: 'builtin',
+          run: (_ctx, a) => {
+            const found = searchTools(deferred, a?.query);
+            if (!found.length) return `Ничего не найдено по «${a?.query || ''}». Посмотри список «Инструменты по запросу» в системном промпте.`;
+            for (const t of found) loadedTools.add(t.name);
+            return `Загружено: ${found.map((t) => t.name).join(', ')}. Их можно вызывать со следующего шага.\n\n${found.map((t) => `${t.name}: ${t.schema.function.description || ''}\nПараметры: ${JSON.stringify(t.schema.function.parameters || {})}`).join('\n\n')}`;
+          },
+        })
+      : null;
+    // tools — что видит модель; allTools — что можно выполнить (вызов неподгруженного тоже сработает).
+    const tools = searchEntry ? [...exposed, searchEntry] : exposed;
     const system =
       systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs, kind }) +
       projectPrompt(project) +
+      deferredPrompt(deferred) +
       (subagent
         ? `\n\n# Ты — субагент «${subagent.def.name}»\n${subagent.def.prompt || ''}\nПользователь этот диалог не видит: родительский агент получит только твой последний ответ. ` +
           'Заверши работу одним итоговым сообщением: что найдено или сделано, пути файлов, что не удалось.'
@@ -1160,7 +1183,7 @@ async function runAgentInner({
         outcome = { ok: false, content: 'Остановлено пользователем до выполнения.' };
       } else {
         emit({ type: 'tool_call', id: call.id, name: call.function.name, args });
-        const entry = tools.find((t) => t.name === call.function.name);
+        const entry = tools.find((t) => t.name === call.function.name) || allTools.find((t) => t.name === call.function.name);
         if (!entry) {
           outcome = { ok: false, content: `Ошибка: инструмент ${call.function.name} недоступен в текущем режиме или не существует` };
         } else {
@@ -1208,6 +1231,18 @@ async function runAgentInner({
           } catch (err) {
             toolSpan.end({}, err?.message || String(err));
             throw err;
+          }
+          // Автопроверка после правки (CC1.11): ошибки — сразу в результат правки.
+          if (settings.autoDiagnostics && trusted && outcome?.ok !== false && entry.cls === 'write' && typeof args?.path === 'string' && /\.((c|m)?(j|t)sx?|pyi?)$/i.test(args.path) && !signal.aborted) {
+            try {
+              const file = resolveIn(toolCtx.roots, args.path, { allowOutside: Boolean(settings.allowOutsideProject) });
+              const result = await runDiagnostics(projectDir, { file, signal, timeoutMs: 60_000 });
+              if (result.items.some((i) => i.severity === 'error')) {
+                outcome = { ...outcome, content: `${outcome.content}\n\n[Диагностика после правки]\n${formatDiagnostics({ ...result, items: result.items.filter((i) => i.severity === 'error') }, projectDir)}` };
+              }
+            } catch {
+              /* проверка не должна ломать правку */
+            }
           }
         }
       }

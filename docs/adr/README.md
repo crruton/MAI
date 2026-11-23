@@ -94,3 +94,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0076](0076-pr-security-review-worktree.md) | /pr, /security-review и чат в рабочей копии /worktree | accepted | 2026-11-22 |
 | [0077](0077-bezgolovyj-rezhim-cli.md) | Безголовый режим: mai -p и поток событий | accepted | 2026-11-22 |
 | [0078](0078-modeli-bez-instrumentov-i-model-dlya-plana.md) | Модели без tool calling и отдельная модель для «Плана» | accepted | 2026-11-23 |
+| [0079](0079-noutbuki-diagnostika-otlozhennye-instrumenty.md) | Ноутбуки, диагностика кода и отложенная загрузка инструментов | accepted | 2026-11-23 |

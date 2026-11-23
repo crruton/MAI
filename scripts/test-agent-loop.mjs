@@ -1392,6 +1392,61 @@ console.log('\n[28] Проект: инструкции в промпте и то
   check('переключения видны уведомлениями', notices.some((t) => /План составляет plan\/strong-planner/.test(t)) && notices.some((t) => /выполняет fake-model/.test(t)), JSON.stringify(notices));
 }
 
+{
+  console.log('\n[34] Отложенные инструменты и автопроверка (CC1.12, CC1.11, ADR 0079)');
+  const many = {
+    status: () => [{ name: 'big', status: 'ready', tools: [] }],
+    toolSchemas: () =>
+      Array.from({ length: 30 }, (_x, i) => ({
+        type: 'function',
+        function: { name: `mcp__big__t${i}`, description: i === 7 ? 'Найти счёт в бухгалтерии' : `инструмент ${i}`, parameters: { type: 'object', properties: { id: { type: 'string' } } } },
+        annotations: { readOnlyHint: true },
+      })),
+    call: async (name, args) => `вызван ${name} ${JSON.stringify(args)}`,
+  };
+  const bodies = [];
+  const history = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'найди счёт 42' }],
+      mcp: many,
+      approve: async () => true,
+      clientFactory: fakeClient(
+        [{ calls: [{ name: 'tool_search', args: { query: 'счёт бухгалтерии' } }] }, { calls: [{ name: 'mcp__big__t7', args: { id: '42' } }] }, { text: 'нашёл' }],
+        bodies,
+      ),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const names = (b) => (b.tools || []).map((t) => t.function.name);
+  check('30 MCP: схемы не в запросе, есть tool_search, имена — в промпте', !names(bodies[0]).some((n) => n.startsWith('mcp__')) && names(bodies[0]).includes('tool_search') && /Инструменты по запросу/.test(bodies[0].messages[0].content) && /mcp__big__t29/.test(bodies[0].messages[0].content), names(bodies[0]).join(','));
+  check('tool_search нашёл и загрузил по описанию', history.some((m) => m.role === 'tool' && m.name === 'tool_search' && /Загружено: mcp__big__t7/.test(m.content)));
+  check('со следующего шага схема в запросе, остальные — нет', names(bodies[1]).includes('mcp__big__t7') && !names(bodies[1]).includes('mcp__big__t8'), names(bodies[1]).join(','));
+  check('и вызов выполнен', history.some((m) => m.role === 'tool' && /вызван mcp__big__t7 \{"id":"42"\}/.test(m.content)));
+  const few = [];
+  await runAgent(base({ messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'ок' }], few), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('мало MCP — всё как раньше, без tool_search', names(few[0]).includes('mcp__fs__read_file') && !names(few[0]).includes('tool_search'));
+
+  // Автопроверка после правки: ошибка синтаксиса приходит в результат правки.
+  fs.writeFileSync(path.join(project, 'calc.js'), 'const a = 1;\n', 'utf8');
+  const diagBodies = [];
+  const h2 = await runAgent(
+    base({
+      settings: { maxIterations: 6, permissions: {}, autoDiagnostics: true },
+      messages: [{ role: 'user', content: 'поправь calc.js' }],
+      mcp: fakeMcp(),
+      approve: async () => true,
+      clientFactory: fakeClient(
+        [{ calls: [{ name: 'read_file', args: { path: 'calc.js' } }] }, { calls: [{ name: 'edit_file', args: { path: 'calc.js', old_string: 'const a = 1;', new_string: 'const a = ;' } }] }, { text: 'готово' }],
+        diagBodies,
+      ),
+      policy: { getMode: () => 'acceptEdits', getRules: () => ({}) },
+    }),
+  );
+  const editResult = h2.find((m) => m.role === 'tool' && m.name === 'edit_file')?.content || '';
+  check('autoDiagnostics: ошибка синтаксиса — в результате правки', /\[Диагностика после правки\]/.test(editResult) && /SyntaxError/.test(editResult), editResult);
+  check('инструмент diagnostics есть у агента в «Коде»', names(diagBodies[0]).includes('diagnostics') && names(diagBodies[0]).includes('notebook_edit'));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();

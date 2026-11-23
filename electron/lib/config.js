@@ -21,6 +21,10 @@ const DEFAULTS = {
   browserSites: { allow: [], block: [] },
   // Чаты (CC6.8, CC6.9): автозаголовок моделью, срок хранения в днях (0 — бессрочно).
   autoTitle: true,
+  // Диагностика после правок кода (CC1.11): tsc/eslint/ruff проекта — может быть медленной.
+  autoDiagnostics: false,
+  // Отложенные инструменты (CC1.12): больше стольких MCP/плагинов — схемы по запросу (0 — никогда).
+  deferToolsOver: 25,
   sessionRetentionDays: 0,
   guardrails: DEFAULT_GUARDRAILS,
   telemetry: {

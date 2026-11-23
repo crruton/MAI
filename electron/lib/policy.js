@@ -31,6 +31,9 @@ const BUILTIN = {
   create_document: 'write',
   read_document: 'read',
   preview_document: 'read',
+  notebook_edit: 'write',
+  diagnostics: 'read',
+  tool_search: 'read',
   browser_open: 'network',
   browser_read: 'read',
   browser_screenshot: 'read',
@@ -402,6 +405,8 @@ export function summarize({ tool, cls, args = {}, subject }) {
       return `Изменить файл ${subject}`;
     case 'delete_file':
       return `Удалить ${subject} (в корзину)`;
+    case 'notebook_edit':
+      return `Ноутбук ${subject}: ${args.edit_mode === 'delete' ? 'удалить' : args.edit_mode === 'insert' ? 'вставить' : 'изменить'} ячейку ${args.cell_id || (Number.isInteger(args.cell) ? args.cell : args.edit_mode === 'insert' ? 'в конец' : '')}`;
     case 'web_fetch':
       return `Открыть ${String(args.url || '')}`;
     case 'web_search':
@@ -439,6 +444,7 @@ export function suggestRules({ tool, cls, subject }) {
     const dir = path.posix.dirname(String(subject || '.'));
     const spec = dir === '.' || dir === '' ? '**' : `${dir}/**`;
     if (tool === 'create_document') return [`create_document(${spec})`];
+    if (tool === 'notebook_edit') return [`notebook_edit(${spec})`];
     return [`write_file(${spec})`, `edit_file(${spec})`];
   }
   if (cls === 'memory') return [`memory_append(${subject || 'project'})`];

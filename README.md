@@ -28,6 +28,8 @@
   - `write_file`, `edit_file` — правки;
   - `run_shell` — команды в папке проекта (таймаут 180 с);
   - `load_skill` — загрузка навыка по имени;
+  - `notebook_edit` — ячейки Jupyter; `diagnostics` — ошибки компилятора и линтера
+    проекта; `tool_search` — схемы MCP по запросу, когда их много (ADR 0079);
   - `mcp__<server>__<tool>` — инструменты MCP-серверов; ресурсы — `@server:uri`,
     промпты — `/mcp__server__prompt`, транспорты stdio, streamable HTTP и SSE (ADR 0071);
   - инструменты из плагинов.

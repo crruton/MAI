@@ -312,6 +312,16 @@ ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый про�
 автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
 сообщения. IPC `hooks:list(projectDir)`.
 
+### Ноутбуки, диагностика, отложенные инструменты
+
+ADR 0079. `tools/notebook.js` — `renderNotebook` (в `read_file` для
+`.ipynb`), `notebook_edit`; `diagnostics.js` — `detectCheckers`,
+`runDiagnostics`, парсеры tsc/eslint/ruff/pyright/node/py_compile,
+`formatDiagnostics`; инструмент — `tools/diagnostics.js`, автопроверка — в
+`execCall` после правки (`settings.autoDiagnostics`). `tool-search.js` —
+`splitTools`, `deferredPrompt`, `searchTools`: в `runAgent` `allTools` (что
+выполнить) и `tools` (что видит модель) + `tool_search`, `loadedTools` на прогон.
+
 ### Безголовый режим
 
 ADR 0077. `cli.js` — `isCliInvocation`, `parseCliArgs`, `resultObject`,
