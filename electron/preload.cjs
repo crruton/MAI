@@ -189,6 +189,7 @@ contextBridge.exposeInMainWorld('mai', {
     auth: () => invoke('multica:auth'),
     issues: (limit) => invoke('multica:issues', limit),
     syncDocs: (projectDir) => invoke('multica:syncDocs', projectDir),
+    pullStatuses: (projectDir) => invoke('multica:pullStatuses', projectDir),
   },
   sandbox: {
     status: () => invoke('sandbox:status'),

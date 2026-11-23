@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadSettings } from './config.js';
-import { listChanges, taskMarker } from './openspec.js';
+import { listChanges, taskMarker, statusUpdatesFromIssues, applyTaskStatuses } from './openspec.js';
 
 /**
  * Синхронизация OpenSpec → Multica через официальный CLI.
@@ -270,5 +270,23 @@ export function syncOpenSpec(projectDir) {
     changes: changes.length,
     details,
     message: `OpenSpec → Multica: создано ${created}, обновлено ${updated}, пропущено ${skipped}`,
+  };
+}
+
+/**
+ * Multica → OpenSpec (F14, ADR 0089): задачи «готово» в Multica ставят [x] в
+ * tasks.md. Обратно галочку не снимаем: локальная отметка важнее.
+ */
+export function pullStatuses(projectDir, { dryRun = false } = {}) {
+  if (!projectDir) throw new Error('Не выбрана папка проекта');
+  const listing = listIssues(200);
+  if (!listing.ok) throw new Error(listing.error);
+  const { updates, cancelled } = statusUpdatesFromIssues(listing.issues);
+  const report = applyTaskStatuses(projectDir, updates, { dryRun });
+  return {
+    ok: true,
+    ...report,
+    cancelled: cancelled.map((c) => `${c.change}:${c.taskId}${c.issue ? ` (${c.issue})` : ''}`),
+    message: `Multica → OpenSpec: отмечено ${report.marked.length}, уже отмечено ${report.already.length}${cancelled.length ? `, отменено в Multica ${cancelled.length}` : ''}${report.missing.length ? `, не найдено ${report.missing.length}` : ''}`,
   };
 }

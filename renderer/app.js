@@ -5921,6 +5921,22 @@ async function openMultica() {
           }
         },
       }),
+      // Обратное направление (F14): «готово» в Multica → [x] в tasks.md.
+      el('button', {
+        class: 'btn multica-pull',
+        type: 'button',
+        text: 'Статусы → tasks.md',
+        title: 'Задачи, закрытые в Multica, отмечаются [x] в openspec/changes/*/tasks.md',
+        onclick: async () => {
+          try {
+            const res = await api.multica.pullStatuses(state.projectDir);
+            toast(res.message || `Отмечено ${res.marked?.length || 0}`, 'ok');
+            if (res.cancelled?.length) toast(`Отменены в Multica (галочка не ставится): ${res.cancelled.join(', ').slice(0, 300)}`);
+          } catch (err) {
+            toast(`Multica: ${err.message}`, 'err');
+          }
+        },
+      }),
     ],
   });
 }

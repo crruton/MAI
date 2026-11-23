@@ -47,7 +47,8 @@ openspec validate
 npm.cmd run multica:sync
 ```
 
-Или панель **Multica** → **Синхронизировать OpenSpec**.
+Или панель **Multica** → **Синхронизировать OpenSpec**. Закрытые в Multica задачи
+возвращаются галочкой `[x]` кнопкой **Статусы → tasks.md** (ADR 0089).
 
 Ключ идемпотентности — маркер в описании issue:
 `<!-- openspec:<change>:<task> -->`.

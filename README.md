@@ -143,7 +143,7 @@
 - **Ревизор** — вторая модель проверяет ответ и возвращает `approve` или `revise`
   (механика Delamain), опционально.
 - **OpenSpec + Multica** — задачи из `openspec/changes/*/tasks.md` синхронизируются
-  в Multica через CLI, идемпотентно.
+  в Multica через CLI, идемпотентно; закрытые в Multica возвращаются галочкой (ADR 0089).
 - **Пресеты** — DeepSeek Harness (`dsh`), Hermes, JEV, Claude Code, Codex, Gemini.
 - **Kubernetes** — манифесты для Keycloak, Postgres и Multica, путь переезда в облако.
 - **Версионируемые артефакты** — навыки, `AGENTS.md`, OpenSpec, ADR, диаграммы, OpenAPI

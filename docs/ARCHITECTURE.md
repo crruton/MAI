@@ -336,6 +336,13 @@ ADR 0088. `mcp.js` — `entry.config`, `callTimeoutMs`; таймаут вызо�
 `repowise.mcpConfig` — 60 с и повтор. IPC `repowise:status` (ping, `mcp`) и
 `repowise:restartMcp` (ADMIN). В board.js — `repowiseMcpCard`.
 
+### Статусы Multica → OpenSpec
+
+ADR 0089. `openspec.js` — `parseTaskMarker`, `statusUpdatesFromIssues`,
+`applyTaskStatuses` (по id задачи, CRLF, временный файл); `multica.pullStatuses`;
+IPC `multica:pullStatuses` (ADMIN); `multica-sync.mjs --pull`. В app.js —
+кнопка `.multica-pull` в панели Multica.
+
 ### Рантаймы: версия и перенос
 
 ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,

@@ -165,6 +165,8 @@ export const IPC_PERMISSIONS = {
   'multica:auth': ADMIN,
   'multica:issues': ANY,
   'multica:syncDocs': ADMIN,
+  // Статусы Multica → tasks.md (F14).
+  'multica:pullStatuses': ADMIN,
 
   // Docker-песочницы
   'sandbox:status': ANY,

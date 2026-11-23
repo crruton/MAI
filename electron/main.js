@@ -2767,6 +2767,11 @@ ipcMain.handle('multica:syncDocs', (_e, projectDir) => {
   requireAdmin();
   return multica.syncOpenSpec(projectDir || loadSettings().projectDir);
 });
+// Статусы Multica → галочки в openspec/changes/*/tasks.md (F14, ADR 0089).
+ipcMain.handle('multica:pullStatuses', (_e, projectDir) => {
+  requireAdmin();
+  return multica.pullStatuses(projectDir || loadSettings().projectDir);
+});
 
 // ---------- Docker-песочницы ----------
 

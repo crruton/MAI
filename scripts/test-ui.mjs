@@ -541,6 +541,14 @@ ipcMain.handle('repowise:restartMcp', () => {
   rwRestarts += 1;
   return { ok: true };
 });
+// Multica → tasks.md (раздел [51], F14).
+const multicaPulls = [];
+ipcMain.handle('multica:status', () => ({ available: true, version: 'multica 0.4', config: {} }));
+ipcMain.handle('multica:issues', () => ({ ok: true, issues: [] }));
+ipcMain.handle('multica:pullStatuses', (_e, projectDir) => {
+  multicaPulls.push(projectDir);
+  return { ok: true, marked: ['auth: Вход (MAI-1)'], already: [], missing: [], cancelled: ['auth:roles (MAI-3)'], message: 'Multica → OpenSpec: отмечено 1, уже отмечено 0, отменено в Multica 1' };
+});
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
   projectDir: root,
@@ -2035,6 +2043,17 @@ app.whenReady().then(async () => {
     const rwCard2 = await storeUi(`document.querySelector('.repowise-mcp')?.textContent || ''`);
     check('«Перезапустить» — вызов и обновлённый счётчик', rwRestarts === 2 && /перезапусков: 2/.test(rwCard2), rwCard2);
     store.destroy();
+
+    console.log('\n[51] Multica: статусы обратно в tasks.md (F14, ADR 0089)');
+    await ui(`document.querySelector('[data-panel=multica]').click()`);
+    await wait(700);
+    const pullBtn = await ui(`Boolean(document.querySelector('.modal-backdrop .multica-pull'))`);
+    check('в панели Multica — «Статусы → tasks.md»', pullBtn);
+    await ui(`document.querySelector('.modal-backdrop .multica-pull').click()`);
+    await wait(500);
+    const pullToasts = await ui(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ')`);
+    check('вызов с папкой проекта и отчёт: отмечено, отменено', multicaPulls.length === 1 && multicaPulls[0] && /отмечено 1/.test(pullToasts) && /Отменены в Multica/.test(pullToasts), `${JSON.stringify(multicaPulls)} ${pullToasts}`);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

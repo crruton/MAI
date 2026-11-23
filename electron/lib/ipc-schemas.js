@@ -118,6 +118,7 @@ export const IPC_SCHEMAS = {
   'memory:append': [O_],
   'memory:restore': [O_],
   'multica:syncDocs': [S_],
+  'multica:pullStatuses': [S_],
   'sandbox:start': [O_],
   'sandbox:stop': [O_],
   'sandbox:exec': [O_],
