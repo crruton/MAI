@@ -83,7 +83,7 @@ import { editDiagram, applyDiagram } from './lib/diagram-agent.js';
 import { buildContext as calibrationContext, calibrate, renderMarkdown as calibrationMarkdown } from './lib/calibrator.js';
 import { listChanges as openspecChanges } from './lib/openspec.js';
 import { createWorkspace, listWorkspaces, sandboxRoot } from './lib/workspace.js';
-import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin } from './lib/auth.js';
+import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin, sessionGateFor, ensureSession } from './lib/auth.js';
 import { listDocs, readDoc, searchDocs } from './lib/docs.js';
 import * as multica from './lib/multica.js';
 import * as sandbox from './lib/container.js';
@@ -151,7 +151,13 @@ let mainWindow = null;
 // Канал без записи в матрице считается admin-only.
 guardIpc(ipcMain, requireAdmin, {
   onUnknown: (channel) => console.warn(`[ipc] канал ${channel} не внесён в матрицу прав — доступен только admin`),
+  sessionGate: sessionGateFor,
 });
+
+// Продление сессии Keycloak (F21): раз в минуту истёкший access token
+// обновляется по refresh_token; не вышло — сессия закрывается.
+const sessionTimer = setInterval(() => ensureSession().catch(() => {}), 60_000);
+sessionTimer.unref?.();
 
 /**
  * MCP-серверы проекта лежат в <проект>/.mai-code/mcp.json и дополняют
@@ -619,7 +625,7 @@ ipcMain.handle('settings:save', async (_e, patch) => {
 
 // ---------- роли и доступ ----------
 
-ipcMain.handle('auth:status', () => authStatus());
+ipcMain.handle('auth:status', () => ensureSession().catch(() => authStatus()));
 
 ipcMain.handle('auth:configure', (_e, payload) => {
   requireAdmin();

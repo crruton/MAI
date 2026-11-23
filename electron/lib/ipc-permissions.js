@@ -310,19 +310,18 @@ export function permissionOf(channel) {
  * @param ipcMain   объект Electron
  * @param requireAdmin функция, которая бросает ошибку, если роль не admin
  * @param onUnknown вызывается для канала без записи в матрице
+ * @param sessionGate (channel) => '' | текст отказа — корпоративный режим без входа (F21)
  */
-export function guardIpc(ipcMain, requireAdmin, { onUnknown, onInvalid } = {}) {
+export function guardIpc(ipcMain, requireAdmin, { onUnknown, onInvalid, sessionGate = null } = {}) {
   const original = ipcMain.handle.bind(ipcMain);
   ipcMain.handle = (channel, handler) => {
     if (!Object.hasOwn(IPC_PERMISSIONS, channel)) onUnknown?.(channel);
     const permission = permissionOf(channel);
     return original(channel, (event, ...args) => {
-      // Схема данных (Q7, ADR 0060): окно может прислать что угодно — проверяем до обработчика.
-      const invalid = validateIpc(channel, args);
-      if (invalid) {
-        onInvalid?.(channel, invalid);
-        return { ok: false, invalid: true, error: `Неверные данные для ${channel}: ${invalid}` };
-      }
+      // Корпоративный режим (F21, ADR 0093): без входа — только каналы экрана входа.
+      const gate = sessionGate?.(channel);
+      if (gate) return { ok: false, forbidden: true, needsLogin: true, error: gate };
+      // Право зависит только от канала, поэтому проверяется до разбора данных.
       if (permission === ADMIN) {
         try {
           requireAdmin();
@@ -331,6 +330,12 @@ export function guardIpc(ipcMain, requireAdmin, { onUnknown, onInvalid } = {}) {
           // и не остаётся в состоянии «выполняется».
           return { ok: false, forbidden: true, error: err?.message || 'Недостаточно прав' };
         }
+      }
+      // Схема данных (Q7, ADR 0060): окно может прислать что угодно — проверяем до обработчика.
+      const invalid = validateIpc(channel, args);
+      if (invalid) {
+        onInvalid?.(channel, invalid);
+        return { ok: false, invalid: true, error: `Неверные данные для ${channel}: ${invalid}` };
       }
       return handler(event, ...args);
     });

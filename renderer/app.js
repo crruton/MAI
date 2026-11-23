@@ -4887,9 +4887,10 @@ async function openAuth() {
         el('dt', { text: 'Сессия Keycloak' }),
         el('dd', { text: auth.loggedIn ? 'активна' : 'нет' }),
       ]),
-      el('div', { class: 'row' }, [field('Issuer Keycloak', issuer), field('Client ID', clientId)]),
+      auth.required ? el('p', { class: 'hint-text auth-corporate', text: `Корпоративный режим: вход обязателен, адрес Keycloak задан организацией (${auth.issuer || '—'}). Локальной роли нет.` }) : null,
+      auth.required ? null : el('div', { class: 'row' }, [field('Issuer Keycloak', issuer), field('Client ID', clientId)]),
       el('div', { class: 'row' }, [
-        el('button', {
+        auth.required ? null : el('button', {
           class: 'btn',
           type: 'button',
           text: 'Сохранить Keycloak',
@@ -4929,14 +4930,16 @@ async function openAuth() {
           text: 'Выйти',
           onclick: async () => {
             state.auth = await api.auth.logout();
-            applyRoleGuard();
             modal.close();
+            // Корпоративный режим: после выхода — только экран входа.
+            if (state.auth.required) return showLoginOnly(state.auth);
+            applyRoleGuard();
             toast('Вы вышли, включён локальный admin', 'ok');
             openAuth();
           },
         }),
       ]),
-      el('div', { class: 'row' }, [
+      auth.required ? null : el('div', { class: 'row' }, [
         field('Локальная роль', role),
         el('button', {
           class: 'btn',
@@ -6337,7 +6340,61 @@ function autosize() {
 
 /* ---------- запуск ---------- */
 
+/**
+ * Экран «только вход» (F21, ADR 0093): корпоративный режим без сессии Keycloak.
+ * Остальной интерфейс не грузится — каналы закрыты в main до входа.
+ */
+function showLoginOnly(auth = {}) {
+  if (document.querySelector('.login-only')) return;
+  const message = el('p', { class: 'login-only-status hint-text', text: auth.expired ? 'Сессия истекла — войдите снова.' : 'В вашей организации MAI Code работает только после входа.' });
+  const button = el('button', {
+    class: 'btn primary login-only-button',
+    type: 'button',
+    text: 'Войти через Keycloak',
+    onclick: async () => {
+      button.disabled = true;
+      message.textContent = 'Открываю браузер. Подтвердите вход и вернитесь в приложение…';
+      const res = await api.auth.login().catch((err) => ({ ok: false, error: err.message }));
+      if (res.ok && res.loggedIn !== false) {
+        message.textContent = `Вход выполнен: ${res.user?.name || 'пользователь'}. Загружаю…`;
+        location.reload();
+        return;
+      }
+      button.disabled = false;
+      button.textContent = 'Повторить вход';
+      message.textContent = `Не удалось войти: ${res.error || 'нет ответа'}`;
+    },
+  });
+  const screen = el('div', { class: 'login-only', role: 'dialog', 'aria-label': 'Вход' }, [
+    el('div', { class: 'login-only-card' }, [
+      el('h1', { text: 'MAI Code' }),
+      el('p', { text: 'Вход через Keycloak обязателен' }),
+      el('p', { class: 'hint-text mono', text: auth.issuer || 'адрес Keycloak не задан в managed-settings.json' }),
+      message,
+      button,
+    ]),
+  ]);
+  document.body.append(screen);
+  button.focus();
+}
+
+/** Сессия могла истечь во время работы: раз в минуту — проверка и экран входа. */
+function watchSession() {
+  setInterval(async () => {
+    const auth = await api.auth.status().catch(() => null);
+    if (auth?.required && !auth.loggedIn) showLoginOnly({ ...auth, expired: true });
+  }, 60_000);
+}
+
 async function init() {
+  // Корпоративный режим (F21): без входа — только экран входа, до любых других вызовов.
+  const auth0 = await api.auth.status().catch(() => null);
+  if (auth0?.required && !auth0.loggedIn) {
+    showLoginOnly(auth0);
+    watchSession();
+    return;
+  }
+  if (auth0?.required) watchSession();
   state.settings = await api.settings.get();
   state.projectDir = state.settings.projectDir || '';
   state.model = state.settings.activeModel || '';

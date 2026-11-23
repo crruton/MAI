@@ -363,6 +363,15 @@ IPC `voice:status`/`voice:transcribe` выбирают MAS (`mas.js`) или п�
 app.js — `setMicState(kind, message)` с состоянием `error`, `transcribeWav`,
 `retryVoice` и кнопкой `#mic-retry` (запись — в `voice.lastWav`).
 
+### Корпоративный вход
+
+ADR 0093. `auth-session.js` (без Electron) — `corporatePolicy`, `tokenState`,
+`refreshTokens`, `identityFromToken`, `sessionGate`, `LOGIN_CHANNELS`;
+`settings-levels.readManaged` отдаёт `auth`. `auth.js` — роль `none` без сессии,
+`sessionGateFor`, `ensureSession` (таймер в main, раз в минуту). `guardIpc` —
+опция `sessionGate`, порядок: сессия → роль → схема. В app.js — `showLoginOnly`
+до `init`, `watchSession`.
+
 ### Рантаймы: версия и перенос
 
 ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,

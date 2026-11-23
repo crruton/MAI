@@ -879,3 +879,9 @@ button { cursor: pointer; }
 /* Голосовой ввод: ошибка на кнопке и повтор (F18) */
 .mic.error { color: var(--red, #e5484d); border-color: var(--red, #e5484d); }
 .mic-retry { font-size: 14px; }
+
+/* Экран «только вход» — корпоративный режим (F21) */
+.login-only { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; background: var(--bg); }
+.login-only-card { width: min(420px, calc(100vw - 32px)); display: grid; gap: 10px; padding: 28px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-elev); text-align: center; }
+.login-only-card h1 { margin: 0; font-size: 22px; }
+.login-only-card p { margin: 0; }

@@ -359,7 +359,17 @@ ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
   return { projectDir: root, activeModel: 'test-model', permissionMode: 'manual', providers: { 'test-model': { name: 'Test', apiKeySet: true, models: [] } }, models: [], ...patch };
 });
-ipcMain.handle('auth:status', () => ({ authenticated: false, role: 'admin', mode: 'local' }));
+// Корпоративный режим (раздел [55], F21): флаг включает «только вход».
+let corporate = false;
+let corporateLoggedIn = false;
+const loginCalls = [];
+ipcMain.handle('auth:status', () => (corporate ? { required: true, loggedIn: corporateLoggedIn, role: corporateLoggedIn ? 'admin' : 'none', mode: 'keycloak', issuer: 'https://sso.example/realms/mai' } : { authenticated: false, role: 'admin', mode: 'local' }));
+ipcMain.handle('auth:login', () => {
+  loginCalls.push(Date.now());
+  if (loginCalls.length === 1) return { ok: false, error: 'Keycloak не подтвердил вход за отведённое время' };
+  corporateLoggedIn = true;
+  return { ok: true, loggedIn: true, role: 'admin', user: { name: 'Иван' } };
+});
 ipcMain.handle('models:list', () => []);
 // Сессия с ответом агента: нужна для проверки меню «Скачать» у сообщения.
 const TEST_SESSION = {
@@ -2114,6 +2124,25 @@ app.whenReady().then(async () => {
     const micOk = await ui(`({ cls: document.querySelector('#mic').className, input: document.querySelector('#input').value, retry: Boolean(document.querySelector('#mic-retry')) })`);
     check('«↻» — та же запись, текст в поле, состояние сброшено', voiceSends.length === 2 && voiceSends[1] === voiceSends[0] && micOk.input === 'надиктованный текст' && !/error/.test(micOk.cls) && !micOk.retry, JSON.stringify({ voiceSends, micOk }));
     await ui(`document.querySelector('#input').value = ''`);
+
+    console.log('\n[55] Корпоративный режим: экран «только вход» (F21, ADR 0093)');
+    corporate = true;
+    const corp = new BrowserWindow({ show: false, width: 1100, height: 800, webPreferences: { preload: path.join(root, 'electron', 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    await corp.loadFile(path.join(root, 'renderer', 'index.html'));
+    await wait(1500);
+    const corpUi = (code) => corp.webContents.executeJavaScript(code);
+    const login0 = await corpUi(`({ screen: Boolean(document.querySelector('.login-only')), text: document.querySelector('.login-only')?.textContent || '', chats: document.querySelectorAll('.session-item').length })`);
+    check('без входа — только экран входа с адресом организации', login0.screen && /Вход через Keycloak обязателен/.test(login0.text) && /sso.example/.test(login0.text) && login0.chats === 0, JSON.stringify(login0));
+    await corpUi(`document.querySelector('.login-only-button').click()`);
+    await wait(500);
+    const login1 = await corpUi(`({ status: document.querySelector('.login-only-status').textContent, button: document.querySelector('.login-only-button').textContent, disabled: document.querySelector('.login-only-button').disabled })`);
+    check('вход не удался — причина и «Повторить вход»', /не подтвердил вход/.test(login1.status) && login1.button === 'Повторить вход' && !login1.disabled, JSON.stringify(login1));
+    await corpUi(`document.querySelector('.login-only-button').click()`);
+    await wait(2500);
+    const login2 = await corpUi(`({ screen: Boolean(document.querySelector('.login-only')), input: Boolean(document.querySelector('#input')) })`);
+    check('после входа — перезагрузка и обычное окно', loginCalls.length === 2 && !login2.screen && login2.input, JSON.stringify({ loginCalls: loginCalls.length, login2 }));
+    corp.destroy();
+    corporate = false;
 
     check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {

@@ -101,9 +101,26 @@ http://localhost:8080/realms/mai-code
 и Client ID `mai-code-desktop`, затем «Войти через Keycloak». Приложение откроет
 браузер, дождётся подтверждения и сохранит токены через `safeStorage` (DPAPI на Windows).
 
+### Корпоративный режим: вход обязателен
+
+Чтобы без входа приложение не работало вовсе, администратор кладёт в
+`%ProgramData%\mai-code\managed-settings.json` (macOS —
+`/Library/Application Support/mai-code/`, Linux — `/etc/mai-code/`):
+
+```json
+{ "auth": { "required": true, "issuer": "https://sso.example.com/realms/mai-code", "clientId": "mai-code-desktop" } }
+```
+
+Тогда окно показывает только экран входа, локальной роли нет, адрес Keycloak из
+окна не меняется, «Выйти» возвращает на экран входа. Access token продлевается по
+`refresh_token` раз в минуту, роль пересчитывается из нового токена; отозванная в
+Keycloak сессия закрывается и в приложении (ADR 0093). Клиенту нужен
+`refresh_token` (стандартный flow) и разумный `SSO Session Idle`.
+
 ### Что действительно защищено
 
-- В режиме Keycloak роль берётся из `realm_access.roles` / `resource_access`.
+- В режиме Keycloak роль берётся из `realm_access.roles` / `resource_access` и
+  пересчитывается при каждом продлении токена.
 - В локальном режиме роли `admin`/`guest` — это разграничение интерфейса.
   Владелец машины может отредактировать `%APPDATA%\mai-code\auth.json`.
 - Ограничения применяются в main-процессе для опасных IPC: настройки провайдеров,

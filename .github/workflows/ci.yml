@@ -57,6 +57,7 @@ jobs:
           xvfb-run -a npx electron --no-sandbox scripts/test-memory-tools.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-plugin-host.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-secrets-electron.mjs
+          xvfb-run -a npx electron --no-sandbox scripts/test-auth-electron.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-ui.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-storage-safety.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-telemetry.mjs
@@ -113,7 +114,7 @@ jobs:
         run: |
           $electron = Join-Path $PWD 'node_modules\electron\dist\electron.exe'
           $failed = @()
-          foreach ($t in 'test-agent-loop', 'test-memory-tools', 'test-plugin-host', 'test-secrets-electron', 'test-ui', 'test-storage-safety', 'test-telemetry', 'test-pdf', 'test-browser', 'smoke-electron') {
+          foreach ($t in 'test-agent-loop', 'test-memory-tools', 'test-plugin-host', 'test-secrets-electron', 'test-auth-electron', 'test-ui', 'test-storage-safety', 'test-telemetry', 'test-pdf', 'test-browser', 'smoke-electron') {
             Write-Host "== $t"
             $p = Start-Process -FilePath $electron -ArgumentList "scripts/$t.mjs" -NoNewWindow -PassThru -RedirectStandardOutput "$t.out.txt" -RedirectStandardError "$t.err.txt"
             $null = $p.Handle  # без этого ExitCode после WaitForExit бывает пустым
