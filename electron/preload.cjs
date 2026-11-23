@@ -75,6 +75,9 @@ contextBridge.exposeInMainWorld('mai', {
     setRole: (role) => invoke('auth:setRole', role),
   },
   // Ветка git для статусной строки (CC7.12).
+  notify: {
+    test: () => invoke('notify:test'),
+  },
   git: {
     branch: (projectDir) => invoke('git:branch', projectDir),
     worktrees: (projectDir) => invoke('worktree:list', projectDir),

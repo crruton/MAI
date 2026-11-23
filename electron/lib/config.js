@@ -25,6 +25,8 @@ const DEFAULTS = {
   autoDiagnostics: false,
   // Инструкции других агентов (CC4.6): CLAUDE.md, GEMINI.md, правила Cursor и Copilot.
   compatInstructions: true,
+  // Уведомления (CW5.4): на рабочем столе и в мессенджер через webhook.
+  notifications: { enabled: true, desktop: ['done', 'approval', 'question', 'error', 'background', 'scheduled'], webhook: ['done', 'error', 'scheduled'], webhookUrl: '' },
   // Отложенные инструменты (CC1.12): больше стольких MCP/плагинов — схемы по запросу (0 — никогда).
   deferToolsOver: 25,
   sessionRetentionDays: 0,
@@ -329,6 +331,13 @@ export function saveSettings(patch) {
     next.providers = providers;
   }
 
+  // Webhook уведомлений (CW5.4): окно видит «***» — такое значение не затирает настоящее.
+  if (patch.notifications) {
+    const previous = current.notifications || {};
+    next.notifications = { ...previous, ...patch.notifications };
+    if (patch.notifications.webhookUrl === '***') next.notifications.webhookUrl = previous.webhookUrl || '';
+  }
+
   if (patch.infra) {
     const previous = current.infra || {};
     next.infra = { ...previous, ...patch.infra };
@@ -410,6 +419,11 @@ export function publicSettings() {
     ...(s.infra || {}),
     vaultToken: s.infra?.vaultToken ? '***' : '',
     vaultTokenSet: Boolean(s.infra?.vaultToken),
+  };
+  safe.notifications = {
+    ...(s.notifications || DEFAULTS.notifications),
+    webhookUrl: s.notifications?.webhookUrl ? '***' : '',
+    webhookSet: Boolean(s.notifications?.webhookUrl),
   };
   safe.mas = {
     ...(s.mas || DEFAULTS.mas),

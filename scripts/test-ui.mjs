@@ -1885,6 +1885,8 @@ app.whenReady().then(async () => {
     await wait(400);
     check('настройка «Тема» сохраняется', themeOptions === 'dark,light,system' && savedSettings.at(-1)?.theme === 'system', `${themeOptions} ${savedSettings.at(-1)?.theme}`);
     check('поле «Модель для Плана» сохраняется', savedSettings.at(-1)?.planModel === '', JSON.stringify(savedSettings.at(-1)?.planModel));
+    const ns = savedSettings.at(-1)?.notifications;
+    check('уведомления: по умолчанию все виды на рабочем столе, webhook — готово/ошибка/плановая', ns?.enabled === true && ns.desktop.length === 6 && ns.webhook.join() === 'done,error,scheduled' && ns.webhookUrl === '', JSON.stringify(ns));
 
     console.log('\n[45] Статусная строка, !команда, доступность (ADR 0074)');
     await wait(300);

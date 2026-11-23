@@ -36,6 +36,7 @@ import { listRoles, installRole } from './lib/roles.js';
 import { skillConflicts } from './lib/skills.js';
 import { wrapData } from './lib/injection.js';
 import { localConnectors } from './lib/local-connectors.js';
+import { createNotifier } from './lib/notify.js';
 import { currentBranch } from './lib/git-guard.js';
 import { repoRoot, realPath, createWorktree, listWorktrees, removeWorktree, worktreeId } from './lib/worktree.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
@@ -572,6 +573,8 @@ ipcMain.handle('settings:save', async (_e, patch) => {
   }
   const current = loadSettings();
   if ('allowOutsideProject' in (patch || {}) && Boolean(patch.allowOutsideProject) !== Boolean(current.allowOutsideProject)) requireAdmin();
+  // Webhook уведомлений (CW5.4) отправляет данные наружу — только admin.
+  if (patch?.notifications && patch.notifications.webhookUrl !== '***' && String(patch.notifications.webhookUrl || '') !== String(current.notifications?.webhookUrl || '')) requireAdmin();
   // Сайты без вопросов для браузера агента (CW4.2) расширяют права — только admin.
   if (patch?.browserSites && JSON.stringify(patch.browserSites.allow || []) !== JSON.stringify(current.browserSites?.allow || [])) requireAdmin();
   if (patch?.shellSandbox && JSON.stringify(normalizeShellSandbox({ ...current.shellSandbox, ...patch.shellSandbox })) !== JSON.stringify(normalizeShellSandbox(current.shellSandbox))) {
@@ -1360,6 +1363,40 @@ ipcMain.handle('sessions:importFile', async (event) => {
 
 // ---------- чат ----------
 
+/* ---------- уведомления (CW5.4, ADR 0081) ---------- */
+
+// Рабочий стол — когда окно не в фокусе; webhook — по настройке. Клик открывает чат.
+const notify = createNotifier({
+  Notification,
+  getSettings: loadSettings,
+  isFocused: () => BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isFocused()),
+  onClick: ({ sessionId }) => {
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : anyWindow();
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    if (sessionId) send(win, { type: 'scheduled:open', sessionId });
+  },
+  log: (text) => logError({ source: 'notify', message: text }),
+});
+
+/** Короткое имя чата для уведомления. */
+const chatTitle = (sessionId) => {
+  try {
+    return getSession(sessionId)?.title || 'чат';
+  } catch {
+    return 'чат';
+  }
+};
+
+/** Проверка уведомлений из настроек: на рабочем столе — даже при окне в фокусе. */
+ipcMain.handle('notify:test', async () => {
+  const test = createNotifier({ Notification, getSettings: loadSettings, isFocused: () => false, log: (t) => logError({ source: 'notify', message: t }) });
+  const r = await test('done', { title: 'Проверка уведомлений MAI Code', body: 'Так будет выглядеть уведомление, когда агент закончит работу.' });
+  return { ok: true, ...r };
+});
+
 /* ---------- фоновые субагенты (CC8.6, ADR 0075) ---------- */
 
 // sessionId → Map(id → задача). Живут дольше прогона родителя, до выхода из приложения.
@@ -1405,13 +1442,7 @@ function backgroundFor(window, sessionId) {
             /* чат удалён */
           }
           send(window, { type: 'agent:background', sessionId, task: view(task), done: true });
-          if (Notification.isSupported?.() && !(window && !window.isDestroyed() && window.isFocused())) {
-            try {
-              new Notification({ title: `Субагент «${task.description}»: ${task.status}`, body: task.result.replace(/\s+/g, ' ').slice(0, 180) }).show();
-            } catch {
-              /* без уведомлений */
-            }
-          }
+          notify('background', { title: `Субагент «${task.description}»: ${task.status}`, body: task.result.slice(0, 180), sessionId }).catch(() => {});
         });
       return view(task);
     },
@@ -1606,6 +1637,10 @@ ipcMain.handle('chat:start', async (event, payload) => {
       // runAgent выходит из цикла по abort без исключения — не выдаём это за успех.
       if (controller.signal.aborted) throw new Error('Остановлено пользователем');
       send(window, { type: 'saved', sessionId: session.id, title: session.title, plugins: loaded });
+      {
+        const answer = [...history].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+        notify('done', { title: `Готово: ${chatTitle(session.id)}`, body: String(answer).slice(0, 200), sessionId: session.id }).catch(() => {});
+      }
       // Автозаголовок (CC6.8): после первого ответа, если чат не назван вручную.
       const users = history.filter((m) => m.role === 'user');
       if (settings.autoTitle !== false && users.length === 1 && !getSession(session.id)?.titleManual) {
@@ -1622,6 +1657,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
       runStatus = aborted ? 'stopped' : 'error';
       const message = aborted ? 'Остановлено пользователем' : err?.message || String(err);
       if (!aborted) logError({ source: 'agent', model, message, cause: err?.cause?.message || '' });
+      if (!aborted) notify('error', { title: `Ошибка: ${chatTitle(session.id)}`, body: message, sessionId: session.id }).catch(() => {});
       send(window, {
         type: 'error',
         message,
@@ -1896,14 +1932,7 @@ async function runCli(opts) {
 }
 
 function notifyScheduled(task, body, sessionId) {
-  try {
-    if (!Notification.isSupported()) return;
-    const n = new Notification({ title: `⏰ ${task.title}`, body });
-    n.on('click', () => send(anyWindow(), { type: 'scheduled:open', sessionId }));
-    n.show();
-  } catch {
-    /* уведомления недоступны — результат есть в журнале и чате */
-  }
+  notify('scheduled', { title: `⏰ ${task.title}`, body, sessionId }).catch(() => {});
 }
 
 let schedulerTimer = null;
@@ -2043,6 +2072,7 @@ function makeApprover(window, state, sessionId) {
       });
       // Для обратной совместимости окна досок: name и summary остаются.
       send(window, { type: 'approval', id, name: payload.tool, ...payload });
+      notify('approval', { title: `Нужно подтверждение: ${chatTitle(sessionId)}`, body: String(payload.summary || payload.tool || '').slice(0, 200), sessionId }).catch(() => {});
     });
   };
 }
@@ -2076,6 +2106,7 @@ function makeAsker(window, state, sessionId, projectDir) {
         resolve(answer);
       });
       send(window, { type: 'question', id, ...request });
+      notify('question', { title: `Агент спрашивает: ${chatTitle(sessionId)}`, body: String(request.question || request.title || '').slice(0, 200), sessionId }).catch(() => {});
     });
 }
 

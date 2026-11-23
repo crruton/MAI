@@ -312,6 +312,14 @@ ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый про�
 автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
 сообщения. IPC `hooks:list(projectDir)`.
 
+### Уведомления
+
+ADR 0081. `notify.js` — `notifySettings`, `webhookPayload`,
+`createNotifier`; в main один `notify` (фокус — `BrowserWindow`, клик —
+`scheduled:open`), вызовы из прогона чата, `makeApprover`, `makeAsker`,
+`backgroundFor`, `notifyScheduled`; IPC `notify:test`. Адрес webhook — в
+`SECRET_PATHS`.
+
 ### Память, совместимость, кэш, дубли навыков
 
 ADR 0080. `memory-limits.js` — `MEMORY_LIMITS`, `memoryForPrompt` (в

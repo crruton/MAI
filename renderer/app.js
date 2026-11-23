@@ -4190,6 +4190,21 @@ async function openSettings() {
     box.checked = statusOn.has(key);
     return el('label', { class: 'hint-text' }, [box, ` ${label} `]);
   });
+  // Уведомления (CW5.4).
+  const NOTIFY_KINDS = [['done', 'агент закончил'], ['approval', 'нужно подтверждение'], ['question', 'агент спрашивает'], ['error', 'ошибка'], ['background', 'фоновый субагент'], ['scheduled', 'плановая задача']];
+  const nset = settings.notifications || {};
+  const kindBoxes = (cls, current, fallback) =>
+    NOTIFY_KINDS.map(([key, label]) => {
+      const box = el('input', { type: 'checkbox', class: cls, 'data-kind': key });
+      box.checked = (Array.isArray(current) ? current : fallback).includes(key);
+      return el('label', { class: 'hint-text' }, [box, ` ${label} `]);
+    });
+  const notifyOn = el('input', { type: 'checkbox', class: 'notify-enabled' });
+  notifyOn.checked = nset.enabled !== false;
+  const desktopKinds = kindBoxes('notify-desktop', nset.desktop, NOTIFY_KINDS.map(([k]) => k));
+  const webhookUrl = el('input', { class: 'notify-webhook', placeholder: 'https://hooks.slack.com/… — Slack, Mattermost, Discord, Teams', value: nset.webhookUrl || '' });
+  const webhookKinds = kindBoxes('notify-webhook-kind', nset.webhook, ['done', 'error', 'scheduled']);
+  const checked = (boxes) => boxes.map((l) => l.querySelector('input')).filter((b) => b.checked).map((b) => b.dataset.kind);
   // Инструкции других агентов (CC4.6).
   const compat = el('input', { type: 'checkbox', class: 'compat-instructions' });
   compat.checked = settings.compatInstructions !== false;
@@ -4342,6 +4357,14 @@ async function openSettings() {
         el('label', { class: 'hint-text' }, [outside, ' разрешить абсолютные пути вне папки проекта']),
       ]),
       el('div', { class: 'field' }, [el('span', { text: 'Статусная строка под полем ввода' }), el('div', { class: 'statusline-items' }, statusBoxes)]),
+      el('div', { class: 'field' }, [
+        el('span', { text: 'Уведомления' }),
+        el('label', { class: 'hint-text' }, [notifyOn, ' на рабочем столе, когда окно MAI не в фокусе:']),
+        el('div', { class: 'statusline-items' }, desktopKinds),
+      ]),
+      el('div', { class: 'row' }, [field('Webhook мессенджера (необязательно; уходит только заголовок и суть)', webhookUrl)]),
+      el('div', { class: 'statusline-items' }, webhookKinds),
+      el('button', { class: 'btn ghost small notify-test', type: 'button', text: 'Проверить уведомление', onclick: async () => { const r = await api.notify?.test(); toast(r?.webhook ? 'Отправлено на рабочий стол и в webhook' : r?.desktop ? 'Показано на рабочем столе' : 'Не доставлено — смотрите журнал', r?.desktop || r?.webhook ? 'ok' : 'err'); } }),
       el('label', { class: 'field' }, [
         el('span', { text: 'Инструкции других агентов' }),
         el('label', { class: 'hint-text' }, [compat, ' читать также CLAUDE.md, GEMINI.md, правила Cursor и Copilot (повторы AGENTS.md пропускаются)']),
@@ -4461,6 +4484,7 @@ async function openSettings() {
             browserEnabled: browserEnabled.checked,
             autoTitle: autoTitle.checked,
             compatInstructions: compat.checked,
+            notifications: { enabled: notifyOn.checked, desktop: checked(desktopKinds), webhook: checked(webhookKinds), webhookUrl: webhookUrl.value.trim() },
             theme: theme.value,
             statusLine: STATUS_ITEMS.map(([key]) => key).filter((key) => statusBoxes.some((l) => l.querySelector(`[data-item=${key}]`)?.checked)),
             sessionRetentionDays: Math.max(0, Math.min(3650, Math.round(Number(retention.value) || 0))),

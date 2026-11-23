@@ -189,6 +189,8 @@ export const IPC_PERMISSIONS = {
   'sessions:rename': ANY,
   'shell:direct': ADMIN,
   'git:branch': ANY,
+  // Уведомления (CW5.4).
+  'notify:test': ADMIN,
   // Рабочие копии для чатов (CC11.5).
   'worktree:list': ANY,
   'worktree:create': ADMIN,
