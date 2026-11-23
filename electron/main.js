@@ -100,6 +100,7 @@ import { isCliInvocation, parseCliArgs, CLI_HELP, streamLine, resultObject } fro
 import { isSelfCheck, selfCheckOut, runSelfCheck } from './lib/self-check.js';
 import { applySystemCa } from './lib/system-ca.js';
 import { runSignoff } from './lib/signoff.js';
+import { dataBoundaryReport } from './lib/data-boundary.js';
 import { spawnShell, killTree as killProcessTree } from './lib/proc.js';
 import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions, promptArgs, resolveResourceMentions } from './lib/commands.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
@@ -2803,6 +2804,19 @@ ipcMain.handle('skills:create', (_e, { projectDir, ...data }) => {
 ipcMain.handle('skills:delete', (_e, file) => {
   requireAdmin();
   return deleteSkill(file);
+});
+
+// ---------- Границы данных (N2, ADR 0098) ----------
+
+ipcMain.handle('privacy:report', (_e, payload = {}) => {
+  const settings = loadSettings();
+  const servers = mcpConfigs(projectOf(payload));
+  const mcpList = Object.entries(servers)
+    .filter(([, c]) => c && !c.disabled)
+    .map(([name, c]) => ({ name, url: c.url || '', transport: c.url ? 'http' : 'stdio', connector: c.connector || '' }));
+  const connectors = mcpList.filter((m) => m.connector).map((m) => ({ name: m.name, connected: true }));
+  const schedules = scheduleStore().list().map((t) => ({ title: t.title, model: t.model, enabled: t.enabled }));
+  return dataBoundaryReport(settings, { mcp: mcpList.filter((m) => !m.connector), connectors, schedules });
 });
 
 // ---------- Signoff (N1, ADR 0097) ----------

@@ -1866,6 +1866,43 @@ function prPrompt(args = '') {
  * /signoff [fail] [контекст] (N1, ADR 0097): тесты проекта → статус коммита в
  * GitHub. Окно показывает шаги, вывод упавших тестов и итог.
  */
+/** /privacy (N2, ADR 0098): куда уходят данные и чек-лист «строго локально». */
+async function openPrivacy() {
+  const report = await api.privacy.report({ projectDir: state.projectDir });
+  const LEVEL = { fail: ['red', 'наружу'], warn: ['amber', 'может уйти'], info: ['green', 'локально'] };
+  const verdict = report.strictLocal
+    ? el('p', { class: 'privacy-verdict ok-text', text: '✓ Строго локально: данные не покидают этот компьютер и частную сеть.' })
+    : el('p', { class: 'privacy-verdict', text: `Наружу: ${report.counts.fail} · может уйти: ${report.counts.warn} · локально: ${report.counts.info}` });
+  const list = el(
+    'div',
+    { class: 'privacy-findings' },
+    report.findings.map((f) =>
+      el('div', { class: `privacy-finding level-${f.level}` }, [
+        el('div', { class: 'privacy-title' }, [el('span', { class: `badge ${LEVEL[f.level][0]}`, text: LEVEL[f.level][1] }), ` ${f.area}: ${f.title}`]),
+        el('div', { class: 'hint-text', text: f.detail }),
+        f.fix ? el('div', { class: 'hint-text', text: `→ ${f.fix}` }) : null,
+      ]),
+    ),
+  );
+  const checklist = el(
+    'ul',
+    { class: 'privacy-checklist' },
+    report.checklist.map((c) => el('li', { class: c.ok ? 'ok' : 'no', text: `${c.ok ? '✓' : '✗'} ${c.label}${c.detail ? ` — ${c.detail}` : ''}` })),
+  );
+  const modal = openModal({
+    title: 'Куда уходят данные',
+    wide: true,
+    body: [
+      el('p', { class: 'hint-text', text: 'Отчёт по текущим настройкам и подключениям. Он ничего не меняет — исправлять в настройках, коннекторах и MCP.' }),
+      verdict,
+      list,
+      el('div', { class: 'docs-group-title', text: 'Чек-лист «строго локально»' }),
+      checklist,
+    ],
+    footer: [el('button', { class: 'btn primary', type: 'button', text: 'Закрыть', onclick: () => modal.close() })],
+  });
+}
+
 async function runSignoffCommand(text = '') {
   const parts = text.split(/\s+/).filter(Boolean);
   const fail = parts[0]?.toLowerCase() === 'fail';
@@ -2051,6 +2088,10 @@ async function runSlash(text) {
     case 'signoff':
       clear();
       await runSignoffCommand(args.trim());
+      return;
+    case 'privacy':
+      clear();
+      await openPrivacy();
       return;
     case 'memory':
       clear();

@@ -185,6 +185,8 @@ contextBridge.exposeInMainWorld('mai', {
   },
   // Signoff (N1): тесты проекта и статус коммита в GitHub.
   signoff: { run: (payload) => invoke('signoff:run', payload) },
+  // Границы данных (N2).
+  privacy: { report: (payload) => invoke('privacy:report', payload) },
   multica: {
     status: () => invoke('multica:status'),
     install: () => invoke('multica:install'),

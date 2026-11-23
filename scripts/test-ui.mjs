@@ -584,6 +584,8 @@ ipcMain.handle('signoff:run', (_e, payload) => {
     ? { ok: true, state: 'failure', context: 'signoff/lint', sha: 'abcdef1234', repo: 'acme/demo', log: ['HEAD abcdef1 (origin/dev)', 'Статус signoff/lint = failure'] }
     : { ok: false, sha: 'abcdef1234', testsFailed: true, output: 'FAIL test-x.mjs', error: 'Тесты не прошли (код 1) — signoff не поставлен', log: ['HEAD abcdef1 (origin/dev)', 'Тесты: npm test'] };
 });
+// Границы данных (раздел [57], N2).
+ipcMain.handle('privacy:report', () => ({ strictLocal: false, counts: { fail: 1, warn: 1, info: 1 }, findings: [{ level: 'fail', area: 'Модели', title: 'Модель чата — облако: OpenAI', detail: 'Запросы уходят на api.openai.com', fix: 'Выберите локальную модель' }, { level: 'warn', area: 'Веб', title: 'Веб-инструменты включены', detail: '…' }, { level: 'info', area: 'MCP', title: 'Локальные MCP-серверы: 1', detail: 'repowise' }], checklist: [{ label: 'модели — локальные', ok: false, detail: 'чата: openai/gpt-5' }, { label: 'телеметрия выключена или локальная', ok: true }] }));
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
   projectDir: root,
@@ -2163,6 +2165,14 @@ app.whenReady().then(async () => {
     await wait(700);
     const so2 = await ui(`document.querySelector('.signoff-verdict')?.textContent || ''`);
     check('/signoff fail lint — failure на acme/demo', signoffCalls[1]?.fail === true && signoffCalls[1].context === 'lint' && /✓ signoff\/lint = failure на acme\/demo@abcdef1/.test(so2), `${JSON.stringify(signoffCalls[1])} ${so2}`);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`document.querySelector('#input').value = ''`);
+
+    console.log('\n[57] /privacy — куда уходят данные (N2, ADR 0098)');
+    await slashCmd('/privacy');
+    await wait(600);
+    const priv = await ui(`({ verdict: document.querySelector('.privacy-verdict')?.textContent || '', items: [...document.querySelectorAll('.privacy-finding')].map((f) => f.className + '|' + f.textContent), list: [...document.querySelectorAll('.privacy-checklist li')].map((l) => l.textContent) })`);
+    check('итог, находки по уровням и чек-лист', /Наружу: 1/.test(priv.verdict) && priv.items.length === 3 && /level-fail.*наружу.*OpenAI.*Выберите локальную/.test(priv.items[0]) && priv.list[0].startsWith('✗') && priv.list[1].startsWith('✓'), JSON.stringify(priv));
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
     await ui(`document.querySelector('#input').value = ''`);
 

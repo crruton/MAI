@@ -387,6 +387,12 @@ macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL чер�
 `runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
 «Система: …; оболочка run_shell: …».
 
+### Границы данных
+
+ADR 0098. `data-boundary.js` — `isLocalUrl`, `dataBoundaryReport(settings, {mcp, connectors, schedules})`;
+IPC `privacy:report` (ANY) собирает MCP из `mcpConfigs`, коннекторы — серверы с
+`connector`, задачи — `scheduleStore`. В app.js — `openPrivacy`.
+
 ### Signoff
 
 ADR 0097. `signoff.js` — `statusContext`, `parseSignoffArgs`, `parseGithubRemote`,

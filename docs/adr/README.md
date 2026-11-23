@@ -113,3 +113,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0095](0095-ustanovshchik-v-ci-i-sistemnye-sertifikaty.md) | Установщик в CI на чистом Windows и системные сертификаты в процессе | accepted | 2026-11-23 |
 | [0096](0096-krossplatformennye-ispolniteli.md) | Кроссплатформенные исполнители: выбор оболочки и остановка дерева процессов | accepted | 2026-11-23 |
 | [0097](0097-signoff.md) | /signoff — статус коммита «тесты проходят у меня» | accepted | 2026-11-23 |
+| [0098](0098-granitsy-dannyh.md) | /privacy — отчёт «куда уходят данные» | accepted | 2026-11-23 |

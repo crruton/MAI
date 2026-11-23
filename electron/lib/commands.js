@@ -31,6 +31,7 @@ export const BUILTIN_COMMANDS = [
   { name: 'commit', description: 'Закоммитить изменения: агент пишет сообщение, вы подтверждаете', argumentHint: '[уточнение]', overridable: true },
   { name: 'review', description: 'Ревью текущих изменений или PR', argumentHint: '[номер PR]', overridable: true },
   { name: 'security-review', description: 'Ревью безопасности: изменения или PR — уязвимости по важности', argumentHint: '[номер PR]', overridable: true },
+  { name: 'privacy', description: 'Куда уходят данные: модели, телеметрия, MCP, веб — и чек-лист «строго локально»' },
   { name: 'signoff', description: 'Тесты проходят → статус signoff на HEAD в GitHub; fail — отклонить', argumentHint: '[fail] [контекст]' },
   { name: 'pr', description: 'Создать pull request: ветка, push, описание по шаблону репозитория', argumentHint: '[уточнение]', overridable: true },
   { name: 'worktree', description: 'Чат в отдельной рабочей копии (git worktree): список или новая', argumentHint: '[имя]' },

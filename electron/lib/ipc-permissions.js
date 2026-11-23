@@ -174,6 +174,8 @@ export const IPC_PERMISSIONS = {
   'multica:pullStatuses': ADMIN,
   // Signoff: тесты и статус коммита в GitHub (N1).
   'signoff:run': ADMIN,
+  // Отчёт «куда уходят данные» (N2): только чтение.
+  'privacy:report': ANY,
 
   // Docker-песочницы
   'sandbox:status': ANY,
