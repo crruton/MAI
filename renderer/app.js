@@ -1862,6 +1862,29 @@ function prPrompt(args = '') {
 
 /* ---------- рабочие копии для чатов (CC11.5, ADR 0076) ---------- */
 
+/**
+ * /signoff [fail] [контекст] (N1, ADR 0097): тесты проекта → статус коммита в
+ * GitHub. Окно показывает шаги, вывод упавших тестов и итог.
+ */
+async function runSignoffCommand(text = '') {
+  const parts = text.split(/\s+/).filter(Boolean);
+  const fail = parts[0]?.toLowerCase() === 'fail';
+  const context = (fail ? parts[1] : parts[0]) || '';
+  const name = context ? `signoff/${context}` : 'signoff';
+  const steps = el('pre', { class: 'output signoff-log', text: fail ? `Отмечаю ${name} = failure…` : 'Проверяю git и запускаю тесты проекта…' });
+  const verdict = el('p', { class: 'hint-text signoff-verdict', text: 'Выполняется — тесты могут идти несколько минут.' });
+  const modal = openModal({
+    title: `Signoff · ${name}`,
+    body: [el('p', { class: 'hint-text', text: 'Тесты проекта проходят на вашей машине → статус коммита в GitHub на HEAD. Правила ветки не меняются.' }), verdict, steps],
+    footer: [el('button', { class: 'btn primary', type: 'button', text: 'Закрыть', onclick: () => modal.close() })],
+  });
+  const res = await api.signoff.run({ projectDir: state.projectDir, context, fail }).catch((err) => ({ ok: false, error: err.message, log: [] }));
+  steps.textContent = [...(res.log || []), ...(res.output ? ['', '— вывод тестов (конец) —', res.output] : [])].join('\n') || '—';
+  verdict.textContent = res.ok ? `✓ ${res.context} = ${res.state} на ${res.repo}@${String(res.sha).slice(0, 7)}` : `✗ ${res.error}`;
+  verdict.classList.toggle('err-text', !res.ok);
+  toast(res.ok ? `Signoff: ${res.context} = ${res.state}` : `Signoff: ${res.error}`, res.ok ? 'ok' : 'err');
+}
+
 async function openWorktrees(name = '') {
   if (name) {
     const r = await api.git.createWorktree(state.projectDir, name);
@@ -2024,6 +2047,10 @@ async function runSlash(text) {
     case 'worktree':
       clear();
       await openWorktrees(args.trim());
+      return;
+    case 'signoff':
+      clear();
+      await runSignoffCommand(args.trim());
       return;
     case 'memory':
       clear();

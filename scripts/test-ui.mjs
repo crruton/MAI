@@ -576,6 +576,14 @@ ipcMain.handle('voice:transcribe', (_e, payload) => {
   if (voiceSends.length === 1) throw new Error('MAS: HTTP 500');
   return { text: 'надиктованный текст', engine: 'mas', elapsedMs: 900 };
 });
+// Signoff (раздел [56], N1).
+const signoffCalls = [];
+ipcMain.handle('signoff:run', (_e, payload) => {
+  signoffCalls.push(payload);
+  return payload.fail
+    ? { ok: true, state: 'failure', context: 'signoff/lint', sha: 'abcdef1234', repo: 'acme/demo', log: ['HEAD abcdef1 (origin/dev)', 'Статус signoff/lint = failure'] }
+    : { ok: false, sha: 'abcdef1234', testsFailed: true, output: 'FAIL test-x.mjs', error: 'Тесты не прошли (код 1) — signoff не поставлен', log: ['HEAD abcdef1 (origin/dev)', 'Тесты: npm test'] };
+});
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
   projectDir: root,
@@ -2143,6 +2151,20 @@ app.whenReady().then(async () => {
     check('после входа — перезагрузка и обычное окно', loginCalls.length === 2 && !login2.screen && login2.input, JSON.stringify({ loginCalls: loginCalls.length, login2 }));
     corp.destroy();
     corporate = false;
+
+    console.log('\n[56] /signoff — тесты и статус коммита (N1, ADR 0097)');
+    const slashCmd = (text) => ui(`(() => { const i = document.querySelector('#input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await slashCmd('/signoff');
+    await wait(700);
+    const so1 = await ui(`({ title: document.querySelector('.modal-backdrop .modal h2, .modal-backdrop .modal-title')?.textContent || document.querySelector('.modal-backdrop')?.textContent.slice(0, 60), verdict: document.querySelector('.signoff-verdict')?.textContent || '', log: document.querySelector('.signoff-log')?.textContent || '' })`);
+    check('тесты упали — ✗ с причиной и вывод тестов', signoffCalls[0]?.fail === false && signoffCalls[0].context === '' && /✗ Тесты не прошли/.test(so1.verdict) && /FAIL test-x.mjs/.test(so1.log), JSON.stringify(so1));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await slashCmd('/signoff fail lint');
+    await wait(700);
+    const so2 = await ui(`document.querySelector('.signoff-verdict')?.textContent || ''`);
+    check('/signoff fail lint — failure на acme/demo', signoffCalls[1]?.fail === true && signoffCalls[1].context === 'lint' && /✓ signoff\/lint = failure на acme\/demo@abcdef1/.test(so2), `${JSON.stringify(signoffCalls[1])} ${so2}`);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`document.querySelector('#input').value = ''`);
 
     check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {

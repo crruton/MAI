@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets, secretBox } from './lib/config.js';
 import { titleBarOptions, windowColors, normalizeTheme } from './lib/window.js';
@@ -99,6 +99,8 @@ import { acquireProject } from './lib/project-lock.js';
 import { isCliInvocation, parseCliArgs, CLI_HELP, streamLine, resultObject } from './lib/cli.js';
 import { isSelfCheck, selfCheckOut, runSelfCheck } from './lib/self-check.js';
 import { applySystemCa } from './lib/system-ca.js';
+import { runSignoff } from './lib/signoff.js';
+import { spawnShell, killTree as killProcessTree } from './lib/proc.js';
 import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions, promptArgs, resolveResourceMentions } from './lib/commands.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
@@ -2801,6 +2803,58 @@ ipcMain.handle('skills:create', (_e, { projectDir, ...data }) => {
 ipcMain.handle('skills:delete', (_e, file) => {
   requireAdmin();
   return deleteSkill(file);
+});
+
+// ---------- Signoff (N1, ADR 0097) ----------
+
+/** Тесты проекта для signoff: оболочка из настроек, таймаут signoff.timeoutMin (20 мин). */
+function signoffExec(projectDir, command, settings) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    let output = '';
+    let child;
+    try {
+      child = spawnShell(command, { shell: settings.shell, cwd: projectDir, env: { ...process.env, FORCE_COLOR: '0', CI: '1' } });
+    } catch (err) {
+      resolve({ code: -1, output: err.message, ms: 0 });
+      return;
+    }
+    const push = (d) => {
+      output = `${output}${d}`.slice(-200_000);
+    };
+    child.stdout?.on('data', push);
+    child.stderr?.on('data', push);
+    const minutes = Math.max(1, Math.min(120, Number(settings.signoff?.timeoutMin) || 20));
+    const timer = setTimeout(() => {
+      push(`\n[таймаут ${minutes} мин — тесты остановлены]`);
+      killProcessTree(child);
+    }, minutes * 60_000);
+    child.on('error', (err) => push(`\n${err.message}`));
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? -1, output, ms: Date.now() - started });
+    });
+  });
+}
+
+ipcMain.handle('signoff:run', async (_e, payload = {}) => {
+  requireAdmin();
+  const projectDir = projectOf(payload);
+  const settings = loadSettings();
+  const git = (args) => {
+    const r = spawnSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true, timeout: 20_000 });
+    return { code: r.status ?? -1, stdout: r.stdout || '' };
+  };
+  const post = ({ owner, repo, sha, state, context, description, targetUrl }) => {
+    const args = ['api', '-X', 'POST', `repos/${owner}/${repo}/statuses/${sha}`, '-f', `state=${state}`, '-f', `context=${context}`, '-f', `description=${description}`];
+    if (targetUrl) args.push('-f', `target_url=${targetUrl}`);
+    const r = spawnSync('gh', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+    if (r.error) return { ok: false, error: /ENOENT/.test(r.error.message) ? 'нет GitHub CLI (gh) — установите и выполните gh auth login' : r.error.message };
+    return r.status === 0 ? { ok: true } : { ok: false, error: (r.stderr || r.stdout || `код ${r.status}`).trim().slice(0, 400) };
+  };
+  const result = await runSignoff({ projectDir, context: payload.context, fail: payload.fail === true, settings, git, exec: (command) => signoffExec(projectDir, command, settings), post });
+  audit({ at: new Date().toISOString(), tool: 'signoff', source: 'user', cls: 'external', subject: `${result.context || payload.context || 'signoff'} ${result.state || 'не поставлен'} ${String(result.sha || '').slice(0, 7)}`, decision: result.ok ? 'allow' : 'deny' });
+  return result;
 });
 
 // ---------- Multica ----------

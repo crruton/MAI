@@ -183,6 +183,8 @@ contextBridge.exposeInMainWorld('mai', {
     read: (relative) => invoke('docs:read', relative),
     search: (query) => invoke('docs:search', query),
   },
+  // Signoff (N1): тесты проекта и статус коммита в GitHub.
+  signoff: { run: (payload) => invoke('signoff:run', payload) },
   multica: {
     status: () => invoke('multica:status'),
     install: () => invoke('multica:install'),

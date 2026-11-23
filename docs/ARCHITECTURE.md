@@ -387,6 +387,13 @@ macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL чер�
 `runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
 «Система: …; оболочка run_shell: …».
 
+### Signoff
+
+ADR 0097. `signoff.js` — `statusContext`, `parseSignoffArgs`, `parseGithubRemote`,
+`testCommandFor`, `detailsUrl`, `gitState`, `runSignoff` (git, exec, post
+инъекцией). В main — IPC `signoff:run` (ADMIN): git через `spawnSync`, тесты —
+`spawnShell` с таймаутом, статус — `gh api`. В app.js — `runSignoffCommand`.
+
 ### Рантаймы: версия и перенос
 
 ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,

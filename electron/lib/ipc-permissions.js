@@ -172,6 +172,8 @@ export const IPC_PERMISSIONS = {
   'multica:syncDocs': ADMIN,
   // Статусы Multica → tasks.md (F14).
   'multica:pullStatuses': ADMIN,
+  // Signoff: тесты и статус коммита в GitHub (N1).
+  'signoff:run': ADMIN,
 
   // Docker-песочницы
   'sandbox:status': ANY,
