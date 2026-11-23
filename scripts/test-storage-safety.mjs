@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadBoards, saveBoards, saveBoardSection } from '../electron/lib/boards.js';
+import { applyDiagram, modelHash } from '../electron/lib/diagram-agent.js';
 import { writeArtifact, deleteArtifact, listArtifacts, gcBlobs, withIndexLock, artifactsRoot } from '../electron/lib/artifacts.js';
 
 let pass = 0;
@@ -76,6 +77,31 @@ const worker = () =>
 const [r1, r2] = await Promise.all([worker(), worker()]);
 check('оба процесса без ошибок', r1.code === 0 && r2.code === 0, r1.err + r2.err);
 check('ни одно обновление не потеряно (200)', JSON.parse(fs.readFileSync(counter, 'utf8')).n === 200, fs.readFileSync(counter, 'utf8'));
+
+console.log('[4] агент схем: изменения только по «Применить» (F10, ADR 0086)');
+{
+  const data = loadBoards(project);
+  const before = JSON.parse(JSON.stringify(data.architecture?.model || {}));
+  const base = modelHash(before);
+  const sectionKey = Object.keys(before).find((k) => typeof before[k] === 'object') || 'containers';
+  const proposal = { ...before, [sectionKey]: Array.isArray(before[sectionKey]) ? [...before[sectionKey], { id: 'redis', name: 'Redis' }] : { ...(before[sectionKey] || {}), redis: { name: 'Redis' } } };
+  const res = applyDiagram({ projectDir: project, proposal, baseHash: base });
+  check('применение с верным отпечатком — модель записана, схемы пересобраны', res.ok && JSON.stringify(loadBoards(project).architecture.model[sectionKey]).includes('Redis') && res.views?.views, JSON.stringify(Object.keys(res)));
+  let err = '';
+  try {
+    applyDiagram({ projectDir: project, proposal: before, baseHash: base });
+  } catch (e) {
+    err = e.message;
+  }
+  check('модель изменилась после предложения — отказ', /Модель изменилась/.test(err), err);
+  err = '';
+  try {
+    applyDiagram({ projectDir: project, proposal: { nope: 1 }, baseHash: modelHash(loadBoards(project).architecture.model) });
+  } catch (e) {
+    err = e.message;
+  }
+  check('пустая модель не применяется', /ни одного раздела/.test(err), err);
+}
 
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);

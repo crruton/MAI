@@ -312,6 +312,13 @@ ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый про�
 автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
 сообщения. IPC `hooks:list(projectDir)`.
 
+### Агент схем
+
+ADR 0086. `diagram-agent.js` — `editDiagram` возвращает `proposal`, `baseHash`
+(`modelHash`), `diff`; `applyDiagram` (IPC `boards:diagramApply`) проверяет
+отпечаток и модель и пишет `boards.json`. В board.js — `proposalBlock`,
+действия `diagram-apply`/`diagram-reject`.
+
 ### Рантаймы: версия и перенос
 
 ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,

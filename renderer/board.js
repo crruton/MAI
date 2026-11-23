@@ -587,6 +587,21 @@ function onClick(event) {
     'save-view': () => saveView(),
     'export-view': () => exportView(),
     'diagram-agent-send': () => sendDiagramAgent(),
+    'diagram-apply': async () => {
+      const item = (state.diagramChat[state.openView] || [])[Number(target.dataset.index)];
+      if (!item?.proposal || item.proposal.status !== 'pending') return;
+      const res = await api.boards.diagramApply({ projectDir: state.projectDir, proposal: item.proposal.model, baseHash: item.proposal.baseHash });
+      if (!res?.ok) return toast(`Не применено: ${res?.error || 'ошибка'}`, 'err');
+      item.proposal.status = 'applied';
+      state.viewsData = res.views;
+      render();
+      toast('Схема обновлена', 'ok');
+    },
+    'diagram-reject': () => {
+      const item = (state.diagramChat[state.openView] || [])[Number(target.dataset.index)];
+      if (item?.proposal) item.proposal.status = 'rejected';
+      render();
+    },
     'diagram-agent-clear': () => {
       delete state.diagramChat[state.openView];
       render();
@@ -1042,14 +1057,28 @@ function architectureDiagrams() {
     </div>`;
 }
 
+/** Предложение агента схем (F10): diff модели и «Применить» / «Отклонить». */
+function proposalBlock(p, index) {
+  const lines = (p.diff?.lines || [])
+    .map((l) => `<div class="diff-line diff-${l.type === '+' ? 'add' : l.type === '-' ? 'del' : l.type === '@' ? 'hunk' : 'ctx'}">${esc(`${l.type === '@' ? '' : l.type} ${l.text}`)}</div>`)
+    .join('');
+  const status = p.status === 'applied' ? '<span class="badge ok">применено</span>' : p.status === 'rejected' ? '<span class="badge">отклонено</span>' : '';
+  return `<div class="diagram-proposal">
+    <div class="hint">Изменения модели: +${p.diff?.added || 0} −${p.diff?.removed || 0}${p.diff?.truncated ? ' (показана часть)' : ''} ${status}</div>
+    <div class="diff-box">${lines}</div>
+    ${p.status === 'pending' ? `<div class="row"><button class="btn primary" data-act="diagram-apply" data-index="${index}">Применить</button><button class="btn ghost" data-act="diagram-reject" data-index="${index}">Отклонить</button></div>` : ''}
+  </div>`;
+}
+
 function diagramAgentPanel(view) {
   const history = state.diagramChat[state.openView] || [];
   const messages = history.length
     ? history
         .map(
-          (item) => `<div class="agent-msg ${item.role === 'user' ? 'user' : 'assistant'}">
+          (item, i) => `<div class="agent-msg ${item.role === 'user' ? 'user' : 'assistant'}">
             <div class="agent-role">${item.role === 'user' ? 'Вы' : 'Агент схем'}</div>
             <div class="agent-text">${esc(item.content)}</div>
+            ${item.proposal ? proposalBlock(item.proposal, i) : ''}
           </div>`,
         )
         .join('')
@@ -1245,11 +1274,11 @@ async function sendDiagramAgent() {
       model: state.settings?.activeModel,
     });
     if (!res.ok) throw new Error(res.error || 'Агент не ответил');
-    state.diagramChat[view].push({ role: 'assistant', content: res.reply || 'Готово' });
-    state.viewsData = res.views;
+    // F10: предложение с diff — модель меняется только по «Применить».
+    state.diagramChat[view].push({ role: 'assistant', content: res.reply || 'Готово', proposal: res.changed ? { model: res.proposal, baseHash: res.baseHash, diff: res.diff, status: 'pending' } : null });
     state.diagramBusy = false;
     render();
-    toast('Схема обновлена', 'ok');
+    if (!res.changed) toast('Агент не предложил изменений', 'ok');
   } catch (err) {
     state.diagramChat[view].push({ role: 'assistant', content: `Ошибка: ${err.message}` });
     state.diagramBusy = false;

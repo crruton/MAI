@@ -76,7 +76,7 @@ import { checkCommand, redactSecrets } from './lib/guardrails.js';
 import { emitLog, emitSpan, telemetryStatus } from './lib/telemetry.js';
 import * as infra from './lib/infra.js';
 import * as repowise from './lib/repowise.js';
-import { editDiagram } from './lib/diagram-agent.js';
+import { editDiagram, applyDiagram } from './lib/diagram-agent.js';
 import { createWorkspace, listWorkspaces, sandboxRoot } from './lib/workspace.js';
 import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin } from './lib/auth.js';
 import { listDocs, readDoc, searchDocs } from './lib/docs.js';
@@ -3482,6 +3482,16 @@ ipcMain.handle('boards:diagramChat', async (_e, payload) => {
       message: String(payload.message || ''),
       history: Array.isArray(payload.history) ? payload.history : [],
     });
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+/** Применить предложение агента схем (F10, ADR 0086). Только admin. */
+ipcMain.handle('boards:diagramApply', (_e, payload = {}) => {
+  requireAdmin();
+  try {
+    return applyDiagram({ projectDir: projectOf(payload), proposal: payload.proposal, baseHash: String(payload.baseHash || '') });
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }

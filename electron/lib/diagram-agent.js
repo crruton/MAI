@@ -1,5 +1,10 @@
 import OpenAI from 'openai';
+import crypto from 'node:crypto';
 import { loadBoards, saveBoards, generateViews } from './boards.js';
+import { unifiedDiff } from './diff.js';
+
+/** Отпечаток модели: применение отказывает, если модель изменилась после предложения (F10). */
+export const modelHash = (model) => crypto.createHash('sha256').update(JSON.stringify(model || {})).digest('hex').slice(0, 16);
 
 /**
  * Отдельный агент для архитектурных схем.
@@ -155,13 +160,27 @@ export async function editDiagram({ provider, model, settings, projectDir, view,
     ? mergeChanges(current, parsed.changes)
     : validateModel(parsed.model || parsed);
 
-  data.architecture.model = next;
-  saveBoards(projectDir, data);
-
+  // F10 (ADR 0086): не пишем сразу — возвращаем предложение и diff; запись — applyDiagram.
+  const diff = unifiedDiff(`${JSON.stringify(current, null, 2)}\n`, `${JSON.stringify(next, null, 2)}\n`, { maxLines: 400 });
   return {
     ok: true,
     reply,
-    model: next,
-    views: generateViews(projectDir, ''),
+    proposal: next,
+    baseHash: modelHash(current),
+    diff: { added: diff.added, removed: diff.removed, truncated: diff.truncated, lines: diff.lines },
+    changed: diff.added + diff.removed > 0,
   };
+}
+
+/**
+ * Применить предложение агента схем (F10): модель проверяется заново, а если
+ * её успели поменять (другое окно, ручная правка) — отказ, нужно спросить снова.
+ */
+export function applyDiagram({ projectDir, proposal, baseHash }) {
+  const data = loadBoards(projectDir);
+  const current = data.architecture?.model || {};
+  if (baseHash && modelHash(current) !== baseHash) throw new Error('Модель изменилась после предложения — попросите агента ещё раз');
+  data.architecture.model = validateModel(proposal);
+  saveBoards(projectDir, data);
+  return { ok: true, model: data.architecture.model, views: generateViews(projectDir, '') };
 }

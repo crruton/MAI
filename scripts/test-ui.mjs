@@ -516,6 +516,14 @@ ipcMain.handle('app:clipboard', (_e, text) => {
   clipboardCalls.push(text);
   return true;
 });
+// Агент схем: предложение и «Применить» (раздел [48], F10).
+const diagramApplies = [];
+ipcMain.handle('boards:views', () => ({ views: Object.fromEntries(['c1', 'c2', 'c3', 'c4', 'sequence', 'er', 'deployment', 'openapi'].map((k) => [k, { title: k.toUpperCase(), mermaid: 'graph TD; A-->B', puml: '' }])), drift: {} }));
+ipcMain.handle('boards:diagramChat', () => ({ ok: true, reply: 'Добавил Redis между API и Postgres', changed: true, proposal: { containers: [{ id: 'redis' }] }, baseHash: 'h1', diff: { added: 1, removed: 0, truncated: false, lines: [{ type: '@', text: '@@ строка 3 @@' }, { type: '+', text: '  { "id": "redis" }' }] } }));
+ipcMain.handle('boards:diagramApply', (_e, payload) => {
+  diagramApplies.push(payload);
+  return { ok: true, views: { views: {}, drift: {} } };
+});
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
   projectDir: root,
@@ -1964,6 +1972,21 @@ app.whenReady().then(async () => {
     await wait(600);
     check('«Создать и открыть» — новая копия, чат в ней', wtCalls.some((c) => c.type === 'create' && c.name === 'new task'), JSON.stringify(wtCalls));
     await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; })()`);
+
+    console.log('\n[48] Агент схем: diff и «Применить» (F10, ADR 0086)');
+    const arch = new BrowserWindow({ show: false, width: 1300, height: 900, webPreferences: { preload: path.join(root, 'electron', 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    await arch.loadFile(path.join(root, 'renderer', 'board.html'), { query: { board: 'architecture' } });
+    await wait(1500);
+    const archUi = (code) => arch.webContents.executeJavaScript(code);
+    await archUi(`(() => { const i = document.querySelector('#diagram-agent-input'); i.value = 'добавь Redis'; document.querySelector('[data-act=diagram-agent-send]').click(); })()`);
+    await wait(600);
+    const prop = await archUi(`(() => { const p = document.querySelector('.diagram-proposal'); return p ? { text: p.textContent, add: Boolean(p.querySelector('.diff-add')), apply: Boolean(p.querySelector('[data-act=diagram-apply]')) } : null; })()`);
+    check('ответ агента — предложение с diff и кнопками, модель не тронута', prop && /\+1 −0/.test(prop.text) && prop.add && prop.apply && diagramApplies.length === 0, JSON.stringify(prop));
+    await archUi(`document.querySelector('[data-act=diagram-apply]').click()`);
+    await wait(500);
+    const archAfter = await archUi(`document.querySelector('.diagram-proposal')?.textContent || ''`);
+    check('«Применить» — запись с отпечатком базы, статус «применено»', diagramApplies.length === 1 && diagramApplies[0].baseHash === 'h1' && /redis/.test(JSON.stringify(diagramApplies[0].proposal)) && /применено/.test(archAfter) && !(await archUi(`Boolean(document.querySelector('[data-act=diagram-apply]'))`)), JSON.stringify(diagramApplies));
+    arch.destroy();
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

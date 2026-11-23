@@ -101,3 +101,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0083](0083-pdf-obedinenie-i-formy.md) | PDF: объединение, выборка страниц и формы (pdf-lib) | accepted | 2026-11-23 |
 | [0084](0084-zapomnit-i-ocr-instrument.md) | «Запомнить?» после прогона и инструмент ocr | accepted | 2026-11-23 |
 | [0085](0085-runtimes-versiya-i-perenos.md) | Рантаймы: версия CLI и перенос пресетов | accepted | 2026-11-23 |
+| [0086](0086-agent-shem-predlozhenie.md) | Агент схем: предложение с diff и «Применить» | accepted | 2026-11-23 |

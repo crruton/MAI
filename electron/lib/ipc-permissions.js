@@ -56,6 +56,8 @@ export const IPC_PERMISSIONS = {
   // Экспорт и импорт рантаймов (F7).
   'runtimes:export': ANY,
   'runtimes:import': ADMIN,
+  // Агент схем: применение предложения (F10).
+  'boards:diagramApply': ADMIN,
   'runtimes:runMany': ADMIN,
   'runtimes:stop': ANY,
 
