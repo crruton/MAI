@@ -3013,6 +3013,26 @@ async function openPackages() {
 
 /* ---------- быстрая запись в память (CC4.3) ---------- */
 
+/** Плашка «Запомнить?» (F4): урок от модели — в память проекта, глобальную или нет. */
+function showMemorySuggest(text) {
+  document.querySelector('.memory-suggest')?.remove();
+  const bar = el('div', { class: 'memory-suggest', role: 'status' });
+  const save = async (scope) => {
+    const result = await api.memory.append({ projectDir: state.projectDir, scope, text });
+    bar.remove();
+    if (result?.ok === false) toast(result.error || 'Не удалось записать в память', 'err');
+    else toast(result?.changed === false ? 'Это уже есть в памяти' : `Записано в ${scope === 'global' ? 'глобальную память' : 'память проекта'}`, 'ok');
+  };
+  bar.append(
+    el('span', { class: 'memory-suggest-text', text: `💡 Запомнить: «${text}»?` }),
+    el('button', { class: 'btn small primary memory-suggest-project', type: 'button', text: 'В проект', onclick: () => save('project') }),
+    el('button', { class: 'btn small ghost memory-suggest-global', type: 'button', text: 'Глобально', onclick: () => save('global') }),
+    el('button', { class: 'btn small ghost memory-suggest-no', type: 'button', text: 'Нет', onclick: () => bar.remove() }),
+  );
+  const composer = document.querySelector('.composer') || document.querySelector('#input')?.parentElement;
+  composer?.parentElement?.insertBefore(bar, composer);
+}
+
 function rememberLine(text) {
   const save = async (scope) => {
     modal.close();
@@ -3954,6 +3974,10 @@ function handleEvent(event) {
         toast(`Субагент «${event.task?.description}» работает в фоне (${event.task?.id})`);
       }
       break;
+    case 'memory:suggest':
+      // «Запомнить?» (F4): плашка над полем ввода, без модального окна.
+      if (event.sessionId === state.sessionId) showMemorySuggest(event.text);
+      break;
     case 'title':
       // Автозаголовок от модели (CC6.8).
       refreshSessions();
@@ -4256,6 +4280,9 @@ async function openSettings() {
   // Старая настройка с одним webhook — каналом, чтобы её было видно и можно удалить.
   if (nset.webhookSet && !(nset.channels || []).some((c) => c.id === 'legacy')) addChannel({ id: 'legacy', type: 'webhook', url: '***', kinds: nset.webhook });
   const checked = (boxes) => boxes.map((l) => l.querySelector('input')).filter((b) => b.checked).map((b) => b.dataset.kind);
+  // «Запомнить?» после прогона (F4).
+  const suggestMem = el('input', { type: 'checkbox', class: 'suggest-memory' });
+  suggestMem.checked = settings.suggestMemory !== false;
   // Инструкции других агентов (CC4.6).
   const compat = el('input', { type: 'checkbox', class: 'compat-instructions' });
   compat.checked = settings.compatInstructions !== false;
@@ -4422,6 +4449,7 @@ async function openSettings() {
       el('label', { class: 'field' }, [
         el('span', { text: 'Инструкции других агентов' }),
         el('label', { class: 'hint-text' }, [compat, ' читать также CLAUDE.md, GEMINI.md, правила Cursor и Copilot (повторы AGENTS.md пропускаются)']),
+        el('label', { class: 'hint-text' }, [suggestMem, ' после работы с правками предлагать «Запомнить?» урок в память (один короткий запрос к модели)']),
       ]),
       el('label', { class: 'field' }, [
         el('span', { text: 'Чаты' }),
@@ -4538,6 +4566,7 @@ async function openSettings() {
             browserEnabled: browserEnabled.checked,
             autoTitle: autoTitle.checked,
             compatInstructions: compat.checked,
+            suggestMemory: suggestMem.checked,
             notifications: { enabled: notifyOn.checked, desktop: checked(desktopKinds), channels: channelRows.map((r) => r.value()), webhookUrl: '', webhook: [] },
             theme: theme.value,
             statusLine: STATUS_ITEMS.map(([key]) => key).filter((key) => statusBoxes.some((l) => l.querySelector(`[data-item=${key}]`)?.checked)),

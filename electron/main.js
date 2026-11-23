@@ -11,7 +11,7 @@ import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
 import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, setSessionRun, markInterrupted, addSessionRules, removeSessionRules, renameSession, forkSession, importSession, expiredSessions } from './lib/sessions.js';
-import { runAgent, compactSession, describeContext, suggestTitle } from './lib/agent.js';
+import { runAgent, compactSession, describeContext, suggestTitle, suggestLesson } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
 import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
@@ -1566,9 +1566,12 @@ ipcMain.handle('chat:start', async (event, payload) => {
     .map((p) => (adopted ? p.split(adopted.from).join(adopted.to) : p))
     .filter((p) => isImageFile(p))
     .slice(0, 20);
+  // Начало этого прогона в истории — для «Запомнить?» (F4).
+  let runStart = session.messages.length;
   if (payload.text) {
     const display = payload.displayText || payload.text;
     session.messages.push({ role: 'user', content: payload.text, display, ...(images.length ? { images } : {}) });
+    runStart = session.messages.length - 1;
     if (!session.title || session.title === 'Новый чат') {
       session.title = display.trim().slice(0, 60) || 'Новый чат';
     }
@@ -1648,6 +1651,23 @@ ipcMain.handle('chat:start', async (event, payload) => {
       {
         const answer = [...history].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
         notify('done', { title: `Готово: ${chatTitle(session.id)}`, body: String(answer).slice(0, 200), sessionId: session.id }).catch(() => {});
+      }
+      // «Запомнить?» (F4): прогон с правками — модель предлагает урок для памяти проекта.
+      {
+        const fresh = history.slice(runStart);
+        const edits = fresh.filter((m) => m.role === 'assistant' && m.tool_calls?.length).flatMap((m) => m.tool_calls).filter((c) => ['write', 'delete'].includes(classifyTool(c.function?.name)));
+        if (settings.suggestMemory !== false && edits.length && trusted) {
+          const actions = fresh
+            .filter((m) => m.role === 'assistant' && m.tool_calls?.length)
+            .flatMap((m) => m.tool_calls.map((c) => `${c.function?.name} ${String(c.function?.arguments || '').slice(0, 160)}`))
+            .join('\n');
+          const answer = [...fresh].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+          suggestLesson({ provider: resolved.provider, model: resolved.modelId, request: payload.displayText || payload.text, actions, answer })
+            .then((text) => {
+              if (text) send(window, { type: 'memory:suggest', sessionId: session.id, text });
+            })
+            .catch(() => {});
+        }
       }
       // Автозаголовок (CC6.8): после первого ответа, если чат не назван вручную.
       const users = history.filter((m) => m.role === 'user');

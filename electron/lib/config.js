@@ -25,6 +25,8 @@ const DEFAULTS = {
   autoDiagnostics: false,
   // Инструкции других агентов (CC4.6): CLAUDE.md, GEMINI.md, правила Cursor и Copilot.
   compatInstructions: true,
+  // «Запомнить?» после прогона с правками (F4): модель предлагает урок для памяти.
+  suggestMemory: true,
   // Уведомления (CW5.4): на рабочем столе и в мессенджер через webhook.
   notifications: { enabled: true, desktop: ['done', 'approval', 'question', 'error', 'background', 'scheduled'], channels: [] },
   // Отложенные инструменты (CC1.12): больше стольких MCP/плагинов — схемы по запросу (0 — никогда).

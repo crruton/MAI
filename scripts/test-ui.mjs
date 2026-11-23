@@ -1937,6 +1937,20 @@ app.whenReady().then(async () => {
     const labels = await ui(`['settings-btn', 'attach', 'send', 'stop'].every((id) => document.getElementById(id)?.getAttribute('aria-label'))`);
     check('кнопки-значки подписаны для читалок экрана', labels === true);
 
+    console.log('\n[47] «Запомнить?» после прогона (F4, ADR 0084)');
+    const curSession = await ui(`document.querySelector('.session.active')?.textContent ? 'test-session' : ''`);
+    win.webContents.send('chat:event', { type: 'memory:suggest', sessionId: 'test-session', text: 'Тесты запускай через npm test -- --watch=false' });
+    await wait(300);
+    const memBar = await ui(`document.querySelector('.memory-suggest')?.textContent || ''`);
+    check('плашка «Запомнить?» с уроком и тремя кнопками', /Запомнить: «Тесты запускай через npm test/.test(memBar) && /В проект/.test(memBar) && /Глобально/.test(memBar) && /Нет/.test(memBar), `${curSession} ${memBar}`);
+    const before = memoryAppends.length;
+    await ui(`document.querySelector('.memory-suggest-project').click()`);
+    await wait(300);
+    check('«В проект» — в память проекта, плашка уходит', memoryAppends.length === before + 1 && memoryAppends.at(-1).scope === 'project' && /npm test/.test(memoryAppends.at(-1).text) && (await ui(`!document.querySelector('.memory-suggest')`)), JSON.stringify(memoryAppends.at(-1)));
+    win.webContents.send('chat:event', { type: 'memory:suggest', sessionId: 'другой-чат', text: 'x' });
+    await wait(200);
+    check('урок чужого чата не показывается', await ui(`!document.querySelector('.memory-suggest')`));
+
     console.log('\n[46] Git: /pr, /security-review, /worktree (ADR 0076)');
     const sec = await slash('/security-review 7');
     check('/security-review 7: gh pr diff, только чтение, путь атаки и уверенность', /gh pr diff 7/.test(sec?.text) && /файлы не меняй/.test(sec?.text) && /путь атаки/.test(sec?.text) && /уверенность/.test(sec?.text), sec?.text?.slice(0, 200));

@@ -38,6 +38,7 @@ const BUILTIN = {
   pdf_merge: 'write',
   pdf_form: 'write',
   pdf_fields: 'read',
+  ocr: 'read',
   browser_open: 'network',
   browser_read: 'read',
   browser_screenshot: 'read',

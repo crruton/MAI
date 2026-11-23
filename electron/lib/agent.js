@@ -21,6 +21,8 @@ import { browserTools } from './tools/browser.js';
 import { notebookTools } from './tools/notebook.js';
 import { diagnosticsTools } from './tools/diagnostics.js';
 import { pdfTools } from './tools/pdf.js';
+import { ocrTools } from './tools/ocr.js';
+import { ocrImage } from './ocr.js';
 import { runDiagnostics, formatDiagnostics } from './diagnostics.js';
 import { splitTools, deferredPrompt, searchTools, TOOL_SEARCH_SCHEMA } from './tool-search.js';
 import { webTools } from './tools/web.js';
@@ -266,6 +268,34 @@ export async function suggestTitle({ provider, model, request, answer = '', sign
   return cleanTitle(await completeOnce(client, model, prompt, signal));
 }
 
+/** Ответ модели → строка урока или '' («НЕТ», пусто, слишком длинно). */
+export function cleanLesson(raw) {
+  const line = String(raw || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '';
+  const text = line
+    .replace(/^(урок|вывод|правило)\s*:\s*/i, '')
+    .replace(/^[-*•«"'\s]+/, '')
+    .replace(/[»"']+(?=[.!]?\s*$)/, '')
+    .replace(/[\s"']+$/, '')
+    .trim();
+  // \b в JS не работает с кириллицей — граница слова вручную.
+  if (!text || /^(нет|no|none)(?![a-zа-яё])/i.test(text) || /^—$/.test(text) || text.length > 240) return '';
+  return text;
+}
+
+/**
+ * «Запомнить?» (F4, ADR 0084): после работы с правками — есть ли устойчивый
+ * урок для памяти проекта. Одна строка или ''.
+ */
+export async function suggestLesson({ provider, model, request, actions = '', answer = '', signal, clientFactory = null }) {
+  const client = (clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider, { maxRetries: 1 }));
+  const prompt =
+    'Ты помогаешь вести память проекта (memory.md): короткие проверенные уроки, которые пригодятся в следующих задачах — правило проекта, рабочая команда, ' +
+    'неочевидное решение, ловушка. Не записывай то, что видно из кода, и детали одной задачи.\n' +
+    'Если в работе ниже есть такой урок — ответь одной строкой до 200 символов в повелительном наклонении. Если нет — ответь «НЕТ».\n\n' +
+    `Задача: ${String(request || '').slice(0, 1500)}\n\nДействия агента:\n${String(actions || '').slice(0, 2500)}\n\nИтог: ${String(answer || '').slice(0, 1200)}`;
+  return cleanLesson(await completeOnce(client, model, prompt, signal));
+}
+
 /** Разбор контекста для /context: системный промпт и инструменты как у агента. */
 export function describeContext({ settings, projectDir, mode, trusted = true, mcp, history = [], window = DEFAULT_CONTEXT, skillDirs = [], kind = 'code' }) {
   const skills = uniqueSkills(listSkills(projectDir, { includeProject: trusted, extraDirs: skillDirs }));
@@ -482,7 +512,7 @@ async function runAgentInner({
     getTaint: () => taint,
   };
 
-  const builtin = [...fsTools, ...notebookTools, ...diagnosticsTools, ...documentTools, ...pdfTools, ...shellTools, ...backgroundTools, ...(settings.webTools === false ? [] : webTools), ...(settings.browser ? browserTools : []), ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
+  const builtin = [...fsTools, ...notebookTools, ...diagnosticsTools, ...documentTools, ...pdfTools, ...ocrTools, ...shellTools, ...backgroundTools, ...(settings.webTools === false ? [] : webTools), ...(settings.browser ? browserTools : []), ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
     toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview, assess: t.assess }),
   );
   const builtinNames = new Set(builtin.map((t) => t.name));
@@ -1177,6 +1207,8 @@ async function runAgentInner({
       renderPdf: settings.renderPdf,
       renderPng: settings.renderPng,
       browser: settings.browser || null,
+      // OCR (F19): тот же движок, что у кнопки вложения; настройки — из приложения.
+      ocr: settings.ocr?.enabled === false ? null : (filePath, opts = {}) => ocrImage({ filePath, ...opts, settings }),
       previewDir: settings.previewDir,
       // Защищённые ветки (CC11.6): по умолчанию main и master.
       protectedBranches: Array.isArray(settings.protectedBranches) ? settings.protectedBranches : undefined,

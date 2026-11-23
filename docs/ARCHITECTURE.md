@@ -312,6 +312,13 @@ ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый про�
 автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
 сообщения. IPC `hooks:list(projectDir)`.
 
+### «Запомнить?» и ocr
+
+ADR 0084. `suggestLesson`/`cleanLesson` в agent.js; main после прогона с
+правками (`runStart`, класс write/delete) шлёт `memory:suggest`, renderer —
+`showMemorySuggest` (плашка, `memory:append`). `tools/ocr.js` — инструмент
+`ocr`, `ctx.ocr` = `ocrImage` с настройками из `runAgent`.
+
 ### Уведомления
 
 ADR 0081. `notify.js` — `notifySettings` (каналы + перенос старого

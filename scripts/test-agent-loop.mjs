@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { runAgent, trimMessages, toApiMessage, compactSession, suggestTitle } from '../electron/lib/agent.js';
+import { runAgent, trimMessages, toApiMessage, compactSession, suggestTitle, suggestLesson, cleanLesson } from '../electron/lib/agent.js';
 import { loadPlugins } from '../electron/lib/plugins.js';
 import { createRecorder, rewindFiles, rewindPlan } from '../electron/lib/checkpoints.js';
 import { createHookRunner, normalizeHooks } from '../electron/lib/hooks.js';
@@ -1470,6 +1470,16 @@ console.log('\n[28] Проект: инструкции в промпте и то
   });
   const h = await runAgent(base({ model: 'claude-x', messages: [{ role: 'user', content: 'привет' }], mcp: fakeMcp(), emit: (e) => e.type === 'notice' && notices.push(e.text), clientFactory: strict, policy: { getMode: () => 'manual', getRules: () => ({}) } }));
   check('шлюз отверг метки — повтор без них, уведомление', sent.length === 2 && typeof sent[1].messages[0].content === 'string' && h.at(-1)?.content === 'ок' && notices.some((t) => /метки кэша/.test(t)), JSON.stringify(notices));
+}
+
+{
+  console.log('\n[36] «Запомнить?» после прогона (F4, ADR 0084)');
+  check('чистка урока: «НЕТ», пусто и длинное — отбрасываются', cleanLesson('НЕТ') === '' && cleanLesson('нет, урока нет') === '' && cleanLesson('') === '' && cleanLesson('x'.repeat(300)) === '' && cleanLesson('Урок: «Сборку запускай npm run build:win».\nещё') === 'Сборку запускай npm run build:win.');
+  const seen = [];
+  const factory = (reply) => () => ({ chat: { completions: { create: async (body) => { seen.push(body); return { choices: [{ message: { content: reply } }] }; } } } });
+  const lesson = await suggestLesson({ provider: { apiKey: 'k', baseURL: 'http://x' }, model: 'm', request: 'почини сборку', actions: 'edit_file {"path":"build.js"}', answer: 'готово', clientFactory: factory('Перед сборкой чисти dist/') });
+  check('suggestLesson: задача, действия и итог в запросе, ответ — строка урока', lesson === 'Перед сборкой чисти dist/' && /почини сборку/.test(seen[0].messages[0].content) && /edit_file/.test(seen[0].messages[0].content) && /НЕТ/.test(seen[0].messages[0].content), lesson);
+  check('нет урока — пусто', (await suggestLesson({ provider: { apiKey: 'k', baseURL: 'http://x' }, model: 'm', request: 'x', clientFactory: factory('НЕТ') })) === '');
 }
 
 fs.rmSync(project, { recursive: true, force: true });

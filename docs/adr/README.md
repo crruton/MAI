@@ -99,3 +99,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0081](0081-uvedomleniya.md) | Уведомления на рабочем столе и в мессенджеры (Telegram, MAX, WhatsApp, Rocket.Chat, webhook) | accepted | 2026-11-23 |
 | [0082](0082-nabor-scenariev-eval.md) | Набор сценариев (eval) по профилям агента | accepted | 2026-11-23 |
 | [0083](0083-pdf-obedinenie-i-formy.md) | PDF: объединение, выборка страниц и формы (pdf-lib) | accepted | 2026-11-23 |
+| [0084](0084-zapomnit-i-ocr-instrument.md) | «Запомнить?» после прогона и инструмент ocr | accepted | 2026-11-23 |

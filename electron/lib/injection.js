@@ -11,7 +11,7 @@
  */
 
 /** Инструменты, чей результат — чужой текст. MCP — все, кроме диалоговых. */
-const DATA_TOOLS = new Set(['read_file', 'read_document', 'grep', 'glob', 'list_files', 'web_fetch', 'web_search', 'browser_open', 'browser_read', 'browser_click', 'browser_type']);
+const DATA_TOOLS = new Set(['read_file', 'read_document', 'grep', 'glob', 'list_files', 'web_fetch', 'web_search', 'browser_open', 'browser_read', 'browser_click', 'browser_type', 'ocr']);
 
 export function isDataTool(name) {
   const n = String(name || '');
