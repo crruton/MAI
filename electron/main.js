@@ -79,6 +79,8 @@ import { emitLog, emitSpan, telemetryStatus } from './lib/telemetry.js';
 import * as infra from './lib/infra.js';
 import * as repowise from './lib/repowise.js';
 import { editDiagram, applyDiagram } from './lib/diagram-agent.js';
+import { buildContext as calibrationContext, calibrate, renderMarkdown as calibrationMarkdown } from './lib/calibrator.js';
+import { listChanges as openspecChanges } from './lib/openspec.js';
 import { createWorkspace, listWorkspaces, sandboxRoot } from './lib/workspace.js';
 import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin } from './lib/auth.js';
 import { listDocs, readDoc, searchDocs } from './lib/docs.js';
@@ -3491,6 +3493,82 @@ ipcMain.handle('boards:diagramChat', async (_e, payload) => {
     });
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+/** Вход калибратора (F15): PRD, модель и C1–C3, ADR (доска и docs/adr), OpenSpec. */
+function gatherCalibration(projectDir) {
+  const readSafe = (file, n = 20_000) => {
+    try {
+      return fs.readFileSync(file, 'utf8').slice(0, n);
+    } catch {
+      return '';
+    }
+  };
+  const data = loadBoards(projectDir);
+  const { views } = generateViews(projectDir, '');
+  const adrs = (data.architecture?.adrs || []).map((a) => {
+    let content = '';
+    try {
+      content = a.artifactId ? readArtifact(projectDir, a.artifactId)?.content || '' : '';
+    } catch {
+      /* артефакт удалён */
+    }
+    return { title: a.title, status: a.status, content };
+  });
+  const adrDir = path.join(projectDir, 'docs', 'adr');
+  try {
+    for (const name of fs.readdirSync(adrDir).filter((n) => /^\d{3,4}-.*\.md$/.test(n)).sort().slice(-40)) {
+      const text = readSafe(path.join(adrDir, name), 4000);
+      adrs.push({ title: /^#\s+(.+)$/m.exec(text)?.[1] || name, status: /Статус:\*{0,2}\s*([^\s,]+)/i.exec(text)?.[1] || '', content: text });
+    }
+  } catch {
+    /* нет docs/adr */
+  }
+  const openspec = openspecChanges(projectDir).map((c) => ({ name: c.name, title: c.title, summary: c.summary, open: c.tasks.filter((t) => !t.done).map((t) => t.text) }));
+  return calibrationContext({ prd: readSafe(path.join(projectDir, 'docs', 'PRD.md')) || readSafe(path.join(projectDir, 'PRD.md')), model: data.architecture?.model || {}, views, adrs, openspec });
+}
+
+const CALIBRATION_ID = 'calibration:architecture';
+
+/** Калибровка архитектуры и PRD (F15, ADR 0090): отчёт → артефакт note с версиями. */
+ipcMain.handle('boards:calibrate', async (_e, payload = {}) => {
+  requireAdmin();
+  const log = [];
+  const settings = loadSettings();
+  try {
+    const resolved = resolveModel(settings, payload.model || settings.activeModel);
+    const projectDir = projectOf(payload);
+    const context = gatherCalibration(projectDir);
+    log.push(`Контекст собран: ${context.length} симв.`);
+    let prev = null;
+    try {
+      prev = readArtifact(projectDir, CALIBRATION_ID);
+    } catch {
+      /* первый запуск */
+    }
+    const result = await calibrate({
+      provider: resolved.provider,
+      model: resolved.modelId,
+      context,
+      prev: prev?.meta?.report || null,
+      prevBaseline: prev?.meta?.baseline || '',
+      onLog: (line) => log.push(line),
+    });
+    const at = new Date().toISOString();
+    const artifact = writeArtifact(projectDir, {
+      id: CALIBRATION_ID,
+      kind: 'note',
+      name: 'Калибровка архитектуры',
+      title: 'Калибровка архитектуры и PRD',
+      content: calibrationMarkdown(result.report, { at, model: resolved.modelId, baseline: result.baseline }),
+      meta: { report: result.report, baseline: result.baseline, model: resolved.modelId, at },
+      note: result.diff ? `калибровка: +${result.diff.added.length} −${result.diff.resolved.length}` : 'первая калибровка',
+    });
+    log.push(`Сохранено: ${CALIBRATION_ID} v${artifact.current}`);
+    return { ok: true, ...result, at, artifact: { id: artifact.id, current: artifact.current }, log };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err), log };
   }
 });
 

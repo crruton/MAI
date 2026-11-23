@@ -549,6 +549,14 @@ ipcMain.handle('multica:pullStatuses', (_e, projectDir) => {
   multicaPulls.push(projectDir);
   return { ok: true, marked: ['auth: Вход (MAI-1)'], already: [], missing: [], cancelled: ['auth:roles (MAI-3)'], message: 'Multica → OpenSpec: отмечено 1, уже отмечено 0, отменено в Multica 1' };
 });
+// Калибратор (раздел [52], F15).
+let calibrateRuns = 0;
+ipcMain.handle('artifacts:get', () => ({ id: 'calibration:architecture', current: 1, meta: { report: { summary: 'Прошлый отчёт', findings: [{ type: 'gap', severity: 'high', title: 'Нет SSO', detail: '', refs: ['PRD'], suggestion: '' }] }, at: '2026-11-22T10:00:00Z' } }));
+ipcMain.handle('boards:calibrate', () => {
+  calibrateRuns += 1;
+  if (calibrateRuns === 1) return { ok: false, error: 'Калибратор не ответил за 180 с', log: ['Контекст собран: 1200 симв.'] };
+  return { ok: true, at: '2026-11-23T10:00:00Z', report: { summary: 'Две находки', findings: [{ type: 'gap', severity: 'high', title: 'Нет SSO', detail: 'PRD требует SSO', refs: ['PRD', 'C2'], suggestion: 'Keycloak' }, { type: 'risk', severity: 'low', title: 'Один экземпляр БД', detail: '', refs: [], suggestion: '' }] }, diff: { added: [{ type: 'risk', title: 'Один экземпляр БД' }], resolved: [{ type: 'question', title: 'Кто админ' }], kept: [{ type: 'gap', title: 'Нет SSO' }] }, sameBaseline: false, artifact: { id: 'calibration:architecture', current: 2 }, log: ['Контекст собран', 'Находок: 2'] };
+});
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
   projectDir: root,
@@ -2054,6 +2062,25 @@ app.whenReady().then(async () => {
     const pullToasts = await ui(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ')`);
     check('вызов с папкой проекта и отчёт: отмечено, отменено', multicaPulls.length === 1 && multicaPulls[0] && /отмечено 1/.test(pullToasts) && /Отменены в Multica/.test(pullToasts), `${JSON.stringify(multicaPulls)} ${pullToasts}`);
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[52] Калибратор архитектуры и PRD (F15, ADR 0090)');
+    const cal = new BrowserWindow({ show: false, width: 1300, height: 900, webPreferences: { preload: path.join(root, 'electron', 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    await cal.loadFile(path.join(root, 'renderer', 'board.html'), { query: { board: 'architecture' } });
+    await wait(1200);
+    const calUi = (code) => cal.webContents.executeJavaScript(code);
+    await calUi(`document.querySelector('[data-act=arch-tab][data-tab=calibration]').click()`);
+    await wait(500);
+    const calPrev = await calUi(`document.querySelector('.calibration')?.textContent || ''`);
+    check('вкладка «Калибровка» — прошлый отчёт из артефакта', /Прошлый отчёт/.test(calPrev) && /Нет SSO/.test(calPrev), calPrev.slice(0, 200));
+    await calUi(`document.querySelector('[data-act=calibrate]').click()`);
+    await wait(600);
+    const calErr = await calUi(`(() => { const e = document.querySelector('.calibration-error'); return e ? { text: e.textContent, retry: Boolean(e.querySelector('[data-act=calibrate]')), log: document.querySelector('.calibration-log')?.open } : null; })()`);
+    check('ошибка — сообщение, «Повторить» и открытый журнал, отчёт на месте', calErr && /180 с/.test(calErr.text) && calErr.retry && calErr.log && /Нет SSO/.test(await calUi(`document.querySelector('.calibration').textContent`)), JSON.stringify(calErr));
+    await calUi(`document.querySelector('.calibration-error [data-act=calibrate]').click()`);
+    await wait(600);
+    const calOk = await calUi(`(() => ({ rows: document.querySelectorAll('.calibration-row').length, diff: document.querySelector('.calibration-diff')?.textContent || '', fresh: [...document.querySelectorAll('.calibration-row')].filter((r) => /новое/.test(r.textContent)).length, tab: document.querySelector('[data-tab=calibration]').textContent, gone: document.querySelector('.calibration').textContent.includes('Ушли: Кто админ') }))()`);
+    check('повтор — таблица находок, сравнение и «новое»', calOk.rows === 2 && /новых 1/.test(calOk.diff) && /ушло 1/.test(calOk.diff) && calOk.fresh === 1 && /Калибровка · 2/.test(calOk.tab) && calOk.gone, JSON.stringify(calOk));
+    cal.destroy();
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

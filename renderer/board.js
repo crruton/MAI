@@ -574,8 +574,10 @@ function onClick(event) {
 
     'arch-tab': () => {
       state.archTab = target.dataset.tab;
+      if (state.archTab === 'calibration' && !state.calibration) loadCalibration();
       render();
     },
+    calibrate: () => runCalibration(),
     'view-select': () => {
       state.openView = target.dataset.view;
       render();
@@ -983,6 +985,7 @@ function renderArchitecture() {
         <p>C1–C4, sequence, ER, deployment с sizing и OpenAPI. Mermaid рисуется локально, PlantUML экспортируется.</p>
       </div>
       <div class="head-actions">
+        <button class="btn" data-act="calibrate" ${state.calibration?.busy ? 'disabled' : ''}>${state.calibration?.busy ? 'Калибровка…' : 'Откалибровать'}</button>
         <button class="btn" data-act="baseline">Зафиксировать baseline</button>
         <button class="btn ghost" data-act="open-board" data-board="quality">Проверить качество</button>
       </div>
@@ -991,10 +994,12 @@ function renderArchitecture() {
       <button class="subtab ${tab === 'diagrams' ? 'active' : ''}" data-act="arch-tab" data-tab="diagrams">Диаграммы</button>
       <button class="subtab ${tab === 'adr' ? 'active' : ''}" data-act="arch-tab" data-tab="adr">ADR · ${adrs.length}</button>
       <button class="subtab ${tab === 'model' ? 'active' : ''}" data-act="arch-tab" data-tab="model">Модель</button>
+      <button class="subtab ${tab === 'calibration' ? 'active' : ''}" data-act="arch-tab" data-tab="calibration">Калибровка${state.calibration?.report ? ` · ${state.calibration.report.findings.length}` : ''}</button>
     </div>
     ${tab === 'diagrams' ? architectureDiagrams() : ''}
     ${tab === 'adr' ? architectureAdr() : ''}
-    ${tab === 'model' ? architectureModel() : ''}`;
+    ${tab === 'model' ? architectureModel() : ''}
+    ${tab === 'calibration' ? architectureCalibration() : ''}`;
 
   if (tab === 'diagrams') paintDiagram();
 }
@@ -1137,6 +1142,65 @@ function openapiTable(view) {
       )
       .join('')}</tbody>
   </table>`;
+}
+
+const CAL_TYPES = { contradiction: 'Противоречие', gap: 'Пробел', risk: 'Риск', question: 'Вопрос' };
+const CAL_SEVERITY = { high: ['red', 'высокая'], medium: ['amber', 'средняя'], low: ['', 'низкая'] };
+const calKey = (f) => `${f.type}:${String(f.title).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()}`;
+
+/** Последний отчёт калибратора из артефакта (F15). */
+async function loadCalibration() {
+  try {
+    const a = await api.artifacts.get({ projectDir: state.projectDir, id: 'calibration:architecture' });
+    state.calibration = { ...(state.calibration || {}), report: a?.meta?.report || null, at: a?.meta?.at || '', model: a?.meta?.model || '', version: a?.current || 0 };
+  } catch {
+    state.calibration = { ...(state.calibration || {}), report: null };
+  }
+  if (BOARD === 'architecture') render();
+}
+
+async function runCalibration() {
+  if (state.calibration?.busy) return;
+  state.archTab = 'calibration';
+  state.calibration = { ...(state.calibration || {}), busy: true, error: '', log: ['Собираю PRD, модель, ADR и OpenSpec…'] };
+  render();
+  const res = await api.boards.calibrate({ projectDir: state.projectDir }).catch((err) => ({ ok: false, error: err.message }));
+  state.calibration = res.ok
+    ? { report: res.report, diff: res.diff, sameBaseline: res.sameBaseline, at: res.at, version: res.artifact?.current, log: res.log || [], busy: false, error: '' }
+    : { ...(state.calibration || {}), busy: false, error: res.error || 'Калибратор не ответил', log: res.log || [] };
+  render();
+  toast(res.ok ? `Калибровка: находок ${res.report.findings.length}` : `Калибровка: ${res.error}`, res.ok ? 'ok' : 'err');
+}
+
+/** Вкладка «Калибровка» (F15): итог, находки, сравнение с прошлым, журнал. */
+function architectureCalibration() {
+  const c = state.calibration || {};
+  const r = c.report;
+  const added = new Set((c.diff?.added || []).map(calKey));
+  const head = `<div class="card-head"><h2>Калибровка архитектуры и PRD</h2><span class="hint">${c.at ? `${fmtDate(c.at)} · v${esc(c.version || '')}` : 'ещё не запускалась'}</span></div>`;
+  const intro = '<p class="muted" style="margin:0 0 10px">Второй взгляд на PRD, модель C1–C3, ADR и OpenSpec: противоречия, пробелы, риски и вопросы к продукту. Советник, а не гейт — отчёт хранится как артефакт с версиями.</p>';
+  const error = c.error ? `<div class="calibration-error"><span class="err-text">${esc(c.error)}</span> <button class="btn small" data-act="calibrate">Повторить</button></div>` : '';
+  const log = c.log?.length ? `<details class="calibration-log" ${c.busy || c.error ? 'open' : ''}><summary>Журнал</summary><pre class="output">${esc(c.log.join('\n'))}</pre></details>` : '';
+  if (!r) return `<div class="card calibration">${head}${intro}${error}${c.busy ? '<p class="muted">Калибровка идёт, до 3 минут…</p>' : '<p class="muted">Нажмите «Откалибровать».</p>'}${log}</div>`;
+  const diff = c.diff
+    ? `<p class="calibration-diff">${c.sameBaseline ? 'Вход не менялся с прошлого раза. ' : ''}Сравнение с прошлым: <span class="badge red">новых ${c.diff.added.length}</span> <span class="badge green">ушло ${c.diff.resolved.length}</span> <span class="badge">осталось ${c.diff.kept.length}</span></p>${c.diff.resolved.length ? `<div class="hint">Ушли: ${c.diff.resolved.map((f) => esc(f.title)).join('; ')}</div>` : ''}`
+    : '';
+  const rows = r.findings
+    .map((f) => {
+      const [color, sev] = CAL_SEVERITY[f.severity] || CAL_SEVERITY.medium;
+      return `<tr class="calibration-row">
+        <td>${esc(CAL_TYPES[f.type] || f.type)}</td>
+        <td><span class="badge ${color}">${sev}</span></td>
+        <td><div class="title">${esc(f.title)}${added.has(calKey(f)) ? ' <span class="badge blue">новое</span>' : ''}</div><div class="sub">${esc(f.detail)}</div>${f.suggestion ? `<div class="sub">→ ${esc(f.suggestion)}</div>` : ''}</td>
+        <td class="mono">${esc(f.refs.join(', '))}</td>
+      </tr>`;
+    })
+    .join('');
+  return `<div class="card calibration">${head}${intro}${error}
+    <p class="calibration-summary">${esc(r.summary || '')}</p>${diff}
+    ${r.findings.length ? `<table class="grid calibration-table"><thead><tr><th>Тип</th><th>Важность</th><th>Находка</th><th>Источники</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty-note">Находок нет: документы согласованы.</div>'}
+    <div class="head-actions" style="margin-top:10px"><button class="btn ghost small" data-act="open-board" data-board="storage" data-focus="artifact:calibration:architecture">Версии отчёта в хранилище</button></div>
+    ${log}</div>`;
 }
 
 function architectureAdr() {

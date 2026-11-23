@@ -267,6 +267,7 @@ contextBridge.exposeInMainWorld('mai', {
     rasterize: (payload) => invoke('boards:rasterize', payload),
     diagramChat: (payload) => invoke('boards:diagramChat', payload),
     diagramApply: (payload) => invoke('boards:diagramApply', payload),
+    calibrate: (payload) => invoke('boards:calibrate', payload),
     saveView: (payload) => invoke('boards:saveView', payload),
     onEvent: (handler) => {
       const listener = (_event, data) => handler(data);

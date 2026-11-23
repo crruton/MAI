@@ -44,7 +44,7 @@ check('в схеме enum типов', JSON.stringify(schema.function.parameters
 check('описания типов в описании инструмента', /reviewer: Ревьюер кода/.test(schema.function.description));
 check('субагенту нельзя agent и ask_user', NEVER_FOR_SUBAGENT.has('agent') && NEVER_FOR_SUBAGENT.has('ask_user'));
 check('agent — класс read', classifyTool('agent') === 'read');
-check('встроенных три', BUILTIN_AGENTS.length === 3);
+check('встроенных четыре, calibrator только читает', BUILTIN_AGENTS.length === 4 && BUILTIN_AGENTS.find((d) => d.name === 'calibrator')?.tools.every((t) => !/write|edit|shell|delete/.test(t)));
 
 fs.rmSync(project, { recursive: true, force: true });
 fs.rmSync(data, { recursive: true, force: true });

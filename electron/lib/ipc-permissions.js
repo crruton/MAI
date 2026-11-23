@@ -58,6 +58,8 @@ export const IPC_PERMISSIONS = {
   'runtimes:import': ADMIN,
   // Агент схем: применение предложения (F10).
   'boards:diagramApply': ADMIN,
+  // Калибратор архитектуры и PRD (F15).
+  'boards:calibrate': ADMIN,
   'runtimes:runMany': ADMIN,
   'runtimes:stop': ANY,
 

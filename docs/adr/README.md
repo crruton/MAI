@@ -105,3 +105,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0087](0087-avtosinhronizaciya-hranilishcha.md) | Автосинхронизация хранилища с Postgres и SeaweedFS | accepted | 2026-11-23 |
 | [0088](0088-perezapusk-zavisshego-mcp.md) | Перезапуск зависшего MCP-сервера Repowise | accepted | 2026-11-23 |
 | [0089](0089-statusy-multica-v-openspec.md) | Статусы Multica обратно в OpenSpec | accepted | 2026-11-23 |
+| [0090](0090-kalibrator-arhitektury.md) | Калибратор архитектуры и PRD — субагент и вкладка доски | accepted | 2026-11-23 |

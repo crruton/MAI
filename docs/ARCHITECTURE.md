@@ -343,6 +343,14 @@ ADR 0089. `openspec.js` — `parseTaskMarker`, `statusUpdatesFromIssues`,
 IPC `multica:pullStatuses` (ADMIN); `multica-sync.mjs --pull`. В app.js —
 кнопка `.multica-pull` в панели Multica.
 
+### Калибратор
+
+ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,
+`renderMarkdown`, `calibrate`; встроенный субагент `calibrator` в `agent-defs.js`.
+В main.js — `gatherCalibration` и IPC `boards:calibrate` (ADMIN) с записью
+артефакта `calibration:architecture`. В board.js — вкладка «Калибровка»
+(`architectureCalibration`, `runCalibration`).
+
 ### Рантаймы: версия и перенос
 
 ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,
