@@ -5358,8 +5358,9 @@ async function openRuntimes() {
       class: `badge ${probe.available ? 'ok' : 'err'}`,
       text: runtime.mode === 'docker'
         ? (probe.available ? 'образ есть' : 'образа нет')
-        : (probe.available ? 'CLI найден' : 'CLI не найден'),
+        : (probe.available ? `CLI найден${probe.version ? ` · ${probe.version}` : ''}` : 'CLI не найден'),
     });
+    if (probe.outdated) availability.classList.replace('ok', 'warn');
     const sub = el('div', { class: 'sub' }, [
       `${runtime.command || 'команда не задана'}${runtime.mode === 'docker' ? ` · docker ${runtime.image || ''}` : ''}`,
       probe.error ? ` · ${probe.error}` : '',
@@ -5416,6 +5417,24 @@ async function openRuntimes() {
       }),
     ],
     footer: [
+      // Перенос пресетов между машинами (F7): JSON без значений env.
+      el('button', { class: 'btn ghost runtimes-export', type: 'button', text: 'Экспорт', onclick: async () => { const r = await api.runtimes.exportFile(); if (r?.ok) toast(`Сохранено рантаймов: ${r.count} — ${r.path}`, 'ok'); } }),
+      el('button', {
+        class: 'btn ghost runtimes-import',
+        type: 'button',
+        text: 'Импорт',
+        onclick: async () => {
+          const replace = window.confirm('Заменять рантаймы с теми же именами из файла? «Отмена» — оставить свои, добавить только новые.');
+          const r = await api.runtimes.importFile(replace);
+          if (r?.canceled) return;
+          if (!r?.ok) return toast(r?.error || 'Не импортировано', 'err');
+          toast(`Добавлено: ${r.added.length}, заменено: ${r.replaced.length}${r.skipped.length ? `, оставлены свои: ${r.skipped.join(', ')}` : ''}${r.errors.length ? `, с ошибками: ${r.errors.join('; ')}` : ''}. Ключи в env заполните сами.`, r.errors.length ? 'err' : 'ok');
+          modal.close();
+          state.runtimes = await api.runtimes.list();
+          renderRuntimes();
+          openRuntimes();
+        },
+      }),
       el('button', {
         class: 'btn primary',
         type: 'button',

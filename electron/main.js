@@ -9,7 +9,7 @@ import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent,
 import { titleBarOptions, windowColors, normalizeTheme } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
-import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
+import { startRuntime, describeRuntime, probeRuntime, permissionPlan, exportRuntimes, importRuntimes } from './lib/runtimes.js';
 import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, setSessionRun, markInterrupted, addSessionRules, removeSessionRules, renameSession, forkSession, importSession, expiredSessions } from './lib/sessions.js';
 import { runAgent, compactSession, describeContext, suggestTitle, suggestLesson } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
@@ -705,6 +705,39 @@ ipcMain.handle('runtimes:save', (_e, runtimes) => {
   requireAdmin();
   saveSettings({ runtimes });
   return loadSettings().runtimes;
+});
+
+// Экспорт и импорт рантаймов (F7, ADR 0085): файл JSON, без значений env.
+ipcMain.handle('runtimes:export', async (event) => {
+  const { canceled, filePath } = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: 'Сохранить рантаймы',
+    defaultPath: 'mai-runtimes.json',
+    filters: [{ name: 'Рантаймы MAI', extensions: ['json'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  const data = exportRuntimes(loadSettings().runtimes || {});
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  return { ok: true, path: filePath, count: Object.keys(data.runtimes).length };
+});
+
+ipcMain.handle('runtimes:import', async (event, payload = {}) => {
+  requireAdmin();
+  const { canceled, filePaths } = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: 'Открыть рантаймы',
+    properties: ['openFile'],
+    filters: [{ name: 'Рантаймы MAI', extensions: ['json'] }],
+  });
+  if (canceled || !filePaths?.[0]) return { ok: false, canceled: true };
+  try {
+    if (fs.statSync(filePaths[0]).size > 2 * 1024 * 1024) throw new Error('файл больше 2 МБ');
+    const result = importRuntimes(JSON.parse(fs.readFileSync(filePaths[0], 'utf8')), loadSettings().runtimes || {}, { replace: payload.replace === true });
+    if (result.added.length || result.replaced.length) saveSettings({ runtimes: result.runtimes });
+    audit({ at: new Date().toISOString(), tool: 'runtimes:import', source: 'user', cls: 'exec', subject: `+${result.added.join(',')} ~${result.replaced.join(',')}`.slice(0, 300), decision: 'allow' });
+    const { runtimes: _r, ...report } = result;
+    return { ok: true, ...report };
+  } catch (err) {
+    return { ok: false, error: `Не удалось импортировать: ${err?.message || err}` };
+  }
 });
 
 ipcMain.handle('runtimes:probe', (_e, payload) => {

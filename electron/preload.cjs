@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld('mai', {
     run: (payload) => invoke('runtimes:run', payload),
     runMany: (payload) => invoke('runtimes:runMany', payload),
     stop: () => invoke('runtimes:stop'),
+    exportFile: () => invoke('runtimes:export'),
+    importFile: (replace = false) => invoke('runtimes:import', { replace }),
   },
   project: {
     pick: () => invoke('project:pick'),

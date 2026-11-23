@@ -53,6 +53,9 @@ export const IPC_PERMISSIONS = {
   'runtimes:save': ADMIN,
   'runtimes:probe': ANY,
   'runtimes:run': ADMIN,
+  // Экспорт и импорт рантаймов (F7).
+  'runtimes:export': ANY,
+  'runtimes:import': ADMIN,
   'runtimes:runMany': ADMIN,
   'runtimes:stop': ANY,
 

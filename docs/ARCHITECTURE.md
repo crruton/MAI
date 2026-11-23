@@ -312,6 +312,13 @@ ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый про�
 автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
 сообщения. IPC `hooks:list(projectDir)`.
 
+### Рантаймы: версия и перенос
+
+ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,
+`compareVersions`, `minVersion`), `exportRuntimes` (env без значений),
+`importRuntimes` (проверка, слияние, `replace`); IPC `runtimes:export`,
+`runtimes:import` (admin).
+
 ### «Запомнить?» и ocr
 
 ADR 0084. `suggestLesson`/`cleanLesson` в agent.js; main после прогона с

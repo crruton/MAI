@@ -56,6 +56,7 @@ export const IPC_SCHEMAS = {
   'shell:direct': [{ sessionId: S, command: S }],
   'git:branch': [S_],
   'notify:test': [S_],
+  'runtimes:import': [{ replace: B_ }],
   'worktree:list': [S_],
   'worktree:create': [{ projectDir: S_, name: S_ }],
   'worktree:open': [S],

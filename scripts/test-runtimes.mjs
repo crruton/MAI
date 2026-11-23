@@ -10,6 +10,11 @@ import {
   escapeCmdArgument,
   startRuntime,
   supportsStdin,
+  probeRuntime,
+  versionOf,
+  compareVersions,
+  exportRuntimes,
+  importRuntimes,
 } from '../electron/lib/runtimes.js';
 
 let pass = 0;
@@ -118,6 +123,30 @@ const b = await run(echoStdin, 'manual', tricky);
 check('через stdin: текст совпал', b.code === 0 && JSON.parse(b.out) === tricky, b.out);
 const refused = await run({ name: 'cli', command: process.execPath, args: ['-e', '1'] }, 'plan', 'x');
 check('режим без поддержки — процесс не запущен', refused.permissionDenied === true && refused.code === -1);
+
+console.log('[версии и перенос, F7]');
+check('версия из вывода --version', versionOf('opencode 0.3.1') === '0.3.1' && versionOf('2.0.14 (Claude Code)') === '2.0.14' && versionOf('v1.2-beta.3') === '1.2-beta.3' && versionOf('нет') === '');
+check('сравнение версий', compareVersions('1.10.0', '1.9.9') === 1 && compareVersions('2.0', '2.0.0') === 0 && compareVersions('0.3.1', '0.4') === -1);
+const probe = probeRuntime({ command: 'node' });
+check('проба настоящего CLI: путь и версия', probe.available && /^\d+\.\d+/.test(probe.version), JSON.stringify(probe));
+const old = probeRuntime({ command: 'node', minVersion: '999.0' });
+check('старее minVersion — отмечено', old.available && old.outdated === true && /старее нужной 999\.0/.test(old.error), JSON.stringify(old));
+const exported = exportRuntimes({ oc: { name: 'OpenCode', command: 'opencode', args: ['run'], env: { OPENAI_API_KEY: 'sk-secret' } } });
+check('экспорт: формат и без значений env', exported.format === 'mai-runtimes' && exported.runtimes.oc.env.OPENAI_API_KEY === '' && !JSON.stringify(exported).includes('sk-secret'));
+const imp = importRuntimes(
+  { format: 'mai-runtimes', runtimes: { oc: { command: 'opencode2', env: { OPENAI_API_KEY: '' } }, fresh: { command: 'x' }, 'bad id': { command: 'y' }, broken: { args: 'run' }, multi: { command: 'a\nrm -rf /' } } },
+  { oc: { command: 'opencode', env: { OPENAI_API_KEY: 'sk-mine' } } },
+);
+check('импорт: новое добавлено, своё оставлено, плохое — с причиной', imp.added.join() === 'fresh' && imp.skipped.join() === 'oc' && imp.runtimes.oc.command === 'opencode' && imp.errors.length === 3, JSON.stringify(imp));
+const rep = importRuntimes({ runtimes: { oc: { command: 'opencode2', env: { OPENAI_API_KEY: '' } } } }, { oc: { command: 'opencode', env: { OPENAI_API_KEY: 'sk-mine' } } }, { replace: true });
+check('импорт с заменой: команда из файла, свой ключ env сохранён', rep.replaced.join() === 'oc' && rep.runtimes.oc.command === 'opencode2' && rep.runtimes.oc.env.OPENAI_API_KEY === 'sk-mine');
+let err = '';
+try {
+  importRuntimes({ wat: 1 }.wat);
+} catch (e) {
+  err = e.message;
+}
+check('не рантаймы — понятная ошибка', /нет рантаймов MAI/.test(err), err);
 
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

@@ -205,7 +205,78 @@ export function probeRuntime(runtime) {
   if (probe.status !== 0 || !pathLine) {
     return { available: false, error: `CLI «${command}» не найден в PATH` };
   }
-  return { available: true, path: pathLine, version: '' };
+  // Версия CLI (F7): `--version` (или свои versionArgs) — и сверка с minVersion.
+  const run = spawnSync(command, Array.isArray(runtime.versionArgs) ? runtime.versionArgs : ['--version'], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    shell: process.platform === 'win32',
+    windowsHide: true,
+  });
+  const version = run.error || run.status !== 0 ? '' : versionOf(`${run.stdout || ''}\n${run.stderr || ''}`);
+  const outdated = Boolean(version && runtime.minVersion && compareVersions(version, runtime.minVersion) < 0);
+  return { available: true, path: pathLine, version, ...(outdated ? { outdated: true, error: `версия ${version} старее нужной ${runtime.minVersion}` } : {}) };
+}
+
+/** Номер версии из вывода `--version`: «opencode 0.3.1», «v1.2», «2.0.14 (Claude Code)». */
+export function versionOf(text) {
+  return /(\d+\.\d+(?:\.\d+)?(?:[-+][\w.]+)?)/.exec(String(text || ''))?.[1] || '';
+}
+
+/** Сравнение версий: -1, 0, 1 (по числам; хвост -beta игнорируется). */
+export function compareVersions(a, b) {
+  const pa = String(a).split(/[-+]/)[0].split('.').map(Number);
+  const pb = String(b).split(/[-+]/)[0].split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+const RUNTIME_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+
+/** Экспорт рантаймов (F7): JSON для другой машины. Значения env — секреты — не уходят. */
+export function exportRuntimes(runtimes = {}) {
+  const clean = {};
+  for (const [id, r] of Object.entries(runtimes || {})) {
+    const { env, ...rest } = r || {};
+    clean[id] = { ...rest, ...(env && typeof env === 'object' ? { env: Object.fromEntries(Object.keys(env).map((k) => [k, ''])) } : {}) };
+  }
+  return { format: 'mai-runtimes', version: 1, exportedAt: new Date().toISOString(), runtimes: clean };
+}
+
+/**
+ * Импорт рантаймов (F7): проверка и слияние с текущими. Уже существующие id
+ * заменяются только при `replace`. Возвращает { runtimes, added, replaced, skipped, errors }.
+ */
+export function importRuntimes(data, current = {}, { replace = false } = {}) {
+  const incoming = data?.format === 'mai-runtimes' ? data.runtimes : data?.runtimes || data;
+  if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) throw new Error('В файле нет рантаймов MAI (format: mai-runtimes)');
+  const out = { ...current };
+  const report = { added: [], replaced: [], skipped: [], errors: [] };
+  for (const [id, r] of Object.entries(incoming)) {
+    const bad = !RUNTIME_ID.test(id)
+      ? 'неверный id'
+      : !r || typeof r !== 'object'
+        ? 'не объект'
+        : r.mode === 'docker'
+          ? typeof r.image !== 'string' || !r.image.trim() ? 'нет image' : ''
+          : typeof r.command !== 'string' || !r.command.trim() || /[\r\n]/.test(r.command) ? 'нет command' : '';
+    const argsBad = r && r.args !== undefined && !(Array.isArray(r.args) && r.args.every((a) => typeof a === 'string'));
+    if (bad || argsBad) {
+      report.errors.push(`${id}: ${bad || 'args — список строк'}`);
+      continue;
+    }
+    if (out[id] && !replace) {
+      report.skipped.push(id);
+      continue;
+    }
+    // env из файла — только ключи; значения (секреты) остаются свои, если были.
+    const env = r.env && typeof r.env === 'object' ? Object.fromEntries(Object.keys(r.env).map((k) => [k, out[id]?.env?.[k] ?? ''])) : out[id]?.env;
+    (out[id] ? report.replaced : report.added).push(id);
+    out[id] = { ...r, ...(env ? { env } : {}), enabled: r.enabled !== false };
+  }
+  return { runtimes: out, ...report };
 }
 
 /** OpenCode в неинтерактивном режиме печатает JSON-события — вытаскиваем текст. */
