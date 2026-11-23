@@ -106,3 +106,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0088](0088-perezapusk-zavisshego-mcp.md) | Перезапуск зависшего MCP-сервера Repowise | accepted | 2026-11-23 |
 | [0089](0089-statusy-multica-v-openspec.md) | Статусы Multica обратно в OpenSpec | accepted | 2026-11-23 |
 | [0090](0090-kalibrator-arhitektury.md) | Калибратор архитектуры и PRD — субагент и вкладка доски | accepted | 2026-11-23 |
+| [0091](0091-proekt-v-otdelnoy-papke.md) | «Проект в отдельной папке» вместо «песочницы проекта» | accepted | 2026-11-23 |

@@ -4818,7 +4818,7 @@ function applyRoleGuard() {
   const newProject = $('#new-project-btn');
   if (newProject) {
     newProject.disabled = !admin;
-    newProject.title = admin ? 'Создать изолированную песочницу проекта' : 'Создание проектов доступно роли admin';
+    newProject.title = admin ? 'Создать проект в отдельной папке (это не изоляция: агент работает с вашими правами)' : 'Создание проектов доступно роли admin';
   }
   const projectButton = $('#project-btn');
   if (projectButton) {
@@ -4953,7 +4953,7 @@ async function openAuth() {
   });
 }
 
-/* ---------- новый проект / песочница ---------- */
+/* ---------- новый проект в отдельной папке (F16) ---------- */
 
 async function newProjectModal() {
   let root = '';
@@ -4983,11 +4983,11 @@ async function newProjectModal() {
   ]);
 
   const modal = openModal({
-    title: 'Новый проект в песочнице',
+    title: 'Новый проект в отдельной папке',
     body: [
       el('p', {
         class: 'hint-text',
-        text: 'Проект получит отдельную папку, свой .mai-code, memory.md и загрузки. Глобальные навыки и AGENTS.md остаются общими.',
+        text: 'Проект получит отдельную папку, свой .mai-code, memory.md и загрузки. Глобальные навыки и AGENTS.md остаются общими. Это не изоляция: агент работает с вашими правами; процессы и сеть изолирует только Docker («Docker» на панели).',
       }),
       el('div', { class: 'row' }, [field('Имя проекта', name), field('Шаблон', template)]),
       field('Описание', description),

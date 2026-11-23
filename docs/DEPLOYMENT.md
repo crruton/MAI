@@ -182,7 +182,7 @@ npm.cmd run multica:sync
   по импорту в OpenScion;
 - глобальные навыки, `AGENTS.md` и профили моделей остаются общими.
 
-Панель «Песочницы» запускает Docker-контейнер с папкой проекта в `/workspace`:
+Панель «Docker» запускает Docker-контейнер с папкой проекта в `/workspace`:
 read-only корневая ФС, сброс capabilities, лимиты CPU/RAM, публикация портов.
 Подробности: `docs/SANDBOXES.md`.
 

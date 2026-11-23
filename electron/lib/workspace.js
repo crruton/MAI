@@ -4,7 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { dataDir } from './config.js';
 
 /**
- * Песочницы проектов.
+ * Проекты в отдельной папке (F16: раньше «песочницы»; изоляция — только Docker).
+ * Папка по-прежнему `sandboxes/` в данных приложения — ради совместимости.
  *
  * Каждый внешний проект получает отдельную папку со своим .mai-code,
  * загрузками и настройками. Общий harness (глобальные навыки, AGENTS.md,
@@ -47,7 +48,7 @@ function templateFiles({ name, template, description }) {
   const title = name || 'Новый проект';
   const common = {
     'README.md': `# ${title}\n\n${description || 'Проект создан в MAI Code.'}\n\n## Запуск\n\nОпишите команды запуска и проверки.\n`,
-    'AGENTS.md': `# Инструкции проекта\n\n- Работай только внутри этой папки.\n- Не читай и не меняй другие песочницы.\n- Секреты храни в .env, не коммить.\n- Перед изменениями читай docs/PRD.md и docs/ARCHITECTURE.md.\n- После изменений запускай проверки из package.json (если есть).\n`,
+    'AGENTS.md': `# Инструкции проекта\n\n- Работай только внутри этой папки.\n- Не читай и не меняй другие проекты.\n- Секреты храни в .env, не коммить.\n- Перед изменениями читай docs/PRD.md и docs/ARCHITECTURE.md.\n- После изменений запускай проверки из package.json (если есть).\n`,
     '.mai-code/memory.md': `# Память проекта\n\nСюда записываются подтверждённые уроки: решения, ограничения, грабли.\n\n## Уроки\n\n`,
     '.gitignore': `node_modules/\ndist/\nout/\n.env\n.env.*\n!.env.example\n*.log\n.mai-code/uploads/\n`,
     'docs/PRD.md': `# PRD: ${title}\n\n## Проблема\n\n## Пользователи\n\n## Сценарии\n\n## Критерии успеха\n\n## Вне scope\n`,

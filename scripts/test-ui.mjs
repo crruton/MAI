@@ -2081,6 +2081,10 @@ app.whenReady().then(async () => {
     const calOk = await calUi(`(() => ({ rows: document.querySelectorAll('.calibration-row').length, diff: document.querySelector('.calibration-diff')?.textContent || '', fresh: [...document.querySelectorAll('.calibration-row')].filter((r) => /новое/.test(r.textContent)).length, tab: document.querySelector('[data-tab=calibration]').textContent, gone: document.querySelector('.calibration').textContent.includes('Ушли: Кто админ') }))()`);
     check('повтор — таблица находок, сравнение и «новое»', calOk.rows === 2 && /новых 1/.test(calOk.diff) && /ушло 1/.test(calOk.diff) && calOk.fresh === 1 && /Калибровка · 2/.test(calOk.tab) && calOk.gone, JSON.stringify(calOk));
     cal.destroy();
+
+    console.log('\n[53] «Проект в отдельной папке» вместо «песочницы» (F16, ADR 0091)');
+    const names = await ui(`({ btn: document.querySelector('#new-project-btn').title, docker: document.querySelector('[data-panel=sandbox]').textContent.trim() })`);
+    check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

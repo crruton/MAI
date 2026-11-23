@@ -351,6 +351,11 @@ ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,
 артефакта `calibration:architecture`. В board.js — вкладка «Калибровка»
 (`architectureCalibration`, `runCalibration`).
 
+### Проект в отдельной папке
+
+ADR 0091. Подписи «＋ Новый проект» и панели «Docker» в `index.html`/`app.js`;
+`workspace.js` по-прежнему создаёт проекты в `<данные>/sandboxes/` (совместимость).
+
 ### Рантаймы: версия и перенос
 
 ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,
