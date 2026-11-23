@@ -564,6 +564,7 @@ OAuth, в панели «MCP» появится «нужен вход» и кн�
 - [Провайдеры и рантаймы](docs/PROVIDERS.md) — как подключать другие модели и агентов.
 - [Голосовой ввод через MAS](docs/MAS.md) — микрофон, токен, настройки.
 - [Развёртывание](docs/DEPLOYMENT.md) — установщики, docker-compose, Keycloak, VPN.
+- [Наблюдаемость](docs/OBSERVABILITY.md) — OpenTelemetry, Tempo, Loki, Grafana: трассы прогона и метрики агента (токены, стоимость, ошибки инструментов, отказы разрешений, ADR 0094).
 - [Kubernetes](docs/KUBERNETES.md) — локальный кластер и бесплатное облако.
 - [DNS и домены](docs/DNS.md) — hosts, A/CNAME, TLS.
 - [Домен](docs/DOMAIN.md) — GitHub Pages, бесплатные поддомены.

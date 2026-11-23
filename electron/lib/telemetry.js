@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { loadSettings } from './config.js';
 import { redactSecrets } from './guardrails.js';
+import { createMetrics } from './metrics.js';
 
 /**
  * Минимальный OTLP/HTTP-экспортёр без внешних зависимостей.
@@ -100,9 +101,37 @@ export function emitLog(message, { severity = 'INFO', attributes = {} } = {}) {
   void post(cfg, '/v1/logs', payload);
 }
 
+// Метрики агента (F23, ADR 0094): счётчики из спанов, отправка раз в 15 с.
+const metrics = createMetrics({
+  pricing: () => {
+    try {
+      return loadSettings().telemetry?.pricing || {};
+    } catch {
+      return {};
+    }
+  },
+});
+let metricsTimer = null;
+
+/** Отправить накопленные метрики сейчас (таймер и выход из приложения). */
+export function flushMetrics({ force = false } = {}) {
+  const cfg = config();
+  if (!cfg.enabled) return Promise.resolve(false);
+  const payload = metrics.toOtlp(resource(cfg), { force });
+  return payload ? post(cfg, '/v1/metrics', payload) : Promise.resolve(false);
+}
+
+/** Для проверки: текущие счётчики. */
+export const metricsSnapshot = () => metrics.series();
+
 export function emitSpan(name, { startMs, endMs, attributes = {}, error = '', traceId = hex(16), spanId = hex(8), parentSpanId } = {}) {
   const cfg = config();
   if (!cfg.enabled) return;
+  metrics.fromSpan(name, { attributes, error });
+  if (!metricsTimer) {
+    metricsTimer = setInterval(() => void flushMetrics(), Number(process.env.MAI_METRICS_INTERVAL_MS || 15_000));
+    metricsTimer.unref?.();
+  }
   const start = BigInt(Math.round(startMs || Date.now())) * 1_000_000n;
   const end = BigInt(Math.round(endMs || Date.now())) * 1_000_000n;
   const payload = {

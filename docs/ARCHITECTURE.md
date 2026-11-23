@@ -372,6 +372,13 @@ ADR 0093. `auth-session.js` (без Electron) — `corporatePolicy`, `tokenState
 опция `sessionGate`, порядок: сессия → роль → схема. В app.js — `showLoginOnly`
 до `init`, `watchSession`.
 
+### Метрики агента
+
+ADR 0094. `metrics.js` — `createMetrics` (`fromSpan`, `toOtlp`), `priceOf`,
+`METRIC_NAMES`; `telemetry.emitSpan` кормит счётчики, `flushMetrics` — раз в 15 с
+и при выходе. Дашборд `infra/observability/grafana/dashboards/mai-code-overview.json`
+— строка «Агент».
+
 ### Рантаймы: версия и перенос
 
 ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,

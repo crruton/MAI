@@ -76,7 +76,7 @@ import {
 import { gitStatus, gitDiff, gitHead } from './lib/git.js';
 import { runStage } from './lib/deploy.js';
 import { checkCommand, redactSecrets } from './lib/guardrails.js';
-import { emitLog, emitSpan, telemetryStatus } from './lib/telemetry.js';
+import { emitLog, emitSpan, telemetryStatus, flushMetrics } from './lib/telemetry.js';
 import * as infra from './lib/infra.js';
 import * as repowise from './lib/repowise.js';
 import { editDiagram, applyDiagram } from './lib/diagram-agent.js';
@@ -3648,6 +3648,8 @@ onArtifactWrite((projectDir, artifact) => {
   if (autoSyncEnabled()) syncQueue.schedule(projectDir, artifact?.id || '');
 });
 app.on('before-quit', () => syncQueue.stop());
+// Метрики агента (F23): последнюю порцию — при выходе, без ожидания.
+app.on('before-quit', () => void flushMetrics());
 ipcMain.handle('infra:syncStatus', (_e, payload) => ({ enabled: autoSyncEnabled(), ...syncQueue.status(projectOf(payload)) }));
 ipcMain.handle('infra:syncNow', async (_e, payload) => {
   requireAdmin();
