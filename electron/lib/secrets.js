@@ -23,6 +23,9 @@ export const SECRET_PATHS = [
   ['webSearch', 'apiKey'],
   // Webhook уведомлений (CW5.4): адрес Slack/Discord — по сути токен канала.
   ['notifications', 'webhookUrl'],
+  // Каналы уведомлений (CW5.4): токены ботов и адреса webhook.
+  ['notifications', 'channels', '*', 'token'],
+  ['notifications', 'channels', '*', 'url'],
 ];
 
 export function isSealed(value) {

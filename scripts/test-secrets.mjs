@@ -64,5 +64,9 @@ const replaced = keepUnreadable(sealSettings({ ...unreadable.settings, providers
 check('новый ключ, введённый пользователем, сохраняется', replaced.providers.mai.apiKey !== sealed.providers.mai.apiKey);
 check('weak распознан', createSecretBox({ ...fake(), weak: () => true }).protection() === 'weak');
 
+// Каналы уведомлений (CW5.4): токены ботов и адреса webhook — шифруются.
+const chans = sealSettings({ notifications: { channels: [{ id: 'tg', type: 'telegram', token: '123:ABC', chatId: '-1' }, { id: 'rc', type: 'rocketchat', url: 'https://rc/hooks/secret' }] } }, box);
+check('токен бота и адрес webhook на диске зашифрованы, chat_id — нет', isSealed(chans.notifications.channels[0].token) && isSealed(chans.notifications.channels[1].url) && chans.notifications.channels[0].chatId === '-1');
+check('и расшифровываются обратно', openSettings(chans, box).settings.notifications.channels[0].token === '123:ABC');
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

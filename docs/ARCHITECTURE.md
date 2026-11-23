@@ -314,11 +314,12 @@ ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый про�
 
 ### Уведомления
 
-ADR 0081. `notify.js` — `notifySettings`, `webhookPayload`,
-`createNotifier`; в main один `notify` (фокус — `BrowserWindow`, клик —
+ADR 0081. `notify.js` — `notifySettings` (каналы + перенос старого
+`webhookUrl`), `normalizeChannel`, `channelRequest` (Telegram, MAX, WhatsApp,
+Rocket.Chat, webhook), `createNotifier`; в main один `notify` (фокус — `BrowserWindow`, клик —
 `scheduled:open`), вызовы из прогона чата, `makeApprover`, `makeAsker`,
-`backgroundFor`, `notifyScheduled`; IPC `notify:test`. Адрес webhook — в
-`SECRET_PATHS`.
+`backgroundFor`, `notifyScheduled`; IPC `notify:test(channelId)`. Токены и
+адреса каналов — в `SECRET_PATHS`, маска «***» — в `publicSettings`/`saveSettings`.
 
 ### Память, совместимость, кэш, дубли навыков
 

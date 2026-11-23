@@ -96,4 +96,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0078](0078-modeli-bez-instrumentov-i-model-dlya-plana.md) | Модели без tool calling и отдельная модель для «Плана» | accepted | 2026-11-23 |
 | [0079](0079-noutbuki-diagnostika-otlozhennye-instrumenty.md) | Ноутбуки, диагностика кода и отложенная загрузка инструментов | accepted | 2026-11-23 |
 | [0080](0080-pamyat-sovmestimost-kesh-dubli-navykov.md) | Предел памяти, инструкции других агентов, кэш промпта, дубли навыков | accepted | 2026-11-23 |
-| [0081](0081-uvedomleniya.md) | Уведомления на рабочем столе и в мессенджер | accepted | 2026-11-23 |
+| [0081](0081-uvedomleniya.md) | Уведомления на рабочем столе и в мессенджеры (Telegram, MAX, WhatsApp, Rocket.Chat, webhook) | accepted | 2026-11-23 |

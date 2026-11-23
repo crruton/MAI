@@ -4202,8 +4202,59 @@ async function openSettings() {
   const notifyOn = el('input', { type: 'checkbox', class: 'notify-enabled' });
   notifyOn.checked = nset.enabled !== false;
   const desktopKinds = kindBoxes('notify-desktop', nset.desktop, NOTIFY_KINDS.map(([k]) => k));
-  const webhookUrl = el('input', { class: 'notify-webhook', placeholder: 'https://hooks.slack.com/… — Slack, Mattermost, Discord, Teams', value: nset.webhookUrl || '' });
-  const webhookKinds = kindBoxes('notify-webhook-kind', nset.webhook, ['done', 'error', 'scheduled']);
+  // Каналы мессенджеров (CW5.4): Telegram, MAX, WhatsApp, Rocket.Chat, webhook.
+  const channelsBox = el('div', { class: 'notify-channels' });
+  const channelRows = [];
+  const CHANNEL_FIELDS = {
+    telegram: [['token', 'Токен бота (@BotFather)', true], ['chatId', 'chat_id (личка, группа или канал)']],
+    max: [['token', 'Токен бота (business.max.ru)', true], ['chatId', 'chat_id или user_id'], ['target', 'Кому', false, [['chat', 'чат (chat_id)'], ['user', 'пользователь (user_id)']]], ['apiBase', 'Адрес API (пусто — platform-api2.max.ru)']],
+    whatsapp: [['token', 'Токен WhatsApp Cloud API', true], ['phoneNumberId', 'Phone number ID отправителя'], ['to', 'Номер получателя, например 79001234567'], ['template', 'Шаблон (вне 24-часового окна; пусто — текст)'], ['lang', 'Язык шаблона, например ru']],
+    rocketchat: [['url', 'Адрес входящего webhook Rocket.Chat', true]],
+    webhook: [['url', 'Адрес webhook: Slack, Mattermost, Discord, Teams', true]],
+  };
+  const TYPE_LABELS = [['telegram', 'Telegram'], ['max', 'MAX'], ['whatsapp', 'WhatsApp'], ['rocketchat', 'Rocket.Chat'], ['webhook', 'Webhook (Slack, Mattermost, Discord, Teams)']];
+  const addChannel = (raw = { type: 'telegram' }) => {
+    const id = raw.id || `ch-${Math.random().toString(36).slice(2, 8)}`;
+    const row = el('div', { class: 'notify-channel', 'data-id': id });
+    const type = el('select', { class: 'channel-type' }, TYPE_LABELS.map(([v, t]) => el('option', { value: v, text: t })));
+    type.value = raw.type || 'telegram';
+    const enabled = el('input', { type: 'checkbox', class: 'channel-enabled' });
+    enabled.checked = raw.enabled !== false;
+    const kinds = kindBoxes('channel-kind', raw.kinds, ['done', 'error', 'scheduled']);
+    const fieldsBox = el('div', { class: 'row channel-fields' });
+    const inputs = {};
+    const renderFields = () => {
+      fieldsBox.replaceChildren(
+        ...CHANNEL_FIELDS[type.value].map(([key, label, secret, options]) => {
+          const input = options ? el('select', { 'data-field': key }, options.map(([v, t]) => el('option', { value: v, text: t }))) : el('input', { 'data-field': key, ...(secret ? { type: 'password', autocomplete: 'off' } : {}), placeholder: label });
+          input.value = raw[key] ?? (options ? options[0][0] : '');
+          inputs[key] = input;
+          return field(label, input);
+        }),
+      );
+    };
+    type.addEventListener('change', () => {
+      for (const k of Object.keys(inputs)) delete inputs[k];
+      renderFields();
+    });
+    renderFields();
+    const test = el('button', { class: 'btn ghost small channel-test', type: 'button', text: 'Проверить', title: 'Сначала сохраните настройки', onclick: async () => { const r = await api.notify?.test(id); toast(r?.channels?.[id] ? 'Доставлено' : `Не доставлено${r?.errors?.[0] ? `: ${r.errors[0]}` : ' — сохраните настройки и проверьте поля'}`, r?.channels?.[id] ? 'ok' : 'err'); } });
+    const remove = el('button', { class: 'btn ghost small channel-remove', type: 'button', text: 'Удалить', onclick: () => { row.remove(); channelRows.splice(channelRows.indexOf(entry), 1); } });
+    row.append(el('div', { class: 'row' }, [el('label', { class: 'hint-text' }, [enabled, ' ']), type, test, remove]), fieldsBox, el('div', { class: 'statusline-items' }, kinds));
+    const entry = {
+      id,
+      value: () => {
+        const out = { id, type: type.value, enabled: enabled.checked, kinds: checked(kinds) };
+        for (const [k, input] of Object.entries(inputs)) out[k] = input.value.trim();
+        return out;
+      },
+    };
+    channelRows.push(entry);
+    channelsBox.append(row);
+  };
+  for (const c of nset.channels || []) addChannel(c);
+  // Старая настройка с одним webhook — каналом, чтобы её было видно и можно удалить.
+  if (nset.webhookSet && !(nset.channels || []).some((c) => c.id === 'legacy')) addChannel({ id: 'legacy', type: 'webhook', url: '***', kinds: nset.webhook });
   const checked = (boxes) => boxes.map((l) => l.querySelector('input')).filter((b) => b.checked).map((b) => b.dataset.kind);
   // Инструкции других агентов (CC4.6).
   const compat = el('input', { type: 'checkbox', class: 'compat-instructions' });
@@ -4362,9 +4413,12 @@ async function openSettings() {
         el('label', { class: 'hint-text' }, [notifyOn, ' на рабочем столе, когда окно MAI не в фокусе:']),
         el('div', { class: 'statusline-items' }, desktopKinds),
       ]),
-      el('div', { class: 'row' }, [field('Webhook мессенджера (необязательно; уходит только заголовок и суть)', webhookUrl)]),
-      el('div', { class: 'statusline-items' }, webhookKinds),
-      el('button', { class: 'btn ghost small notify-test', type: 'button', text: 'Проверить уведомление', onclick: async () => { const r = await api.notify?.test(); toast(r?.webhook ? 'Отправлено на рабочий стол и в webhook' : r?.desktop ? 'Показано на рабочем столе' : 'Не доставлено — смотрите журнал', r?.desktop || r?.webhook ? 'ok' : 'err'); } }),
+      el('p', { class: 'hint-text', text: 'Мессенджеры: в канал уходит только заголовок и суть, без файлов. Токены хранятся зашифрованными; каналы задаёт администратор.' }),
+      channelsBox,
+      el('div', { class: 'row' }, [
+        el('button', { class: 'btn ghost small channel-add', type: 'button', text: '＋ Канал', onclick: () => addChannel() }),
+        el('button', { class: 'btn ghost small notify-test', type: 'button', text: 'Проверить на рабочем столе', onclick: async () => { const r = await api.notify?.test(); toast(r?.desktop ? 'Показано на рабочем столе' : 'Не показано — уведомления выключены в системе?', r?.desktop ? 'ok' : 'err'); } }),
+      ]),
       el('label', { class: 'field' }, [
         el('span', { text: 'Инструкции других агентов' }),
         el('label', { class: 'hint-text' }, [compat, ' читать также CLAUDE.md, GEMINI.md, правила Cursor и Copilot (повторы AGENTS.md пропускаются)']),
@@ -4484,7 +4538,7 @@ async function openSettings() {
             browserEnabled: browserEnabled.checked,
             autoTitle: autoTitle.checked,
             compatInstructions: compat.checked,
-            notifications: { enabled: notifyOn.checked, desktop: checked(desktopKinds), webhook: checked(webhookKinds), webhookUrl: webhookUrl.value.trim() },
+            notifications: { enabled: notifyOn.checked, desktop: checked(desktopKinds), channels: channelRows.map((r) => r.value()), webhookUrl: '', webhook: [] },
             theme: theme.value,
             statusLine: STATUS_ITEMS.map(([key]) => key).filter((key) => statusBoxes.some((l) => l.querySelector(`[data-item=${key}]`)?.checked)),
             sessionRetentionDays: Math.max(0, Math.min(3650, Math.round(Number(retention.value) || 0))),

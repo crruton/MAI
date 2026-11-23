@@ -1886,7 +1886,29 @@ app.whenReady().then(async () => {
     check('настройка «Тема» сохраняется', themeOptions === 'dark,light,system' && savedSettings.at(-1)?.theme === 'system', `${themeOptions} ${savedSettings.at(-1)?.theme}`);
     check('поле «Модель для Плана» сохраняется', savedSettings.at(-1)?.planModel === '', JSON.stringify(savedSettings.at(-1)?.planModel));
     const ns = savedSettings.at(-1)?.notifications;
-    check('уведомления: по умолчанию все виды на рабочем столе, webhook — готово/ошибка/плановая', ns?.enabled === true && ns.desktop.length === 6 && ns.webhook.join() === 'done,error,scheduled' && ns.webhookUrl === '', JSON.stringify(ns));
+    check('уведомления: по умолчанию все виды на рабочем столе, каналов нет', ns?.enabled === true && ns.desktop.length === 6 && Array.isArray(ns.channels) && ns.channels.length === 0, JSON.stringify(ns));
+    // Канал Telegram: добавить, заполнить, сохранить; у MAX — поля бота и адресата.
+    await ui(`document.querySelector('#settings-btn').click()`);
+    await wait(500);
+    const chanFields = await ui(`(() => {
+      document.querySelector('.channel-add').click();
+      const row = document.querySelector('.notify-channel:last-child');
+      const typeSel = row.querySelector('.channel-type');
+      const types = [...typeSel.options].map((o) => o.value).join();
+      typeSel.value = 'max';
+      typeSel.dispatchEvent(new Event('change'));
+      const maxFields = [...row.querySelectorAll('[data-field]')].map((i) => i.dataset.field).join();
+      typeSel.value = 'telegram';
+      typeSel.dispatchEvent(new Event('change'));
+      row.querySelector('[data-field=token]').value = '123:ABC';
+      row.querySelector('[data-field=chatId]').value = '-100500';
+      [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Сохранить').click();
+      return { types, maxFields };
+    })()`);
+    await wait(400);
+    const savedChan = savedSettings.at(-1)?.notifications?.channels?.[0];
+    check('каналы: Telegram, MAX, WhatsApp, Rocket.Chat, webhook; у MAX — токен, адресат, адрес API', chanFields.types === 'telegram,max,whatsapp,rocketchat,webhook' && chanFields.maxFields === 'token,chatId,target,apiBase', JSON.stringify(chanFields));
+    check('канал Telegram сохраняется с токеном, chat_id и событиями', savedChan?.type === 'telegram' && savedChan.token === '123:ABC' && savedChan.chatId === '-100500' && savedChan.kinds.join() === 'done,error,scheduled' && savedChan.enabled === true, JSON.stringify(savedChan));
 
     console.log('\n[45] Статусная строка, !команда, доступность (ADR 0074)');
     await wait(300);

@@ -76,7 +76,7 @@ contextBridge.exposeInMainWorld('mai', {
   },
   // Ветка git для статусной строки (CC7.12).
   notify: {
-    test: () => invoke('notify:test'),
+    test: (channelId) => invoke('notify:test', channelId),
   },
   git: {
     branch: (projectDir) => invoke('git:branch', projectDir),

@@ -574,7 +574,13 @@ ipcMain.handle('settings:save', async (_e, patch) => {
   const current = loadSettings();
   if ('allowOutsideProject' in (patch || {}) && Boolean(patch.allowOutsideProject) !== Boolean(current.allowOutsideProject)) requireAdmin();
   // Webhook уведомлений (CW5.4) отправляет данные наружу — только admin.
-  if (patch?.notifications && patch.notifications.webhookUrl !== '***' && String(patch.notifications.webhookUrl || '') !== String(current.notifications?.webhookUrl || '')) requireAdmin();
+  if (patch?.notifications && patch.notifications.webhookUrl !== undefined && patch.notifications.webhookUrl !== '***' && String(patch.notifications.webhookUrl || '') !== String(current.notifications?.webhookUrl || '')) requireAdmin();
+  // Каналы мессенджеров (CW5.4) отправляют данные наружу: любое изменение, кроме маски «***», — только admin.
+  if (Array.isArray(patch?.notifications?.channels)) {
+    const strip = (list) => JSON.stringify((list || []).map(({ token: _t, url: _u, ...rest }) => rest));
+    const secretsChanged = patch.notifications.channels.some((c) => (c.token && c.token !== '***') || (c.url && c.url !== '***'));
+    if (secretsChanged || strip(patch.notifications.channels) !== strip(current.notifications?.channels)) requireAdmin();
+  }
   // Сайты без вопросов для браузера агента (CW4.2) расширяют права — только admin.
   if (patch?.browserSites && JSON.stringify(patch.browserSites.allow || []) !== JSON.stringify(current.browserSites?.allow || [])) requireAdmin();
   if (patch?.shellSandbox && JSON.stringify(normalizeShellSandbox({ ...current.shellSandbox, ...patch.shellSandbox })) !== JSON.stringify(normalizeShellSandbox(current.shellSandbox))) {
@@ -1391,10 +1397,12 @@ const chatTitle = (sessionId) => {
 };
 
 /** Проверка уведомлений из настроек: на рабочем столе — даже при окне в фокусе. */
-ipcMain.handle('notify:test', async () => {
-  const test = createNotifier({ Notification, getSettings: loadSettings, isFocused: () => false, log: (t) => logError({ source: 'notify', message: t }) });
-  const r = await test('done', { title: 'Проверка уведомлений MAI Code', body: 'Так будет выглядеть уведомление, когда агент закончит работу.' });
-  return { ok: true, ...r };
+ipcMain.handle('notify:test', async (_e, channelId) => {
+  const errors = [];
+  const test = createNotifier({ Notification, getSettings: loadSettings, isFocused: () => false, log: (t) => errors.push(t) });
+  const r = await test('done', { title: 'Проверка уведомлений MAI Code', body: 'Так будет выглядеть уведомление, когда агент закончит работу.' }, { channelId: channelId ? String(channelId) : '', force: true });
+  for (const e of errors) logError({ source: 'notify', message: e });
+  return { ok: true, ...r, errors };
 });
 
 /* ---------- фоновые субагенты (CC8.6, ADR 0075) ---------- */
