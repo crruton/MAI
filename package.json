@@ -65,7 +65,8 @@
     "obs:up": "docker compose -f infra/observability/docker-compose.yml up -d",
     "obs:down": "docker compose -f infra/observability/docker-compose.yml down",
     "obs:smoke": "node scripts/otel-smoke.mjs",
-    "harbor:check": "node scripts/harbor-check.mjs"
+    "harbor:check": "node scripts/harbor-check.mjs",
+    "postinstall": "install-electron"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.0",

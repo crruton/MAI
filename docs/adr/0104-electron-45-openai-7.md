@@ -22,6 +22,10 @@
   `"minimatch@>=7.0.0 <11.0.9": "11.0.9"`. `npm audit fix --force` откатил бы
   electron-builder на 24 — хуже; `minimatch@3` и `@5` у `glob@7` и `filelist`
   (другой API) override не трогает.
+- Electron 45 больше не скачивает бинарник при установке (нет `postinstall`,
+  загрузка — при первом `require('electron')`). Задача CI на Windows запускает
+  `electron.exe` по пути и упала с «файл не найден». В `package.json` добавлен
+  `postinstall: install-electron` — `npm ci` снова кладёт бинарник сразу.
 - Итог: `npm audit` — 0 уязвимостей.
 
 ## Проверка
