@@ -387,6 +387,12 @@ macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL чер�
 `runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
 «Система: …; оболочка run_shell: …».
 
+### Локальные модели
+
+ADR 0100. `local-models.js` — `LOCAL_SERVERS`, `detectLocalModels`,
+`providerFromLocal`, `parseModels`. IPC `localModels:detect` (ANY) и
+`localModels:add` (ADMIN). В app.js — блок «Локальные модели» в `openProviders`.
+
 ### Фильтр секретов
 
 ADR 0099. `secret-filter.js` — `SECRET_RULES`, `findSecrets`, `createSecretFilter`

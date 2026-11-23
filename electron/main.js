@@ -101,6 +101,7 @@ import { isSelfCheck, selfCheckOut, runSelfCheck } from './lib/self-check.js';
 import { applySystemCa } from './lib/system-ca.js';
 import { runSignoff } from './lib/signoff.js';
 import { dataBoundaryReport } from './lib/data-boundary.js';
+import { detectLocalModels, providerFromLocal } from './lib/local-models.js';
 import { spawnShell, killTree as killProcessTree } from './lib/proc.js';
 import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions, promptArgs, resolveResourceMentions } from './lib/commands.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
@@ -751,6 +752,22 @@ ipcMain.handle('providers:test', async (_e, id) => {
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }
+});
+
+// Локальные модели (N4, ADR 0100): найти сервер на этой машине и добавить в один клик.
+ipcMain.handle('localModels:detect', () => detectLocalModels({ providers: loadSettings().providers }));
+ipcMain.handle('localModels:add', async (_e, payload = {}) => {
+  requireAdmin();
+  const found = (await detectLocalModels({ providers: loadSettings().providers })).find((f) => f.id === payload.id);
+  if (!found) return { ok: false, error: 'Сервер больше не отвечает — запустите его и нажмите «Найти» ещё раз' };
+  if (!found.models.length) return { ok: false, error: `${found.name} запущен, но моделей нет — загрузите модель` };
+  const settings = loadSettings();
+  const { id, provider } = providerFromLocal(found, settings.providers);
+  const patch = { providers: { ...settings.providers, [id]: provider } };
+  // Первая модель — активной, только если об этом попросили.
+  if (payload.activate) patch.activeModel = `${id}/${provider.models[0].id}`;
+  saveSettings(patch);
+  return { ok: true, id, models: provider.models.length, activeModel: patch.activeModel || '', providers: publicSettings().providers };
 });
 
 // ---------- рантаймы ----------

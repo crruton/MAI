@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('mai', {
     save: (id, provider) => invoke('providers:save', { id, provider }),
     remove: (id) => invoke('providers:remove', id),
     test: (id) => invoke('providers:test', id),
+    // Локальные серверы моделей (N4).
+    detectLocal: () => invoke('localModels:detect'),
+    addLocal: (id, activate = false) => invoke('localModels:add', { id, activate }),
   },
   runtimes: {
     list: () => invoke('runtimes:list'),

@@ -176,6 +176,9 @@ export const IPC_PERMISSIONS = {
   'signoff:run': ADMIN,
   // Отчёт «куда уходят данные» (N2): только чтение.
   'privacy:report': ANY,
+  // Локальные модели (N4).
+  'localModels:detect': ANY,
+  'localModels:add': ADMIN,
 
   // Docker-песочницы
   'sandbox:status': ANY,

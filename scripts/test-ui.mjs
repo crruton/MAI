@@ -586,6 +586,17 @@ ipcMain.handle('signoff:run', (_e, payload) => {
 });
 // Границы данных (раздел [57], N2).
 ipcMain.handle('privacy:report', () => ({ strictLocal: false, counts: { fail: 1, warn: 1, info: 1 }, findings: [{ level: 'fail', area: 'Модели', title: 'Модель чата — облако: OpenAI', detail: 'Запросы уходят на api.openai.com', fix: 'Выберите локальную модель' }, { level: 'warn', area: 'Веб', title: 'Веб-инструменты включены', detail: '…' }, { level: 'info', area: 'MCP', title: 'Локальные MCP-серверы: 1', detail: 'repowise' }], checklist: [{ label: 'модели — локальные', ok: false, detail: 'чата: openai/gpt-5' }, { label: 'телеметрия выключена или локальная', ok: true }] }));
+// Локальные модели (раздел [58], N4).
+const localAdds = [];
+ipcMain.handle('providers:list', () => ({ mai: { name: 'MAI', baseURL: 'https://api-ai.mai.ru/v1', apiKeySet: true, models: [] } }));
+ipcMain.handle('localModels:detect', () => [
+  { id: 'ollama', name: 'Ollama', baseURL: 'http://127.0.0.1:11434/v1', port: 11434, hint: 'ollama serve', models: ['qwen3:8b', 'llama3.2'], empty: false, added: false },
+  { id: 'lmstudio', name: 'LM Studio', baseURL: 'http://127.0.0.1:1234/v1', port: 1234, hint: 'Start Server', models: [], empty: true, added: false },
+]);
+ipcMain.handle('localModels:add', (_e, payload) => {
+  localAdds.push(payload);
+  return { ok: true, id: 'ollama', models: 2 };
+});
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
   projectDir: root,
@@ -2175,6 +2186,16 @@ app.whenReady().then(async () => {
     check('итог, находки по уровням и чек-лист', /Наружу: 1/.test(priv.verdict) && priv.items.length === 3 && /level-fail.*наружу.*OpenAI.*Выберите локальную/.test(priv.items[0]) && priv.list[0].startsWith('✗') && priv.list[1].startsWith('✓'), JSON.stringify(priv));
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
     await ui(`document.querySelector('#input').value = ''`);
+
+    console.log('\n[58] Локальные модели в один клик (N4, ADR 0100)');
+    await ui(`document.querySelector('[data-panel=providers]').click()`);
+    await wait(800);
+    const loc = await ui(`({ items: [...document.querySelectorAll('.local-model')].map((i) => i.textContent), add: document.querySelectorAll('.local-add').length, hint: document.querySelector('.local-models-hint')?.textContent || '' })`);
+    check('найдены Ollama (2 модели, «Добавить») и LM Studio без моделей', loc.items.length === 2 && /Ollama.*2 моделей.*qwen3:8b/.test(loc.items[0]) && /нет моделей/.test(loc.items[1]) && loc.add === 1 && /текстовый протокол/.test(loc.hint), JSON.stringify(loc));
+    await ui(`document.querySelector('.local-add').click()`);
+    await wait(600);
+    check('«Добавить» — провайдер ollama', localAdds.length === 1 && localAdds[0].id === 'ollama', JSON.stringify(localAdds));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
 
     check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {

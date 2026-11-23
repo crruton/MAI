@@ -5344,6 +5344,48 @@ async function openProviders() {
     );
   }
 
+  // Локальные модели (N4, ADR 0100): Ollama, LM Studio, colibri, llama.cpp, Jan.
+  const localBox = el('div', { class: 'list local-models' });
+  const localHint = el('p', { class: 'hint-text local-models-hint', text: 'Ищу запущенные серверы на этом компьютере…' });
+  const renderLocal = (found) => {
+    localBox.replaceChildren();
+    localHint.textContent = found.length
+      ? 'Данные не покидают компьютер. Модель без вызова инструментов работает через текстовый протокол — медленнее и с ошибками чаще.'
+      : 'Не найдено: Ollama (11434), LM Studio (1234), colibri или vLLM (8000), llama.cpp (8080), Jan (1337). Запустите сервер и нажмите «Найти».';
+    for (const f of found) {
+      localBox.append(
+        el('div', { class: 'list-item local-model' }, [
+          el('div', {}, [
+            el('div', { class: 'title' }, [f.name, ' ', el('span', { class: `badge ${f.added ? 'ok' : ''}`, text: f.added ? 'добавлен' : f.empty ? 'нет моделей' : `${f.models.length} моделей` })]),
+            el('div', { class: 'sub', text: `${f.baseURL}${f.models.length ? ` · ${f.models.slice(0, 4).join(', ')}${f.models.length > 4 ? '…' : ''}` : ` · ${f.hint}`}` }),
+          ]),
+          f.added || f.empty
+            ? null
+            : el('div', { class: 'actions' }, [
+                el('button', {
+                  class: 'btn primary local-add',
+                  type: 'button',
+                  text: 'Добавить',
+                  onclick: async () => {
+                    const res = await api.providers.addLocal(f.id, !state.settings?.activeModel);
+                    if (!res.ok) return toast(res.error, 'err');
+                    state.settings = await api.settings.get();
+                    await loadModels(true);
+                    toast(`${f.name}: добавлено моделей ${res.models}`, 'ok');
+                    modal.close();
+                    openProviders();
+                  },
+                }),
+              ]),
+        ]),
+      );
+    }
+  };
+  const findLocal = async () => {
+    localHint.textContent = 'Ищу запущенные серверы на этом компьютере…';
+    renderLocal(await api.providers.detectLocal().catch(() => []));
+  };
+
   const modal = openModal({
     title: 'Провайдеры',
     body: [
@@ -5352,6 +5394,9 @@ async function openProviders() {
         class: 'hint-text',
         text: 'Любой OpenAI-совместимый шлюз: MAI, AgentRouter, OpenAI, DeepSeek. Anthropic подключается через совместимый режим.',
       }),
+      el('div', { class: 'docs-group-title' }, ['Локальные модели ', el('button', { class: 'btn small ghost local-find', type: 'button', text: 'Найти', onclick: findLocal })]),
+      localHint,
+      localBox,
     ],
     footer: [
       el('button', {
@@ -5365,6 +5410,7 @@ async function openProviders() {
       }),
     ],
   });
+  findLocal();
 }
 
 /* ---------- рантаймы ---------- */
