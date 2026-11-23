@@ -28,7 +28,8 @@
 - **Инструменты агента**:
   - `read_file`, `list_files`, `grep` — чтение проекта;
   - `write_file`, `edit_file` — правки;
-  - `run_shell` — команды в папке проекта (таймаут 180 с);
+  - `run_shell` — команды в папке проекта (таймаут 180 с) в оболочке из настроек:
+    по умолчанию cmd.exe на Windows, bash/zsh/sh на macOS и Linux, можно PowerShell (ADR 0096);
   - `load_skill` — загрузка навыка по имени;
   - `ocr` — текст с картинки и скана PDF (ADR 0084);
   - `notebook_edit` — ячейки Jupyter; `diagnostics` — ошибки компилятора и линтера

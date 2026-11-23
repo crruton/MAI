@@ -4327,6 +4327,14 @@ async function openSettings() {
   guardExtra.value = (guard.extraDeny || []).join('\n');
   // Песочница для команд агента (ADR 0040).
   const shellBox = settings.shellSandbox || {};
+  // Оболочка команд агента (F26): auto — по ОС.
+  const isWin = /Windows/i.test(navigator.userAgent);
+  const shellKind = el('select', { class: 'shell-kind' }, [
+    el('option', { value: 'auto', text: isWin ? 'авто — cmd.exe' : 'авто — $SHELL (bash/zsh) или sh' }),
+    ...(isWin ? [el('option', { value: 'cmd', text: 'cmd.exe' }), el('option', { value: 'powershell', text: 'Windows PowerShell' })] : [el('option', { value: 'bash', text: 'bash' }), el('option', { value: 'zsh', text: 'zsh' }), el('option', { value: 'sh', text: 'sh' })]),
+    el('option', { value: 'pwsh', text: 'PowerShell 7 (pwsh)' }),
+  ]);
+  shellKind.value = settings.shell || 'auto';
   const shellMode = el('select', { class: 'shell-sandbox-mode' }, [
     el('option', { value: 'off', text: 'выключена — команды на компьютере' }),
     el('option', { value: 'docker', text: 'всегда в Docker' }),
@@ -4514,6 +4522,7 @@ async function openSettings() {
         text: 'Guardrails не заменяют песочницу: внешние рантаймы запускаются как отдельные процессы/контейнеры и не проходят эти проверки.',
       }),
       el('div', { class: 'docs-group-title', text: 'Команды агента' }),
+      field('Оболочка run_shell на компьютере', shellKind),
       field('Песочница run_shell (проект в /workspace, папки чата в /mnt, без лишних прав)', shellMode),
       el('div', { class: 'row' }, [field('Образ', shellImage), field('Сеть в контейнере', shellNetwork)]),
       field('На хосте (маски)', shellHost),
@@ -4601,6 +4610,7 @@ async function openSettings() {
               extraDeny: guardExtra.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
             },
             webSearch: { provider: webProvider.value, url: webUrl.value.trim(), apiKey: webKey.value, allowPrivate: webPrivate.checked },
+            shell: shellKind.value || 'auto',
             shellSandbox: {
               mode: shellMode.value,
               image: shellImage.value.trim(),

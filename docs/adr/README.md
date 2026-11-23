@@ -111,3 +111,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0093](0093-korporativnyy-vhod-keycloak.md) | Корпоративный режим: обязательный вход через Keycloak и продление сессии | accepted | 2026-11-23 |
 | [0094](0094-metriki-agenta-grafana.md) | Метрики агента и панели Grafana | accepted | 2026-11-23 |
 | [0095](0095-ustanovshchik-v-ci-i-sistemnye-sertifikaty.md) | Установщик в CI на чистом Windows и системные сертификаты в процессе | accepted | 2026-11-23 |
+| [0096](0096-krossplatformennye-ispolniteli.md) | Кроссплатформенные исполнители: выбор оболочки и остановка дерева процессов | accepted | 2026-11-23 |

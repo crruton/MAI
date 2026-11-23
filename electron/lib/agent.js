@@ -12,7 +12,7 @@ import {
   supportsTemperature,
 } from './responses.js';
 import { fsTools } from './tools/fs.js';
-import { shellTools, backgroundTools } from './tools/shell.js';
+import { shellTools, backgroundTools, setShellPreference, currentShellLabel } from './tools/shell.js';
 import { skillTools } from './tools/skills.js';
 import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
@@ -87,11 +87,15 @@ const TASK_PROMPT = `Ты — MAI, помощник для рабочих зад
 /** Инструменты, скрытые в режиме «Задача»: про код и репозиторий. */
 export const CODE_ONLY_TOOLS = new Set(['diagnostics', 'repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search']);
 
-export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true, extraDirs = [], kind = 'code', compatInstructions = true }) {
+const OS_NAMES = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' };
+
+export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true, extraDirs = [], kind = 'code', compatInstructions = true, shell = '' }) {
   const agents = readAgents(projectDir);
   const memory = readMemory(projectDir);
   const task = kind === 'task';
   const parts = [task ? TASK_PROMPT : BASE_PROMPT, `\n${task ? 'Основная рабочая папка' : 'Рабочая папка проекта'}: ${projectDir}`];
+  // ОС и оболочка run_shell (F26): команды — в синтаксисе этой оболочки.
+  parts.push(`Система: ${OS_NAMES[process.platform] || process.platform}; оболочка run_shell: ${shell || currentShellLabel()}.`);
   const roots = describeRoots(normalizeRoots(projectDir, extraDirs));
   if (roots) parts.push(roots);
   parts.push(`\n${modePrompt(mode)}`);
@@ -807,6 +811,8 @@ async function runAgentInner({
       : null;
     // tools — что видит модель; allTools — что можно выполнить (вызов неподгруженного тоже сработает).
     const tools = searchEntry ? [...exposed, searchEntry] : exposed;
+    // Оболочка команд агента (F26, ADR 0096) — из настроек на каждый прогон.
+    setShellPreference(settings.shell);
     const system =
       systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs, kind, compatInstructions: settings.compatInstructions !== false }) +
       projectPrompt(project) +

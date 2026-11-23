@@ -622,6 +622,8 @@ ipcMain.handle('settings:save', async (_e, patch) => {
   }
   const current = loadSettings();
   if ('allowOutsideProject' in (patch || {}) && Boolean(patch.allowOutsideProject) !== Boolean(current.allowOutsideProject)) requireAdmin();
+  // Оболочка команд агента (F26) меняет, как исполняются команды, — только admin.
+  if ('shell' in (patch || {}) && String(patch.shell || 'auto') !== String(current.shell || 'auto')) requireAdmin();
   // Webhook уведомлений (CW5.4) отправляет данные наружу — только admin.
   if (patch?.notifications && patch.notifications.webhookUrl !== undefined && patch.notifications.webhookUrl !== '***' && String(patch.notifications.webhookUrl || '') !== String(current.notifications?.webhookUrl || '')) requireAdmin();
   // Каналы мессенджеров (CW5.4) отправляют данные наружу: любое изменение, кроме маски «***», — только admin.

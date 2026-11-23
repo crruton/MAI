@@ -379,6 +379,14 @@ ADR 0094. `metrics.js` — `createMetrics` (`fromSpan`, `toOtlp`), `priceOf`,
 и при выходе. Дашборд `infra/observability/grafana/dashboards/mai-code-overview.json`
 — строка «Агент».
 
+### Процессы и оболочки
+
+ADR 0096. `proc.js` — `shellFor`, `shellLabel`, `spawnShell` (своя группа на
+macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL через 3 с). Его
+используют `tools/shell.js` (`setShellPreference` из `settings.shell` в
+`runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
+«Система: …; оболочка run_shell: …».
+
 ### Рантаймы: версия и перенос
 
 ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,

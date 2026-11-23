@@ -4,6 +4,7 @@ import { checkCommand } from '../guardrails.js';
 import { createOutputDecoder, withUtf8Console } from '../encoding.js';
 import { sandboxPlan, dockerRunArgs } from '../shell-sandbox.js';
 import { normalizeRoots, resolveIn } from '../workroots.js';
+import { killTree as killProcessTree, spawnShell, shellLabel } from '../proc.js';
 
 const MAX_OUTPUT = 200_000; // дальше — единый лимит runToolCall: остальное в файл (CC1.13)
 const TIMEOUT_MS = 180_000;
@@ -59,7 +60,7 @@ export const shellTools = [
       function: {
         name: 'run_shell',
         description:
-          'Выполнить команду в папке проекта (cmd.exe на Windows). Подтверждение зависит от режима разрешений. Возвращает stdout, stderr и код возврата.',
+          'Выполнить команду в папке проекта в оболочке из настроек (по умолчанию cmd.exe на Windows, bash/zsh/sh на macOS и Linux). Подтверждение зависит от режима разрешений. Возвращает stdout, stderr и код возврата.',
         parameters: {
           type: 'object',
           properties: {
@@ -109,36 +110,25 @@ export const shellTools = [
   },
 ];
 
-/** Останавливает команду вместе с дочерними процессами (npm → node → …). */
-function killTree(child) {
-  try {
-    if (process.platform === 'win32' && child.pid) {
-      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-    } else if (child.pid) {
-      // Команда запущена в своей группе процессов: минус pid останавливает всю группу.
-      process.kill(-child.pid, 'SIGTERM');
-    }
-  } catch {
-    try {
-      child.kill();
-    } catch {
-      /* процесс уже завершён */
-    }
-  }
+/** Останавливает команду вместе с дочерними процессами (npm → node → …), F26: proc.js. */
+const killTree = (child) => killProcessTree(child);
+
+/**
+ * Оболочка команд агента (F26, ADR 0096): settings.shell — auto (cmd.exe на
+ * Windows, $SHELL bash/zsh или sh на macOS/Linux), cmd, powershell, pwsh, bash, zsh, sh.
+ */
+let shellPreference = 'auto';
+export function setShellPreference(name) {
+  shellPreference = String(name || 'auto');
 }
+export const currentShellLabel = () => shellLabel({ shell: shellPreference });
 
 /** Запуск процесса: на хосте — оболочка, в песочнице — `docker run`. kill() останавливает вместе с потомками. */
 function spawnCommand(command, cwd, container) {
   // В контейнере — `docker run` без оболочки хоста; остановка — `docker kill`.
   const child = container
     ? spawn('docker', container.build(container.name), { cwd, windowsHide: true, env: { ...process.env, FORCE_COLOR: '0' } })
-    : spawn(withUtf8Console(command), {
-        cwd,
-        shell: true,
-        windowsHide: true,
-        detached: process.platform !== 'win32',
-        env: { ...process.env, FORCE_COLOR: '0' },
-      });
+    : spawnShell(command, { shell: shellPreference, cwd, env: { ...process.env, FORCE_COLOR: '0' }, wrapCmd: withUtf8Console });
   if (container) child.stdin?.end();
   const kill = () => {
     if (container) {

@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { killTree as killProcessTree } from './proc.js';
 import { createOutputDecoder } from './encoding.js';
 
 export const HOOK_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'PreCompact', 'SessionStart'];
@@ -95,14 +96,9 @@ function runCommand(command, { input, cwd, timeout, env }) {
     const timer = setTimeout(() => {
       timedOut = true;
       try {
-        if (process.platform === 'win32' && child.pid) spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-        else if (child.pid) process.kill(-child.pid, 'SIGKILL');
+        killProcessTree(child, { signal: 'SIGKILL' });
       } catch {
-        try {
-          child.kill();
-        } catch {
-          /* уже завершён */
-        }
+        /* уже завершён */
       }
     }, timeout * 1000);
     const decodeOut = createOutputDecoder();
