@@ -2397,6 +2397,7 @@ async function openOnboarding() {
       step([el('p', { class: 'error-text', text: `Не удалось установить набор: ${result?.error || 'ошибка'}` })], [el('button', { class: 'btn', type: 'button', text: 'Назад', onclick: roles })]);
       return;
     }
+    for (const w of result.warnings || []) toast(w, 'err');
     connectors(result.package);
   };
 
@@ -2902,6 +2903,8 @@ async function openPackages() {
       return;
     }
     toast(`Установлен ${r.package.name}: ${packageParts(r.package.parts)}`, 'ok');
+    // Дубли навыков (CC10.5): какой будет работать.
+    for (const w of r.warnings || []) toast(w, 'err');
     source.value = '';
     state.commands = null;
     render();
@@ -2950,6 +2953,7 @@ async function openPackages() {
                             e.currentTarget.disabled = false;
                             return;
                           }
+                          for (const w of r.warnings || []) toast(w, 'err');
                           toast(`${p.updateAvailable ? 'Обновлён' : 'Установлен'} ${r.package.name} ${r.package.version || ''}: ${packageParts(r.package.parts)}`, 'ok');
                           state.commands = null;
                           renderMarket(r);
@@ -4186,6 +4190,9 @@ async function openSettings() {
     box.checked = statusOn.has(key);
     return el('label', { class: 'hint-text' }, [box, ` ${label} `]);
   });
+  // Инструкции других агентов (CC4.6).
+  const compat = el('input', { type: 'checkbox', class: 'compat-instructions' });
+  compat.checked = settings.compatInstructions !== false;
   // Чаты (CC6.8, CC6.9).
   const autoTitle = el('input', { type: 'checkbox', class: 'auto-title' });
   autoTitle.checked = settings.autoTitle !== false;
@@ -4336,6 +4343,10 @@ async function openSettings() {
       ]),
       el('div', { class: 'field' }, [el('span', { text: 'Статусная строка под полем ввода' }), el('div', { class: 'statusline-items' }, statusBoxes)]),
       el('label', { class: 'field' }, [
+        el('span', { text: 'Инструкции других агентов' }),
+        el('label', { class: 'hint-text' }, [compat, ' читать также CLAUDE.md, GEMINI.md, правила Cursor и Copilot (повторы AGENTS.md пропускаются)']),
+      ]),
+      el('label', { class: 'field' }, [
         el('span', { text: 'Чаты' }),
         el('label', { class: 'hint-text' }, [autoTitle, ' название чата придумывает модель после первого ответа (переименованные вручную не трогает)']),
       ]),
@@ -4449,6 +4460,7 @@ async function openSettings() {
             allowOutsideProject: outside.checked,
             browserEnabled: browserEnabled.checked,
             autoTitle: autoTitle.checked,
+            compatInstructions: compat.checked,
             theme: theme.value,
             statusLine: STATUS_ITEMS.map(([key]) => key).filter((key) => statusBoxes.some((l) => l.querySelector(`[data-item=${key}]`)?.checked)),
             sessionRetentionDays: Math.max(0, Math.min(3650, Math.round(Number(retention.value) || 0))),
@@ -4553,6 +4565,21 @@ async function openMemory() {
   projectArea.value = data.project;
   const globalArea = el('textarea', { rows: '8', placeholder: 'Общие уроки для всех проектов…' });
   globalArea.value = data.global;
+  // Индикатор: сколько памяти попадает в промпт (CC4.5).
+  const meter = (area, scope) => {
+    const limit = data.limits?.[scope]?.limit || (scope === 'project' ? 12000 : 6000);
+    const node = el('p', { class: `hint-text memory-meter memory-meter-${scope}` });
+    const update = () => {
+      const size = area.value.trim().length;
+      node.textContent = size > limit ? `⚠ ${size} символов из ${limit}: агент видит в промпте только первые ${limit}, остальное — по запросу memory_read. Сократите или перенесите в AGENTS.md.` : `${size} из ${limit} символов в промпте`;
+      node.classList.toggle('over', size > limit);
+    };
+    area.addEventListener('input', update);
+    update();
+    return node;
+  };
+  const projectMeter = meter(projectArea, 'project');
+  const globalMeter = meter(globalArea, 'global');
 
   const historyTitle = el('p', { class: 'hint-text', text: 'История версий: проект' });
   const historyBox = el('div', { class: 'list' });
@@ -4620,8 +4647,10 @@ async function openMemory() {
       }),
       el('p', { class: 'hint-text', text: data.projectFile }),
       projectArea,
+      projectMeter,
       el('p', { class: 'hint-text', text: data.globalFile }),
       globalArea,
+      globalMeter,
       el('hr', { style: 'border:0;border-top:1px solid var(--border-soft)' }),
       el('div', { class: 'row' }, [
         el('button', { class: 'btn ghost', type: 'button', text: 'Версии проекта', onclick: () => renderHistory('project') }),
@@ -4926,7 +4955,7 @@ async function openSkills() {
       el('div', { class: 'list-item' }, [
         el('div', {}, [
           el('div', { class: 'title', text: skill.name }),
-          el('div', { class: 'sub', text: `${skill.description || 'без описания'} · ${skill.scope}` }),
+          el('div', { class: 'sub', text: `${skill.description || 'без описания'} · ${skill.scope}${skill.overriddenBy ? ` · не используется: перекрыт навыком «${skill.overriddenBy}» с тем же именем` : ''}` }),
         ]),
         el('div', { class: 'actions' }, [
           el('button', { class: 'btn ghost', type: 'button', text: 'Файл', onclick: () => api.showItem(skill.file) }),

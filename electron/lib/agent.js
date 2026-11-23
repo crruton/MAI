@@ -27,13 +27,14 @@ import { interactiveTools } from './tools/interactive.js';
 import { todoTools } from './tools/todo.js';
 import { nestedInstructions, projectInstructions } from './instructions.js';
 import { agentToolSchema, isReadOnlyDef, NEVER_FOR_SUBAGENT } from './agent-defs.js';
-import { listSkills, readAgents, readMemory } from './skills.js';
+import { listSkills, uniqueSkills, readAgents, readMemory } from './skills.js';
+import { memoryForPrompt } from './memory-limits.js';
 import { reviewAnswer, reviewContext, parseVerdict, VERIFY_PROMPT } from './reviewer.js';
 import { modePrompt } from './permissions.js';
 import { effectiveMode, mergeRules, classifyTool, browserSiteRules } from './policy.js';
 import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
 import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DELAYS } from './retry.js';
-import { modelCapabilities, requestOptions } from './capabilities.js';
+import { modelCapabilities, requestOptions, withCacheControl } from './capabilities.js';
 import { NO_TRACER } from './tracer.js';
 import { projectPrompt, connectorAllowed } from './projects.js';
 import { effectiveSandbox } from './shell-sandbox.js';
@@ -82,7 +83,7 @@ const TASK_PROMPT = `Ты — MAI, помощник для рабочих зад
 /** Инструменты, скрытые в режиме «Задача»: про код и репозиторий. */
 export const CODE_ONLY_TOOLS = new Set(['diagnostics', 'repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search']);
 
-export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true, extraDirs = [], kind = 'code' }) {
+export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true, extraDirs = [], kind = 'code', compatInstructions = true }) {
   const agents = readAgents(projectDir);
   const memory = readMemory(projectDir);
   const task = kind === 'task';
@@ -101,16 +102,17 @@ export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = tr
   if (agents.global.trim()) parts.push(`\n# Глобальные инструкции (AGENTS.md)\n${agents.global.trim()}`);
   if (trusted) {
     // AGENTS.md и AGENTS.local.md проекта с подстановкой @импортов (CC4.1, CC4.2).
-    for (const item of projectInstructions(projectDir)) {
+    for (const item of projectInstructions(projectDir, { compat: compatInstructions })) {
       parts.push(`\n# Инструкции проекта (${item.name})\n${item.text.trim()}`);
     }
     parts.push('\nВ подпапках бывают свои AGENTS.md: их правила приходят вместе с результатом инструмента и действуют для файлов этой папки.');
   }
+  // Обрезанная память помечается — агент знает, что дочитать memory_read (CC4.5).
   if (memory.global.trim()) {
-    parts.push(`\n# Глобальная память (memory.md)\n${memory.global.trim().slice(0, 6000)}`);
+    parts.push(`\n# Глобальная память (memory.md)\n${memoryForPrompt(memory.global, 'global').text}`);
   }
   if (trusted && memory.project.trim()) {
-    parts.push(`\n# Память проекта (memory.md)\n${memory.project.trim().slice(0, 12000)}`);
+    parts.push(`\n# Память проекта (memory.md)\n${memoryForPrompt(memory.project, 'project').text}`);
   }
   parts.push(
     '\n# Память\nИнструмент memory_read читает память и историю версий. ' +
@@ -264,7 +266,7 @@ export async function suggestTitle({ provider, model, request, answer = '', sign
 
 /** Разбор контекста для /context: системный промпт и инструменты как у агента. */
 export function describeContext({ settings, projectDir, mode, trusted = true, mcp, history = [], window = DEFAULT_CONTEXT, skillDirs = [], kind = 'code' }) {
-  const skills = listSkills(projectDir, { includeProject: trusted, extraDirs: skillDirs });
+  const skills = uniqueSkills(listSkills(projectDir, { includeProject: trusted, extraDirs: skillDirs }));
   const system = systemPrompt({ projectDir, skills, mcpStatus: mcp?.status?.() || [], mode, trusted, kind });
   const tools = [...fsTools, ...shellTools, ...skillTools, ...memoryTools, ...interactiveTools, ...todoTools]
     .map((t) => t.schema)
@@ -436,6 +438,8 @@ async function runAgentInner({
   let caps = modelCapabilities(model, provider);
   let useResponses = caps.transport === 'responses';
   let effortSupported = true;
+  // Кэш промпта (CC5.4): шлюз отверг cache_control — дальше без меток.
+  let cacheSupported = true;
   let toolsNoticeShown = false;
   // Модель без tool calling (CC13.4, ADR 0078): инструменты — текстовым протоколом.
   // Выключается settings.textToolProtocol = false — тогда агент только отвечает текстом.
@@ -454,7 +458,7 @@ async function runAgentInner({
   let streamUsage = true;
   let runUsage = null;
   // Навыки пакетов (ADR 0037) — вместе с проектными и глобальными.
-  const skills = listSkills(projectDir, { includeProject: trusted, extraDirs: skillDirs });
+  const skills = uniqueSkills(listSkills(projectDir, { includeProject: trusted, extraDirs: skillDirs }));
   const repoTools = settings.repowise?.enabled ? repowiseTools : [];
 
   // Режим и правила читаются на каждый вызов: переключение в интерфейсе
@@ -772,7 +776,7 @@ async function runAgentInner({
     // tools — что видит модель; allTools — что можно выполнить (вызов неподгруженного тоже сработает).
     const tools = searchEntry ? [...exposed, searchEntry] : exposed;
     const system =
-      systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs, kind }) +
+      systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs, kind, compatInstructions: settings.compatInstructions !== false }) +
       projectPrompt(project) +
       deferredPrompt(deferred) +
       (subagent
@@ -873,7 +877,8 @@ async function runAgentInner({
           }
           const body = {
             model,
-            messages: requestMessages,
+            // Кэш промпта (CC5.4): метки cache_control там, где провайдер их понимает.
+            messages: caps.cache && cacheSupported && settings.promptCache !== false ? withCacheControl(requestMessages) : requestMessages,
             ...(caps.tools && !textTools ? { tools: tools.map((t) => t.schema) } : {}),
             ...requestOptions(caps, { temperature: settings.temperature ?? 0.3, effort: effortSupported ? effort : '' }),
             stream: true,
@@ -886,7 +891,12 @@ async function runAgentInner({
             );
           } catch (err) {
             // Шлюз не знает reasoning_effort — повторяем без него и больше не шлём (CC7.11).
-            if (body.reasoning_effort && /reasoning_effort|reasoning|unrecognized|unknown param|extra.?(inputs|fields)/i.test(String(err?.message || ''))) {
+            if (cacheSupported && body.messages !== requestMessages && /cache_control/i.test(String(err?.message || ''))) {
+              cacheSupported = false;
+              body.messages = requestMessages;
+              emit({ type: 'notice', text: `${model}: шлюз не принимает метки кэша — без них` });
+              stream = await client.chat.completions.create(streamUsage ? { ...body, stream_options: { include_usage: true } } : body, { signal: guard.signal });
+            } else if (body.reasoning_effort && /reasoning_effort|reasoning|unrecognized|unknown param|extra.?(inputs|fields)/i.test(String(err?.message || ''))) {
               effortSupported = false;
               delete body.reasoning_effort;
               emit({ type: 'notice', text: `${model}: шлюз не принимает глубину рассуждений — без неё` });

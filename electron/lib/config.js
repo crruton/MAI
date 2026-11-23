@@ -23,6 +23,8 @@ const DEFAULTS = {
   autoTitle: true,
   // Диагностика после правок кода (CC1.11): tsc/eslint/ruff проекта — может быть медленной.
   autoDiagnostics: false,
+  // Инструкции других агентов (CC4.6): CLAUDE.md, GEMINI.md, правила Cursor и Copilot.
+  compatInstructions: true,
   // Отложенные инструменты (CC1.12): больше стольких MCP/плагинов — схемы по запросу (0 — никогда).
   deferToolsOver: 25,
   sessionRetentionDays: 0,

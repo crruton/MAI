@@ -805,8 +805,21 @@ app.whenReady().then(async () => {
         areas,
         items,
         title: document.querySelector('.modal-head h2')?.innerText || '',
+        // Индикатор предела (CC4.5): длинный текст — предупреждение.
+        meter: (() => {
+          const area = body.querySelectorAll('textarea')[0];
+          const before = body.querySelector('.memory-meter-project')?.textContent || '';
+          area.value = 'x'.repeat(12050);
+          area.dispatchEvent(new Event('input'));
+          const node = body.querySelector('.memory-meter-project');
+          const after = { text: node?.textContent || '', over: node?.classList.contains('over') };
+          area.value = 'память проекта';
+          area.dispatchEvent(new Event('input'));
+          return { before, after };
+        })(),
       };
     })()`);
+    check('индикатор памяти: размер из предела, сверх — предупреждение', /^14 из 12000 символов в промпте$/.test(memoryPanel.meter?.before) && memoryPanel.meter?.after?.over && /только первые 12000/.test(memoryPanel.meter?.after?.text), JSON.stringify(memoryPanel.meter));
     check('кнопка панели «Память» найдена', memoryPanel.found === true);
     check('окно памяти открылось', memoryPanel.open === true, JSON.stringify(memoryPanel));
     check('заголовок окна памяти', memoryPanel.title === 'Память (memory.md)', memoryPanel.title);

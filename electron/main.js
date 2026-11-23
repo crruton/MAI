@@ -33,6 +33,7 @@ import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalize
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { listRoles, installRole } from './lib/roles.js';
+import { skillConflicts } from './lib/skills.js';
 import { wrapData } from './lib/injection.js';
 import { localConnectors } from './lib/local-connectors.js';
 import { currentBranch } from './lib/git-guard.js';
@@ -2188,11 +2189,23 @@ ipcMain.handle('roles:install', async (_e, id) => {
     saveSettings({ packages: { ...(settings.packages || {}), [pkg.name]: { ...(settings.packages?.[pkg.name] || {}), enabled: true } }, onboarding: { ...(settings.onboarding || {}), role: role.id } });
     audit({ at: new Date().toISOString(), tool: 'role:install', source: 'user', cls: 'external', subject: `${role.id} → ${pkg.name} ${role.version}`, decision: 'allow' });
     const { dir: _dir, ...clean } = role;
-    return { ok: true, role: clean, package: { name: pkg.name, parts: pkg.parts } };
+    return { ok: true, role: clean, package: { name: pkg.name, parts: pkg.parts }, warnings: packageSkillWarnings(pkg.name) };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }
 });
+
+/** Навыки только что установленного пакета против уже стоящих (CC10.5). */
+function packageSkillWarnings(pkgName) {
+  try {
+    const dir = loadSettings().projectDir;
+    const all = listSkills(dir, { includeProject: isTrusted(dir), extraDirs: packageDirs(packagesFor(dir), 'skills') });
+    const mine = all.filter((s) => s.scope === `package:${pkgName}`).map((s) => s.name);
+    return skillConflicts(all, mine, `package:${pkgName}`);
+  } catch {
+    return [];
+  }
+}
 
 /** Установка из папки или git-URL в глобальные пакеты. Код пакета исполняется — только admin. */
 ipcMain.handle('packages:install', async (_e, payload = {}) => {
@@ -2201,7 +2214,7 @@ ipcMain.handle('packages:install', async (_e, payload = {}) => {
     retirePluginHosts();
     await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
     audit({ at: new Date().toISOString(), tool: 'package:install', source: 'user', cls: 'external', subject: `${pkg.name} ← ${String(payload.from).slice(0, 300)}`, decision: 'allow' });
-    return { ok: true, package: pkg };
+    return { ok: true, package: pkg, warnings: packageSkillWarnings(pkg.name) };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }
@@ -2438,7 +2451,7 @@ ipcMain.handle('marketplace:install', async (_e, payload = {}) => {
     retirePluginHosts();
     await mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
     audit({ at: new Date().toISOString(), tool: 'package:install', source: 'user', cls: 'external', subject: `${pkg.name} ${pkg.version} ← каталог ${market.name}`, decision: 'allow' });
-    return { ok: true, package: pkg, ...marketplaceView() };
+    return { ok: true, package: pkg, warnings: packageSkillWarnings(pkg.name), ...marketplaceView() };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }
@@ -2628,9 +2641,16 @@ ipcMain.handle('memory:restore', (_e, payload) => {
 
 // ---------- навыки ----------
 
-ipcMain.handle('skills:list', (_e, projectDir) =>
-  listSkills(projectDir).map(({ name, description, scope, file }) => ({ name, description, scope, file })),
-);
+// Дубли (CC10.5): у второго и дальше с тем же именем — кто его перекрывает.
+ipcMain.handle('skills:list', (_e, projectDir) => {
+  const seen = new Map();
+  return listSkills(projectDir).map(({ name, description, scope, file }) => {
+    const key = String(name).toLowerCase();
+    const overriddenBy = seen.get(key) || '';
+    if (!overriddenBy) seen.set(key, scope);
+    return { name, description, scope, file, ...(overriddenBy ? { overriddenBy } : {}) };
+  });
+});
 ipcMain.handle('skills:create', (_e, { projectDir, ...data }) => {
   requireAdmin();
   return createSkill(projectDir, data);

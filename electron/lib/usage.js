@@ -8,8 +8,9 @@ export function normalizeUsage(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const input = Number(raw.prompt_tokens ?? raw.input_tokens ?? 0) || 0;
   const output = Number(raw.completion_tokens ?? raw.output_tokens ?? 0) || 0;
+  // Кэш (CC5.4): OpenAI/Responses, DeepSeek, Anthropic через совместимые шлюзы.
   const cached =
-    Number(raw.prompt_tokens_details?.cached_tokens ?? raw.input_tokens_details?.cached_tokens ?? raw.prompt_cache_hit_tokens ?? 0) || 0;
+    Number(raw.prompt_tokens_details?.cached_tokens ?? raw.input_tokens_details?.cached_tokens ?? raw.prompt_cache_hit_tokens ?? raw.cache_read_input_tokens ?? 0) || 0;
   const total = Number(raw.total_tokens ?? input + output) || input + output;
   if (!input && !output && !total) return null;
   return { input, output, total, cached };

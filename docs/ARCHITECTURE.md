@@ -312,6 +312,15 @@ ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый про�
 автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
 сообщения. IPC `hooks:list(projectDir)`.
 
+### Память, совместимость, кэш, дубли навыков
+
+ADR 0080. `memory-limits.js` — `MEMORY_LIMITS`, `memoryForPrompt` (в
+`systemPrompt`); `instructions.js` — `projectInstructions(dir, { compat })`,
+`cursorRules`; `capabilities.js` — флаг `cache`, `withCacheControl` (в теле
+chat.completions, отказ шлюза → `cacheSupported = false`);
+`skill-conflicts.js` — `uniqueSkills` (промпт агента), `skillConflicts`
+(`packageSkillWarnings` в main при установке).
+
 ### Ноутбуки, диагностика, отложенные инструменты
 
 ADR 0079. `tools/notebook.js` — `renderNotebook` (в `read_file` для

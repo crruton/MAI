@@ -1447,6 +1447,31 @@ console.log('\n[28] Проект: инструкции в промпте и то
   check('инструмент diagnostics есть у агента в «Коде»', names(diagBodies[0]).includes('diagnostics') && names(diagBodies[0]).includes('notebook_edit'));
 }
 
+{
+  console.log('\n[35] Кэш промпта (CC5.4, ADR 0080)');
+  const bodies = [];
+  await runAgent(base({ model: 'claude-sonnet-4.5', messages: [{ role: 'user', content: 'привет' }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'ок' }], bodies), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('Claude: cache_control на системном промпте и последнем сообщении', bodies[0].messages[0].content?.[0]?.cache_control?.type === 'ephemeral' && bodies[0].messages.at(-1).content?.[0]?.cache_control?.type === 'ephemeral', JSON.stringify(bodies[0].messages.at(-1)));
+  const plain = [];
+  await runAgent(base({ model: 'gpt-5', messages: [{ role: 'user', content: 'привет' }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'ок' }], plain), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('остальные модели — без меток (префикс кэшируется сам)', typeof plain[0].messages[0].content === 'string');
+  const sent = [];
+  const notices = [];
+  const strict = () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          sent.push(JSON.parse(JSON.stringify(body)));
+          if (Array.isArray(body.messages[0].content)) throw Object.assign(new Error('400 Extra inputs are not permitted: messages.0.content.0.cache_control'), { status: 400 });
+          return stream({ text: 'ок' });
+        },
+      },
+    },
+  });
+  const h = await runAgent(base({ model: 'claude-x', messages: [{ role: 'user', content: 'привет' }], mcp: fakeMcp(), emit: (e) => e.type === 'notice' && notices.push(e.text), clientFactory: strict, policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('шлюз отверг метки — повтор без них, уведомление', sent.length === 2 && typeof sent[1].messages[0].content === 'string' && h.at(-1)?.content === 'ок' && notices.some((t) => /метки кэша/.test(t)), JSON.stringify(notices));
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();
