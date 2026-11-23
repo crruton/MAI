@@ -54,6 +54,8 @@ export function listSkills(projectDir, { includeProject = true, extraDirs = [] }
   return skills;
 }
 
+export { uniqueSkills, skillConflicts } from './skill-conflicts.js';
+
 /** Файлы навыка кроме SKILL.md — третий уровень загрузки (CC10.4). Пути относительно папки навыка. */
 export function skillFiles(skill, { limit = 200 } = {}) {
   const root = path.dirname(skill.file);

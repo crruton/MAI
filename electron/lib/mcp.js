@@ -1,12 +1,16 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { createOAuthProvider, startCallbackServer, DEFAULT_CALLBACK_PORT, NeedsLoginError } from './mcp-oauth.js';
 
 /**
  * Держит подключения к MCP-серверам из настроек.
- * Поддержаны два транспорта: локальный процесс (stdio) и HTTP (streamable http).
+ * Транспорты: локальный процесс (stdio), streamable HTTP и SSE для старых
+ * серверов (CC9.6, ADR 0071): `transport: "sse"` — сразу SSE; без указания —
+ * streamable HTTP, а если сервер его не понимает (не ошибка входа) — SSE.
+ * Кроме инструментов — ресурсы (CC9.3) и промпты (CC9.4), если сервер их даёт.
  * Для HTTP — OAuth (ADR 0041): вход только по кнопке «Войти», токены в
  * зашифрованном хранилище, обновление токена — в SDK.
  */
@@ -32,6 +36,14 @@ function withTimeout(promise, ms, message, signal) {
     if (timer) clearTimeout(timer);
     if (onAbort) signal.removeEventListener('abort', onAbort);
   });
+}
+
+/** Явно заданный транспорт: `transport` или `type` из .mcp.json Claude Code. '' — не задан. */
+export function declaredTransport(config = {}) {
+  const raw = String(config.transport || config.type || '').toLowerCase();
+  if (raw === 'sse') return 'sse';
+  if (raw === 'http' || raw === 'streamable-http' || raw === 'streamablehttp') return 'http';
+  return '';
 }
 
 function isAuthError(err) {
@@ -62,11 +74,12 @@ export class McpManager {
     return createOAuthProvider({ server: name, store: this.oauth.store, redirectUrl, onAuthorize });
   }
 
-  transportFor(name, config, authProvider) {
-    return new StreamableHTTPClientTransport(new URL(config.url), {
+  transportFor(name, config, authProvider, kind = declaredTransport(config) || 'http') {
+    const options = {
       requestInit: config.headers ? { headers: config.headers } : undefined,
       ...(authProvider ? { authProvider } : {}),
-    });
+    };
+    return kind === 'sse' ? new SSEClientTransport(new URL(config.url), options) : new StreamableHTTPClientTransport(new URL(config.url), options);
   }
 
   status() {
@@ -75,6 +88,9 @@ export class McpManager {
       status: s.status,
       error: s.error || '',
       tools: (s.tools || []).map((t) => t.name),
+      resources: (s.resources || []).length,
+      prompts: (s.prompts || []).length,
+      transport: s.transport || '',
       loggedIn: Boolean(this.oauth?.store?.has(name)),
     }));
   }
@@ -92,13 +108,31 @@ export class McpManager {
 
   async connect(name, config) {
     await this.disconnect(name);
-    const entry = { status: 'connecting', error: '', client: null, tools: [] };
+    const entry = { status: 'connecting', error: '', client: null, tools: [], resources: [], prompts: [], transport: '' };
     this.servers.set(name, entry);
     try {
-      const client = new Client({ name: 'mai-code', version: '0.1.0' }, { capabilities: {} });
+      let client = new Client({ name: 'mai-code', version: '0.1.0' }, { capabilities: {} });
       let transport;
       if (config.url) {
-        transport = this.transportFor(name, config, this.authProviderFor(name, config));
+        const declared = declaredTransport(config);
+        const kind = declared || 'http';
+        transport = this.transportFor(name, config, this.authProviderFor(name, config), kind);
+        entry.transport = kind;
+        try {
+          await withTimeout(client.connect(transport), 30_000, 'MCP: нет ответа на initialize за 30 с');
+        } catch (err) {
+          // Старый сервер только с SSE (CC9.6): пробуем его, если транспорт не задан явно.
+          if (declared || isAuthError(err)) throw err;
+          try {
+            await client.close();
+          } catch {
+            /* не открылся */
+          }
+          client = new Client({ name: 'mai-code', version: '0.1.0' }, { capabilities: {} });
+          transport = this.transportFor(name, config, this.authProviderFor(name, config), 'sse');
+          entry.transport = 'sse';
+          await withTimeout(client.connect(transport), 30_000, `MCP: ни streamable HTTP, ни SSE (${err?.message || err})`);
+        }
       } else {
         if (!config.command) throw new Error('Нужен command или url');
         transport = new StdioClientTransport({
@@ -108,11 +142,16 @@ export class McpManager {
           cwd: config.cwd || undefined,
           stderr: 'pipe',
         });
+        entry.transport = 'stdio';
+        await withTimeout(client.connect(transport), 30_000, 'MCP: нет ответа на initialize за 30 с');
       }
-      await withTimeout(client.connect(transport), 30_000, 'MCP: нет ответа на initialize за 30 с');
-      const { tools } = await withTimeout(client.listTools(), 15_000, 'MCP: нет списка инструментов за 15 с');
+      const caps = client.getServerCapabilities?.() || {};
+      const { tools } = caps.tools === undefined && (caps.resources || caps.prompts) ? { tools: [] } : await withTimeout(client.listTools(), 15_000, 'MCP: нет списка инструментов за 15 с');
       entry.client = client;
       entry.tools = tools || [];
+      // Ресурсы и промпты (CC9.3, CC9.4): сбой списка не ломает подключение.
+      if (caps.resources) entry.resources = await withTimeout(client.listResources(), 15_000, 'MCP: нет списка ресурсов').then((r) => r.resources || [], () => []);
+      if (caps.prompts) entry.prompts = await withTimeout(client.listPrompts(), 15_000, 'MCP: нет списка промптов').then((r) => r.prompts || [], () => []);
       entry.status = 'ready';
       return { ok: true, tools: entry.tools.map((t) => t.name) };
     } catch (err) {
@@ -246,5 +285,70 @@ export class McpManager {
       c.type === 'text' ? c.text : c.type === 'resource' ? `[resource ${c.resource?.uri}]` : `[${c.type}]`,
     );
     return parts.join('\n') || '(пустой ответ)';
+  }
+
+  /* ---------- ресурсы и промпты (CC9.3, CC9.4, ADR 0071) ---------- */
+
+  /** Сервер по имени или по безопасному ключу (как в mcp__ключ__…). */
+  entryFor(server) {
+    const key = String(server || '');
+    const found = this.servers.get(key) || [...this.servers.entries()].find(([name]) => name.replace(/[^a-zA-Z0-9_-]/g, '_') === key)?.[1];
+    if (!found || found.status !== 'ready') throw new Error(`MCP-сервер ${key} не подключён`);
+    return found;
+  }
+
+  /** Ресурсы подключённых серверов: [{ server, uri, name, description, mimeType }]. */
+  listResources() {
+    const out = [];
+    for (const [server, entry] of this.servers) {
+      if (entry.status !== 'ready') continue;
+      for (const r of entry.resources || []) out.push({ server, uri: r.uri, name: r.name || r.uri, description: r.description || '', mimeType: r.mimeType || '' });
+    }
+    return out;
+  }
+
+  /** Текст ресурса; двоичное — пометкой. Длинное обрезается. */
+  async readResource(server, uri, { maxChars = 50_000, signal } = {}) {
+    const entry = this.entryFor(server);
+    const result = await withTimeout(entry.client.readResource({ uri }), 60_000, `MCP ${server}: ресурс ${uri} не прочитан за 60 с`, signal);
+    const text = (result.contents || [])
+      .map((c) => (typeof c.text === 'string' ? c.text : `[двоичные данные ${c.mimeType || ''}, ${Buffer.byteLength(String(c.blob || ''), 'base64')} байт]`))
+      .join('\n');
+    return text.length > maxChars ? `${text.slice(0, maxChars)}\n… обрезано (${text.length} символов)` : text;
+  }
+
+  /** Промпты: [{ server, name, command, description, arguments: [{ name, description, required }] }]. */
+  listPrompts() {
+    const out = [];
+    for (const [server, entry] of this.servers) {
+      if (entry.status !== 'ready') continue;
+      for (const p of entry.prompts || []) {
+        out.push({
+          server,
+          name: p.name,
+          command: `mcp__${server}__${p.name}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64),
+          description: p.description || '',
+          arguments: (p.arguments || []).map((a) => ({ name: a.name, description: a.description || '', required: a.required === true })),
+        });
+      }
+    }
+    return out;
+  }
+
+  /** Промпт → текст запроса агенту. Сообщения сервера склеиваются по порядку. */
+  async getPrompt(command, args = {}, { signal } = {}) {
+    const prompt = this.listPrompts().find((p) => p.command === command);
+    if (!prompt) throw new Error(`Промпт /${command} не найден`);
+    const missing = prompt.arguments.filter((a) => a.required && !String(args[a.name] ?? '').trim()).map((a) => a.name);
+    if (missing.length) throw new Error(`/${command}: нужны аргументы ${missing.join(', ')}`);
+    const entry = this.entryFor(prompt.server);
+    const result = await withTimeout(entry.client.getPrompt({ name: prompt.name, arguments: Object.fromEntries(Object.entries(args).map(([k, v]) => [k, String(v)])) }), 60_000, `MCP ${prompt.server}: промпт ${prompt.name} не ответил`, signal);
+    return (result.messages || [])
+      .map((m) => {
+        const c = m.content || {};
+        const text = c.type === 'text' ? c.text : c.type === 'resource' ? c.resource?.text || `[ресурс ${c.resource?.uri}]` : `[${c.type}]`;
+        return result.messages.length > 1 && m.role === 'assistant' ? `(ассистент) ${text}` : text;
+      })
+      .join('\n\n');
   }
 }

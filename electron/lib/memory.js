@@ -16,6 +16,9 @@ import { writeArtifact, artifactHistory, readVersion } from './artifacts.js';
 
 export const MEMORY_SCOPES = ['project', 'global'];
 
+export { MEMORY_LIMITS, memoryForPrompt } from './memory-limits.js';
+import { MEMORY_LIMITS } from './memory-limits.js';
+
 const TITLES = {
   project: 'Память проекта',
   global: 'Глобальная память',
@@ -48,7 +51,9 @@ export function readMemoryState(projectDir) {
   const data = readMemory(projectDir);
   const versions = {};
   for (const scope of MEMORY_SCOPES) versions[scope] = historyOf(projectDir, scope);
-  return { ...data, versions };
+  // Размер и предел для индикатора в панели (CC4.5).
+  const limits = Object.fromEntries(MEMORY_SCOPES.map((scope) => [scope, { size: String(data[scope] || '').trim().length, limit: MEMORY_LIMITS[scope] }]));
+  return { ...data, versions, limits };
 }
 
 /**

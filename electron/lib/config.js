@@ -16,6 +16,20 @@ const DEFAULTS = {
   // deny сильнее ask, ask сильнее allow. Пример: "run_shell(npm test*)".
   permissions: { allow: [], ask: [], deny: [] },
   allowOutsideProject: false,
+  // Браузер агента (CW4.1, CW4.2, ADR 0069).
+  browserEnabled: true,
+  browserSites: { allow: [], block: [] },
+  // Чаты (CC6.8, CC6.9): автозаголовок моделью, срок хранения в днях (0 — бессрочно).
+  autoTitle: true,
+  // Диагностика после правок кода (CC1.11): tsc/eslint/ruff проекта — может быть медленной.
+  autoDiagnostics: false,
+  // Инструкции других агентов (CC4.6): CLAUDE.md, GEMINI.md, правила Cursor и Copilot.
+  compatInstructions: true,
+  // Уведомления (CW5.4): на рабочем столе и в мессенджер через webhook.
+  notifications: { enabled: true, desktop: ['done', 'approval', 'question', 'error', 'background', 'scheduled'], channels: [] },
+  // Отложенные инструменты (CC1.12): больше стольких MCP/плагинов — схемы по запросу (0 — никогда).
+  deferToolsOver: 25,
+  sessionRetentionDays: 0,
   guardrails: DEFAULT_GUARDRAILS,
   telemetry: {
     enabled: false,
@@ -317,6 +331,23 @@ export function saveSettings(patch) {
     next.providers = providers;
   }
 
+  // Webhook уведомлений (CW5.4): окно видит «***» — такое значение не затирает настоящее.
+  if (patch.notifications) {
+    const previous = current.notifications || {};
+    next.notifications = { ...previous, ...patch.notifications };
+    if (patch.notifications.webhookUrl === '***') next.notifications.webhookUrl = previous.webhookUrl || '';
+    // Каналы: «***» из окна — прежний токен/адрес того же канала (по id).
+    if (Array.isArray(patch.notifications.channels)) {
+      const old = new Map((previous.channels || []).map((c) => [c.id, c]));
+      next.notifications.channels = patch.notifications.channels.map((c) => {
+        const was = old.get(c.id) || {};
+        // Старый одиночный webhook переехал в канал «legacy».
+        const oldUrl = c.id === 'legacy' && !was.url ? previous.webhookUrl : was.url;
+        return { ...c, ...(c.token === '***' ? { token: was.token || '' } : {}), ...(c.url === '***' ? { url: oldUrl || '' } : {}) };
+      });
+    }
+  }
+
   if (patch.infra) {
     const previous = current.infra || {};
     next.infra = { ...previous, ...patch.infra };
@@ -398,6 +429,13 @@ export function publicSettings() {
     ...(s.infra || {}),
     vaultToken: s.infra?.vaultToken ? '***' : '',
     vaultTokenSet: Boolean(s.infra?.vaultToken),
+  };
+  safe.notifications = {
+    ...(s.notifications || DEFAULTS.notifications),
+    webhookUrl: s.notifications?.webhookUrl ? '***' : '',
+    webhookSet: Boolean(s.notifications?.webhookUrl),
+    // Токены ботов и адреса webhook окно видит как «***».
+    channels: (s.notifications?.channels || []).map((c) => ({ ...c, ...(c.token ? { token: '***' } : {}), ...(c.url ? { url: '***' } : {}) })),
   };
   safe.mas = {
     ...(s.mas || DEFAULTS.mas),

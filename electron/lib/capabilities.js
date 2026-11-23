@@ -33,6 +33,9 @@ export function modelCapabilities(modelId, provider = null) {
     temperature: typeof entry.temperature === 'boolean' ? entry.temperature : supportsTemperature(bare) && !/^o[1-9]/i.test(bare),
     transport: ['chat', 'responses'].includes(entry.transport) ? entry.transport : 'auto',
     context: Number(entry.context) > 0 ? Number(entry.context) : null,
+    // Кэш промпта (CC5.4): метки cache_control — Claude (Anthropic, OpenRouter);
+    // OpenAI, DeepSeek и Qwen кэшируют общий префикс сами. Флаг модели сильнее.
+    cache: typeof entry.cache === 'boolean' ? entry.cache : /claude|anthropic/i.test(bare),
   };
 }
 
@@ -41,5 +44,31 @@ export function requestOptions(caps, { temperature = 0.3, effort = '' } = {}) {
   const out = {};
   if (caps.temperature) out.temperature = temperature;
   if (effort && caps.effort.includes(effort)) out.reasoning_effort = effort;
+  return out;
+}
+
+/**
+ * Метки кэша (CC5.4, ADR 0080): системный промпт и последнее сообщение — точки
+ * cache_control; всё до них провайдер кэширует. Строковый текст становится
+ * массивом частей; сообщения с картинками получают метку на последней части.
+ */
+export function withCacheControl(messages) {
+  const mark = (message) => {
+    if (!message) return message;
+    const parts = typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : Array.isArray(message.content) ? message.content.map((p) => ({ ...p })) : null;
+    if (!parts || !parts.length) return message;
+    parts[parts.length - 1] = { ...parts[parts.length - 1], cache_control: { type: 'ephemeral' } };
+    return { ...message, content: parts };
+  };
+  if (!messages.length) return messages;
+  const out = [...messages];
+  if (out[0].role === 'system') out[0] = mark(out[0]);
+  // Последнее сообщение с текстом: следующий шаг переиспользует весь диалог до него.
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    if (out[i].role !== 'assistant' && (typeof out[i].content === 'string' ? out[i].content : Array.isArray(out[i].content))) {
+      out[i] = mark(out[i]);
+      break;
+    }
+  }
   return out;
 }

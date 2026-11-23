@@ -12,10 +12,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const READ_TOOLS = ['read_file', 'read_document', 'preview_document', 'list_files', 'glob', 'grep', 'load_skill', 'memory_read', 'repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search'];
+const READ_TOOLS = ['read_file', 'read_document', 'preview_document', 'diagnostics', 'list_files', 'glob', 'grep', 'load_skill', 'memory_read', 'repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search'];
 
 /** Инструменты, которых у субагента нет никогда: диалог с пользователем и вложенные субагенты. */
-export const NEVER_FOR_SUBAGENT = new Set(['agent', 'ask_user', 'exit_plan', 'todo_write']);
+export const NEVER_FOR_SUBAGENT = new Set(['agent', 'agent_result', 'ask_user', 'exit_plan', 'todo_write']);
 
 export const BUILTIN_AGENTS = [
   {
@@ -88,6 +88,8 @@ export function listAgentDefs(projectDir, dataDir, { includeProject = true, extr
           description: meta.description || body.split(/\r?\n/).find((l) => l.trim())?.slice(0, 160) || name,
           tools: tools.length ? tools : null,
           prompt: body.trim(),
+          // CC8.5: `isolation: worktree` — субагент правит отдельную копию, слияние по подтверждению.
+          ...(String(meta.isolation || '').trim() === 'worktree' ? { isolation: 'worktree' } : {}),
           source,
         });
       } catch {
@@ -120,6 +122,15 @@ export function agentToolSchema(defs) {
           type: { type: 'string', enum: defs.map((d) => d.name), description: 'Тип субагента' },
           description: { type: 'string', description: 'Короткое название задачи, 3–6 слов' },
           prompt: { type: 'string', description: 'Полная задача: субагент не видит этот диалог' },
+          isolation: {
+            type: 'string',
+            enum: ['worktree'],
+            description: 'worktree — субагент с правками работает в отдельной копии проекта (git worktree от последнего коммита); изменения сливаются в проект только после подтверждения пользователя',
+          },
+          background: {
+            type: 'boolean',
+            description: 'true — запустить в фоне и сразу продолжить; итог придёт сам, проверить — agent_result. Только для субагентов только для чтения или с isolation: worktree',
+          },
         },
         required: ['type', 'prompt'],
       },

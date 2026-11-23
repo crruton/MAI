@@ -347,9 +347,15 @@ function bindChrome() {
   $('#refresh-btn').addEventListener('click', refreshAll);
   $('#main-btn').addEventListener('click', () => api.focusMain?.());
   api.boards.onEvent(handleBoardEvent);
-  api.boards.onFocus(({ focus } = {}) => {
+  const applyFocus = (focus) => {
     if (!focus) return;
-    if (focus.startsWith('artifact:')) {
+    // Вкладка «Хранилища» из каталога коннекторов (CW3.3): tab:infra, tab:repowise.
+    if (focus.startsWith('tab:')) {
+      state.storageTab = focus.slice('tab:'.length);
+      if (state.storageTab === 'infra' && !state.infraStatus) loadInfra();
+      if (state.storageTab === 'repowise' && !state.repowiseStatus) loadRepowise();
+      render();
+    } else if (focus.startsWith('artifact:')) {
       state.storageTab = 'artifacts';
       selectArtifact(focus.slice('artifact:'.length));
     } else if (focus === 'adr') {
@@ -359,7 +365,13 @@ function bindChrome() {
       state.openStage = focus.slice('stage:'.length);
       render();
     }
-  });
+  };
+  api.boards.onFocus(({ focus } = {}) => applyFocus(focus));
+  // Новое окно получает вкладку в адресе (?focus=tab:…); прочие фокусы — как раньше, событием.
+  setTimeout(() => {
+    const initial = new URLSearchParams(location.search).get('focus') || '';
+    if (initial.startsWith('tab:')) applyFocus(initial);
+  }, 0);
   $('#view').addEventListener('click', onClick);
   $('#view').addEventListener('input', onInput);
   $('#view').addEventListener('change', onChange);

@@ -74,11 +74,27 @@ contextBridge.exposeInMainWorld('mai', {
     logout: () => invoke('auth:logout'),
     setRole: (role) => invoke('auth:setRole', role),
   },
+  // Ветка git для статусной строки (CC7.12).
+  notify: {
+    test: (channelId) => invoke('notify:test', channelId),
+  },
+  git: {
+    branch: (projectDir) => invoke('git:branch', projectDir),
+    worktrees: (projectDir) => invoke('worktree:list', projectDir),
+    createWorktree: (projectDir, name) => invoke('worktree:create', { projectDir, name }),
+    openWorktree: (dir) => invoke('worktree:open', dir),
+    removeWorktree: (repo, dir) => invoke('worktree:remove', { repo, dir }),
+  },
   sessions: {
     list: (options) => invoke('sessions:list', options),
     get: (id) => invoke('sessions:get', id),
     create: (data) => invoke('sessions:create', data),
     remove: (id) => invoke('sessions:delete', id),
+    rename: (id, title) => invoke('sessions:rename', { id, title }),
+    fork: (id, upTo = null) => invoke('sessions:fork', { id, upTo }),
+    exportFile: (id) => invoke('sessions:exportFile', id),
+    importFile: () => invoke('sessions:importFile'),
+    shell: (sessionId, command) => invoke('shell:direct', { sessionId, command }),
   },
   chat: {
     start: (payload) => invoke('chat:start', payload),
@@ -129,6 +145,8 @@ contextBridge.exposeInMainWorld('mai', {
     installFromMarketplace: (marketplace, name, replace = false) => invoke('marketplace:install', { marketplace, name, replace }),
     uninstallPackage: (name) => invoke('packages:uninstall', name),
     togglePackage: (name, enabled) => invoke('packages:toggle', { name, enabled }),
+    roles: () => invoke('roles:list'),
+    installRole: (id) => invoke('roles:install', id),
     context: (payload) => invoke('context:stats', payload),
     // Чекпоинты и откат (CC6.1).
     checkpoints: (sessionId) => invoke('checkpoints:turns', sessionId),
@@ -188,6 +206,9 @@ contextBridge.exposeInMainWorld('mai', {
     saveLocal: (payload) => invoke('mcp:saveLocal', payload),
     login: (name, projectDir) => invoke('mcp:login', name, projectDir),
     connectors: () => invoke('connectors:list'),
+    resources: () => invoke('mcp:resources'),
+    localConnectors: () => invoke('connectors:local'),
+    toggleLocalConnector: (id, enabled) => invoke('connectors:localToggle', { id, enabled }),
     addConnector: (id, token) => invoke('connectors:add', { id, token }),
     removeConnector: (id) => invoke('connectors:remove', id),
     logout: (name) => invoke('mcp:logout', name),

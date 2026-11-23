@@ -102,6 +102,9 @@ export const IPC_PERMISSIONS = {
   // Пакет — исполняемый код: установка, удаление и включение — только admin.
   'packages:list': ANY,
   'packages:install': ADMIN,
+  // Наборы ролей и онбординг (CW6.1, CW6.2).
+  'roles:list': ANY,
+  'roles:install': ADMIN,
   'marketplace:list': ANY,
   'trash:list': ANY,
   'projects:list': ANY,
@@ -181,6 +184,24 @@ export const IPC_PERMISSIONS = {
   'mcp:remove': ADMIN,
   'mcp:login': ADMIN,
   'connectors:list': ANY,
+  'mcp:resources': ANY,
+  // Чаты: переименование, форк, файл (CC6.5, CC6.8, CC6.9).
+  'sessions:rename': ANY,
+  'shell:direct': ADMIN,
+  'git:branch': ANY,
+  // Уведомления (CW5.4).
+  'notify:test': ADMIN,
+  // Рабочие копии для чатов (CC11.5).
+  'worktree:list': ANY,
+  'worktree:create': ADMIN,
+  'worktree:open': ADMIN,
+  'worktree:remove': ADMIN,
+  'sessions:fork': ANY,
+  'sessions:exportFile': ANY,
+  'sessions:importFile': ANY,
+  // Локальные коннекторы (CW3.3).
+  'connectors:local': ANY,
+  'connectors:localToggle': ADMIN,
   'connectors:add': ADMIN,
   'connectors:remove': ADMIN,
   'mcp:logout': ADMIN,

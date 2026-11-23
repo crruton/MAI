@@ -25,6 +25,29 @@
   color-scheme: dark;
 }
 
+/* Светлая тема (CC7.16, ADR 0074). */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f6f7fb;
+    --bg-elev: #ffffff;
+    --bg-elev-2: #eef0f6;
+    --bg-elev-3: #e4e7ef;
+    --border: #d9dce6;
+    --border-soft: #e6e8ef;
+    --text: #1b1f2c;
+    --text-dim: #4b5266;
+    --text-faint: #6b7288;
+    --accent: #5b3ee0;
+    --accent-2: #4a2ed6;
+    --accent-soft: rgba(91, 62, 224, 0.1);
+    --green: #0f8a5f;
+    --red: #c62828;
+    --amber: #a16207;
+    --blue: #1d4ed8;
+    color-scheme: light;
+  }
+}
+
 * { box-sizing: border-box; }
 
 html, body {

@@ -33,6 +33,7 @@ export function toolEntry(schema, meta = {}) {
     run: meta.run,
     precheck: meta.precheck,
     preview: meta.preview,
+    assess: meta.assess,
   };
 }
 
@@ -112,7 +113,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
   const mode = policy.getMode ? policy.getMode() : 'manual';
   const rules = policy.getRules ? policy.getRules() : {};
   const command = entry.cls === 'exec' ? effectiveCommand(ctx, args) : undefined;
-  const subject = subjectOf({ tool: entry.name, cls: entry.cls, args, projectDir: ctx.projectDir, command, roots: ctx.roots });
+  const subject = subjectOf({ tool: entry.name, cls: entry.cls, args, projectDir: ctx.projectDir, command, roots: ctx.roots, browserHost: ctx.browser?.host?.() || '' });
 
   const record = (extra) => {
     try {
@@ -183,6 +184,20 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
     };
   }
 
+  // Оплата и покупки в браузере агента (CW4.2): спросить всегда, даже при правиле
+  // allow и в «Без вопросов»/«Авто»; в «Не спрашивать» — запрет.
+  let forced = false;
+  if (decision.action !== 'deny' && entry.source === 'builtin' && typeof entry.assess === 'function') {
+    const why = await entry.assess(ctx, args);
+    if (why) {
+      forced = true;
+      decision =
+        mode === 'dontAsk'
+          ? { ...decision, action: 'deny', source: 'browser-payment', reason: `Без пользователя нельзя: ${why}` }
+          : { ...decision, action: 'ask', source: 'browser-payment', risk: 'high', recommended: 'deny', why: `${why} — такие действия подтверждает только пользователь` };
+    }
+  }
+
   // PreToolUse (ADR 0035): хук не может разрешить то, что запретили guardrails,
   // правило deny или «План», но может запретить, потребовать вопрос или снять его.
   let hookNote = '';
@@ -192,7 +207,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
       decision = { ...decision, action: 'deny', source: 'hook', reason: `Хук PreToolUse отклонил вызов: ${hook.reason || 'без причины'}` };
     } else if (hook.decision === 'ask' && decision.action === 'allow') {
       decision = { ...decision, action: 'ask', source: 'hook', why: hook.reason || 'так требует хук PreToolUse' };
-    } else if (hook.decision === 'allow' && decision.action === 'ask') {
+    } else if (hook.decision === 'allow' && decision.action === 'ask' && !forced) {
       decision = { ...decision, action: 'allow', source: 'hook' };
     }
     if (hook.context.length) hookNote = hook.context.join('\n');
@@ -216,7 +231,8 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
           decisionSource: decision.source,
           recommended: decision.recommended,
           rule: decision.rule || null,
-          suggestions: suggestRules({ tool: entry.name, cls: entry.cls, subject }),
+          // Оплату запомнить нельзя: каждое такое действие — отдельное решение.
+          suggestions: forced ? [] : suggestRules({ tool: entry.name, cls: entry.cls, subject }),
           mode: decision.mode,
           diff,
         }),

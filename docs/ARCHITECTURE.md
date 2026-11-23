@@ -33,7 +33,7 @@
 | `electron/lib/sessions.js`, `session-store.js` | `sessions/<id>.json`, `sessions/index.json` (ADR 0034) |
 | `electron/lib/agent.js` | цикл агента, стриминг, вызов инструментов |
 | `electron/lib/skills.js` | навыки, `AGENTS.md` |
-| `electron/lib/mcp.js` | MCP-менеджер (stdio + streamable HTTP) |
+| `electron/lib/mcp.js` | MCP-менеджер (stdio, streamable HTTP, SSE; инструменты, ресурсы, промпты) |
 | `electron/lib/plugins.js` | загрузка локальных плагинов |
 | `electron/lib/tools/fs.js` | чтение, поиск, запись, правка файлов |
 | `electron/lib/tools/shell.js` | `run_shell` |
@@ -103,6 +103,17 @@ main кладёт резолвер в `state.approvals` и отправляет 
 `McpManager` держит по клиенту на сервер. Имена инструментов нормализуются в
 `mcp__<server>__<tool>`, чтобы не конфликтовать с встроенными. При вызове имя разбирается
 обратно, ищется сервер и оригинальное имя инструмента.
+
+Ресурсы и промпты (ADR 0071): `listResources`/`readResource`, `listPrompts`/
+`getPrompt`. Локальные коннекторы (ADR 0072): `local-connectors.js` →
+`connectors:local` (проверки repowise/multica/infra с пределом 8 с),
+`connectors:localToggle`; окно «Хранилища» принимает `focus: 'tab:…'`.
+`chat:start` → `resolveResourceMentions` (commands.js) → текст
+ресурса в рамке `wrapData`; `commands:list` добавляет промпты (`source: 'mcp'`),
+`commands:expand` → `promptArgs` → `getPrompt`. IPC `mcp:resources` — для
+подсказки `@`. Транспорт — `declaredTransport(config)` (`transport` или `type`),
+без указания — streamable HTTP с переходом на SSE, если `initialize` упал не
+из-за входа.
 
 OAuth (ADR 0041): `new McpManager({ oauth: { store, openBrowser, callbackPort } })`.
 `connect()` передаёт HTTP-транспорту `authProvider` без `onAuthorize` — при 401
@@ -278,7 +289,16 @@ ADR 0033. `runAgent({ checkpoint })` получает регистратор `cr
 ### Чаты и инструкции проекта
 
 ADR 0034: `session-store.js` — `sessions/<id>.json` и `sessions/index.json`,
-`sessions:list({ projectDir, query })`. `instructions.js`: `projectInstructions`
+`sessions:list({ projectDir, query })`. ADR 0074: `shell:direct` (`!команда`,
+`execute` из tools/shell.js, guardrails, аудит, сообщение `direct: true`),
+`git:branch` для статусной строки; тема — `nativeTheme.themeSource` из
+`settings.theme`, CSS по `prefers-color-scheme`, `windowColors` в window.js;
+`openModal` — dialog, фокус, Esc, Tab. ADR 0073: `renameSession` (`titleManual`
+защищён в `saveSession`), `forkSession({ upTo })`, `importSession`,
+`expiredSessions(days)` (очистка при запуске); `suggestTitle` в agent.js и
+`cleanTitle` в titles.js — автозаголовок после первого ответа. IPC
+`sessions:rename`, `sessions:fork`, `sessions:exportFile`, `sessions:importFile`.
+`instructions.js`: `projectInstructions`
 (AGENTS.md + AGENTS.local.md с `@`-импортами, глубина 3, только внутри проекта)
 и `nestedInstructions` — вложенные AGENTS.md дописываются к результату
 инструмента с полем `path` один раз за прогон. `memory:append({ scope, text })`
@@ -292,6 +312,49 @@ ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый про�
 автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
 сообщения. IPC `hooks:list(projectDir)`.
 
+### Уведомления
+
+ADR 0081. `notify.js` — `notifySettings` (каналы + перенос старого
+`webhookUrl`), `normalizeChannel`, `channelRequest` (Telegram, MAX, WhatsApp,
+Rocket.Chat, webhook), `createNotifier`; в main один `notify` (фокус — `BrowserWindow`, клик —
+`scheduled:open`), вызовы из прогона чата, `makeApprover`, `makeAsker`,
+`backgroundFor`, `notifyScheduled`; IPC `notify:test(channelId)`. Токены и
+адреса каналов — в `SECRET_PATHS`, маска «***» — в `publicSettings`/`saveSettings`.
+
+### Память, совместимость, кэш, дубли навыков
+
+ADR 0080. `memory-limits.js` — `MEMORY_LIMITS`, `memoryForPrompt` (в
+`systemPrompt`); `instructions.js` — `projectInstructions(dir, { compat })`,
+`cursorRules`; `capabilities.js` — флаг `cache`, `withCacheControl` (в теле
+chat.completions, отказ шлюза → `cacheSupported = false`);
+`skill-conflicts.js` — `uniqueSkills` (промпт агента), `skillConflicts`
+(`packageSkillWarnings` в main при установке).
+
+### Ноутбуки, диагностика, отложенные инструменты
+
+ADR 0079. `tools/notebook.js` — `renderNotebook` (в `read_file` для
+`.ipynb`), `notebook_edit`; `diagnostics.js` — `detectCheckers`,
+`runDiagnostics`, парсеры tsc/eslint/ruff/pyright/node/py_compile,
+`formatDiagnostics`; инструмент — `tools/diagnostics.js`, автопроверка — в
+`execCall` после правки (`settings.autoDiagnostics`). `tool-search.js` —
+`splitTools`, `deferredPrompt`, `searchTools`: в `runAgent` `allTools` (что
+выполнить) и `tools` (что видит модель) + `tool_search`, `loadedTools` на прогон.
+
+### Набор сценариев
+
+ADR 0082. `evals/tasks.json`, `evals/profiles.json`; `scripts/eval-lib.mjs` —
+`writeFiles`, `runCheck`/`gradeTask`, `validateTasks`, `reportMarkdown`;
+`scripts/eval.mjs` гоняет профиль × задача через `bin/mai.mjs -p --output json`.
+
+### Безголовый режим
+
+ADR 0077. `cli.js` — `isCliInvocation`, `parseCliArgs`, `resultObject`,
+`streamLine`. В main константа `CLI` (разбор `process.argv`) переключает
+`whenReady` на `runCli`: окно, планировщик и навыки не запускаются; прогон —
+как у плановой задачи (`runAgent` с `policyFor`, хуками, чекпоинтами, сессией,
+`acquireProject`), `approve` отказывает, `emit` пишет stream-json. Перезапуск
+с `--use-system-ca` в CLI наследует stdio. Лаунчер — `bin/mai.mjs`.
+
 ### Субагенты
 
 ADR 0036. `runAgent({ agentDefs })` добавляет инструмент `agent`; его `run`
@@ -299,6 +362,13 @@ ADR 0036. `runAgent({ agentDefs })` добавляет инструмент `age
 `hooks`, `trusted` и обёрткой `checkpoint`, привязанной к ходу родителя.
 `subagent` сужает инструменты (`def.tools`, без `NEVER_FOR_SUBAGENT`) и
 отключает ревизор и `Stop`. IPC `agents:defs(projectDir)`.
+
+ADR 0075: `worktree.js` — `repoRoot`, `createWorktree`, `worktreeChanges`,
+`applyChanges` (по файлу, `git merge-file`), `removeWorktree({ keepBranch })`;
+`executeSubagent` в agent.js запускает субагента в копии и `mergeWorktree`
+(вопрос `agent_merge`, чекпоинт, слияние). Фон: `runAgent({ background })` —
+реестр `backgroundFor(window, sessionId)` в main (итог в историю, событие
+`agent:background`, уведомление), инструмент `agent_result`.
 
 ### Вывод консоли на Windows
 
@@ -316,6 +386,11 @@ ADR 0037. `packagesFor(projectDir)` в main — включённые пакет�
 получает `packageHooks`, `mcpConfigs` — `packageMcpServers`. IPC:
 `packages:list`, `packages:install({ from, replace })`, `packages:uninstall`,
 `packages:toggle({ name, enabled })`.
+
+Наборы ролей (ADR 0070): папка `roles/` приложения, `roles.js` — `listRoles`,
+`installRole` (своя копия из asar, только commands/skills/agents). IPC
+`roles:list`, `roles:install`; мастер `openOnboarding` в renderer открывается
+при первом запуске (`settings.onboarding.done`) и по `/onboarding`.
 
 ### Длинные задачи
 
@@ -351,9 +426,19 @@ ADR 0059. `pushViolation(command, { protectedBranches, branchOf })` в
 'protected-branch'`) для класса `exec`. `ctx.protectedBranches` — из
 `settings.protectedBranches` (по умолчанию `DEFAULT_PROTECTED`). `/commit` и
 `/review` — шаблоны `commitPrompt`/`reviewPrompt` в renderer; `overridable` в
-`BUILTIN_COMMANDS` уступает своей команде с тем же именем.
+`BUILTIN_COMMANDS` уступает своей команде с тем же именем. ADR 0076: `/pr` и
+`/security-review` — `prPrompt`/`securityReviewPrompt`; `/worktree` — IPC
+`worktree:list|create|open|remove` поверх `worktree.js` (`listWorktrees`,
+`branchPrefix: 'mai/wt-'`), копии в `<данные>/worktrees/`.
 
 ### Возможности модели
+
+ADR 0078: `text-tools.js` — `textToolsPrompt`, `parseTextToolCalls`,
+`toTextProtocol`, `isToolsUnsupported`; в `runAgent` флаг `textTools`
+(`!caps.tools`, отказ шлюза → тот же шаг заново), `buildRequest` переводит
+историю в протокол, `takeTextCalls` достаёт вызовы. `planner` (main:
+`plannerFor(settings.planModel)`) подменяет client/model/caps на итерациях в
+«Плане».
 
 ADR 0058. `modelCapabilities(model, provider)` в `capabilities.js` — флаги
 `tools`, `vision`, `reasoning`, `effort`, `temperature`, `transport`, `context`;
@@ -377,6 +462,15 @@ ADR 0056. `electron/lib/web.js`: `isPrivateAddress`, `fetchPage` (проверк
 `tools/web.js`, конфигурация — `ctx.webConfig` из `settings.webSearch`.
 Предмет `web_fetch` в `subjectOf` — домен.
 
+Браузер агента (ADR 0069): `browser-agent.js` — `createAgentBrowser` (окно,
+сессия `persist:mai-browser`, снимок с `data-mai-ref`, `isSensitiveField`,
+`isPaymentAction`); `tools/browser.js` — `browser_*`, `assess` для оплаты;
+main создаёт одно окно (`browserFor`) и отдаёт его как `settings.browser` →
+`ctx.browser`. Предмет правил — домен (`subjectOf(..., browserHost)`),
+`browserSiteRules(settings.browserSites)` добавляются к правилам прогона.
+`runToolCall` после политики зовёт `entry.assess`: оплата → вопрос в любом
+режиме (`browser-payment`).
+
 ### Фоновые команды
 
 ADR 0055. `tools/shell.js`: `spawnCommand` (хост или `docker run`, `kill`),
@@ -392,6 +486,10 @@ ADR 0049. `electron/lib/documents.js`: `buildDocx`, `buildXlsx` (`sheetsToXlsx` 
 (лимиты записей и размера). Инструменты — `tools/documents.js`:
 `create_document` (write, precheck формата, preview текста), `read_document`
 (read; есть в наборе субагентов explore/plan).
+
+PDF-правка (ADR 0083): `tools/pdf.js` на pdf-lib — `parsePages`, `fillForm`
+(кириллица → значение + `NeedAppearances`), инструменты `pdf_merge`,
+`pdf_fields`, `pdf_form`; `tools/pdf-names.js` — имя итога для политики.
 
 PDF (ADR 0067): `export/html.js` — `markdownToHtml` (A4, CSP); `pdf-render.js` —
 `renderPdf(BrowserWindow, html)`: скрытое окно без JS и сети, `printToPDF`.

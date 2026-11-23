@@ -84,3 +84,18 @@ ADR фиксируют решения, которые дорого менять:
 | [0066](0066-prezentacii-pptx.md) | Презентации PPTX | accepted | 2026-11-22 |
 | [0067](0067-pdf-iz-markdown.md) | PDF из Markdown через Chromium | accepted | 2026-11-22 |
 | [0068](0068-prevyu-dokumenta-dlya-samoproverki.md) | Превью документа для самопроверки агентом | accepted | 2026-11-22 |
+| [0069](0069-brauzer-agenta.md) | Браузер агента и разрешения по сайтам | accepted | 2026-11-22 |
+| [0070](0070-roli-i-onbording.md) | Наборы по ролям и онбординг | accepted | 2026-11-22 |
+| [0071](0071-mcp-resursy-prompty-sse.md) | MCP: ресурсы, промпты и SSE | accepted | 2026-11-22 |
+| [0072](0072-lokalnye-konnektory.md) | Локальные коннекторы | accepted | 2026-11-22 |
+| [0073](0073-chaty-imya-kopiya-hranenie.md) | Чаты: имя, копия, хранение и точки отката | accepted | 2026-11-22 |
+| [0074](0074-interfeys-tema-statusnaya-stroka-dostupnost.md) | Интерфейс: !команда, статусная строка, тема, доступность | accepted | 2026-11-22 |
+| [0075](0075-izolyaciya-i-fonovye-subagenty.md) | Изоляция субагента в git worktree и фоновые субагенты | accepted | 2026-11-22 |
+| [0076](0076-pr-security-review-worktree.md) | /pr, /security-review и чат в рабочей копии /worktree | accepted | 2026-11-22 |
+| [0077](0077-bezgolovyj-rezhim-cli.md) | Безголовый режим: mai -p и поток событий | accepted | 2026-11-22 |
+| [0078](0078-modeli-bez-instrumentov-i-model-dlya-plana.md) | Модели без tool calling и отдельная модель для «Плана» | accepted | 2026-11-23 |
+| [0079](0079-noutbuki-diagnostika-otlozhennye-instrumenty.md) | Ноутбуки, диагностика кода и отложенная загрузка инструментов | accepted | 2026-11-23 |
+| [0080](0080-pamyat-sovmestimost-kesh-dubli-navykov.md) | Предел памяти, инструкции других агентов, кэш промпта, дубли навыков | accepted | 2026-11-23 |
+| [0081](0081-uvedomleniya.md) | Уведомления на рабочем столе и в мессенджеры (Telegram, MAX, WhatsApp, Rocket.Chat, webhook) | accepted | 2026-11-23 |
+| [0082](0082-nabor-scenariev-eval.md) | Набор сценариев (eval) по профилям агента | accepted | 2026-11-23 |
+| [0083](0083-pdf-obedinenie-i-formy.md) | PDF: объединение, выборка страниц и формы (pdf-lib) | accepted | 2026-11-23 |

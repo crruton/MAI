@@ -30,11 +30,19 @@ export const BUILTIN_COMMANDS = [
   // overridable: своя команда проекта или пакета с тем же именем сильнее встроенной.
   { name: 'commit', description: 'Закоммитить изменения: агент пишет сообщение, вы подтверждаете', argumentHint: '[уточнение]', overridable: true },
   { name: 'review', description: 'Ревью текущих изменений или PR', argumentHint: '[номер PR]', overridable: true },
+  { name: 'security-review', description: 'Ревью безопасности: изменения или PR — уязвимости по важности', argumentHint: '[номер PR]', overridable: true },
+  { name: 'pr', description: 'Создать pull request: ветка, push, описание по шаблону репозитория', argumentHint: '[уточнение]', overridable: true },
+  { name: 'worktree', description: 'Чат в отдельной рабочей копии (git worktree): список или новая', argumentHint: '[имя]' },
   { name: 'projects', description: 'Проекты: папки, инструкции, коннекторы и вид — одним кликом' },
   { name: 'connectors', description: 'Каталог коннекторов: Linear, Notion, GitHub и другие в два клика' },
   { name: 'schedule', description: 'Плановые задачи: по расписанию, без вопросов, только по правилам' },
   { name: 'agents', description: 'Типы субагентов' },
   { name: 'packages', description: 'Пакеты плагинов: список, установка, включение' },
+  { name: 'rename', description: 'Переименовать чат', argumentHint: '[новое имя]' },
+  { name: 'fork', description: 'Копия чата с той же историей — попробовать другой подход' },
+  { name: 'import', description: 'Открыть чат из файла (.mai-chat.json)' },
+  { name: 'rewind', description: 'Точки отката: вернуть диалог и правки файлов (двойной Esc)' },
+  { name: 'onboarding', description: 'Выбрать роль: набор навыков и команд, коннекторы, примеры задач' },
 ];
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -196,6 +204,40 @@ export function resolveMentions(projectDir, text) {
     } catch {
       /* не файл проекта — обычный текст с @ */
     }
+  }
+  return found;
+}
+
+/**
+ * Аргументы промпта MCP (CC9.4) из строки команды: `ключ=значение` — по имени,
+ * остальные слова — по порядку в свободные аргументы; лишние слова уходят в последний.
+ */
+export function promptArgs(argDefs, argsText) {
+  const defs = (argDefs || []).map((a) => a.name);
+  const out = {};
+  const positional = [];
+  for (const token of splitArgs(argsText)) {
+    const kv = /^([A-Za-z_][\w-]*)=(.*)$/s.exec(token);
+    if (kv && defs.includes(kv[1])) out[kv[1]] = kv[2];
+    else positional.push(token);
+  }
+  const free = defs.filter((name) => !(name in out));
+  free.forEach((name, i) => {
+    if (i >= positional.length) return;
+    out[name] = i === free.length - 1 ? positional.slice(i).join(' ') : positional[i];
+  });
+  return out;
+}
+
+/** Упоминания ресурсов MCP `@сервер:uri` (CC9.3) — только известные ресурсы. */
+export function resolveResourceMentions(text, resources) {
+  const found = [];
+  const re = /(^|\s)@([A-Za-z0-9_.-]+):(\S+)/g;
+  let m;
+  while ((m = re.exec(String(text || '')))) {
+    const uri = m[3].replace(/[.,;!?)]+$/, '');
+    const hit = (resources || []).find((r) => r.server === m[2] && r.uri === uri);
+    if (hit && !found.some((f) => f.server === hit.server && f.uri === hit.uri)) found.push(hit);
   }
   return found;
 }

@@ -7,6 +7,7 @@
  * Модуль не зависит от Electron: его проверяют обычным node.
  */
 import path from 'node:path';
+import { defaultFilledName } from './tools/pdf-names.js';
 import { checkCommand } from './guardrails.js';
 import { normalizeMode } from './permissions.js';
 import { resolveIn, subjectIn } from './workroots.js';
@@ -31,6 +32,17 @@ const BUILTIN = {
   create_document: 'write',
   read_document: 'read',
   preview_document: 'read',
+  notebook_edit: 'write',
+  diagnostics: 'read',
+  tool_search: 'read',
+  pdf_merge: 'write',
+  pdf_form: 'write',
+  pdf_fields: 'read',
+  browser_open: 'network',
+  browser_read: 'read',
+  browser_screenshot: 'read',
+  browser_click: 'network',
+  browser_type: 'network',
   // Удаление — отдельный класс (CW1.4, ADR 0044): спрашивается во всех режимах, кроме «Без вопросов».
   delete_file: 'delete',
   run_shell: 'exec',
@@ -47,6 +59,7 @@ const BUILTIN = {
   todo_write: 'read',
   // Передача подзадачи; каждое действие субагента проверяется отдельно (ADR 0036).
   agent: 'read',
+  agent_result: 'read',
 };
 
 /** Имя инструмента, который что-то отправляет людям или публикует: send_email, post_message, create_event, reply… */
@@ -350,9 +363,11 @@ export function relativeSubject(projectDir, target) {
   return (rel || '.').split(path.sep).join('/');
 }
 
-export function subjectOf({ tool, cls, args = {}, projectDir, command, roots = null }) {
+export function subjectOf({ tool, cls, args = {}, projectDir, command, roots = null, browserHost = '' }) {
   if (cls === 'exec') return String(command ?? args.command ?? '');
   if (cls === 'write' || cls === 'read' || cls === 'delete') {
+    // PDF (CW2.4): предмет правила — итоговый файл.
+    if (tool === 'pdf_merge' || tool === 'pdf_form') args = { ...args, path: args.output || (tool === 'pdf_form' && args.path ? defaultFilledName(args) : '') };
     if (!args.path) return null;
     // Дополнительные папки чата (ADR 0045): предмет — `@имя/путь`.
     if (roots?.length > 1) {
@@ -374,6 +389,16 @@ export function subjectOf({ tool, cls, args = {}, projectDir, command, roots = n
     }
   }
   if (tool === 'web_search') return String(args.query || '');
+  // Браузер агента (CW4.2): предмет — домен; для открытия — из адреса, иначе — текущей страницы.
+  if (tool === 'browser_open') {
+    try {
+      const raw = String(args.url || '');
+      return new URL(/^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`).hostname;
+    } catch {
+      return String(args.url || '');
+    }
+  }
+  if (String(tool).startsWith('browser_')) return browserHost || '';
   if (tool) return null;
   return null;
 }
@@ -386,10 +411,22 @@ export function summarize({ tool, cls, args = {}, subject }) {
       return `Изменить файл ${subject}`;
     case 'delete_file':
       return `Удалить ${subject} (в корзину)`;
+    case 'pdf_merge':
+      return `Собрать PDF ${subject}: ${(args.inputs || []).map((i) => `${i.path}${i.pages ? ` (стр. ${i.pages})` : ''}`).join(' + ')}`;
+    case 'pdf_form':
+      return `Заполнить форму ${args.path} → ${subject}: ${Object.keys(args.values || {}).length} полей`;
+    case 'notebook_edit':
+      return `Ноутбук ${subject}: ${args.edit_mode === 'delete' ? 'удалить' : args.edit_mode === 'insert' ? 'вставить' : 'изменить'} ячейку ${args.cell_id || (Number.isInteger(args.cell) ? args.cell : args.edit_mode === 'insert' ? 'в конец' : '')}`;
     case 'web_fetch':
       return `Открыть ${String(args.url || '')}`;
     case 'web_search':
       return `Поиск в интернете: ${String(args.query || '')}`;
+    case 'browser_open':
+      return `Браузер: открыть ${String(args.url || '')}`;
+    case 'browser_click':
+      return `Браузер: нажать [${args.ref}] на ${subject || 'странице'}`;
+    case 'browser_type':
+      return `Браузер: ввести «${String(args.text ?? '').slice(0, 120)}» в [${args.ref}] на ${subject || 'странице'}${args.submit ? ' и отправить' : ''}`;
     case 'run_shell':
       return `${String(subject || '')}${args.background ? '   (в фоне)' : ''}`;
     case 'memory_append':
@@ -417,6 +454,8 @@ export function suggestRules({ tool, cls, subject }) {
     const dir = path.posix.dirname(String(subject || '.'));
     const spec = dir === '.' || dir === '' ? '**' : `${dir}/**`;
     if (tool === 'create_document') return [`create_document(${spec})`];
+    if (tool === 'notebook_edit') return [`notebook_edit(${spec})`];
+    if (tool === 'pdf_merge' || tool === 'pdf_form') return [`${tool}(${spec})`];
     return [`write_file(${spec})`, `edit_file(${spec})`];
   }
   if (cls === 'memory') return [`memory_append(${subject || 'project'})`];
@@ -427,8 +466,23 @@ export function suggestRules({ tool, cls, subject }) {
   }
   if (tool === 'web_fetch' && subject) return [`web_fetch(${subject})`];
   if (tool === 'web_search') return ['web_search'];
+  // Сайт для браузера агента (CW4.2): одно правило на все действия на домене.
+  if (String(tool).startsWith('browser_') && subject) return [`browser_*(${subject})`];
   // Отправку не предлагаем запомнить (CW3.2): каждое письмо — своё решение.
   if (cls === 'send') return [];
   if (cls === 'external' || cls === 'network') return [tool];
   return [];
+}
+
+/**
+ * Разрешённые и запрещённые сайты браузера агента (CW4.2, ADR 0069) → правила.
+ * `example.com` покрывает и поддомены.
+ */
+export function browserSiteRules(sites = {}) {
+  const clean = (list) =>
+    (Array.isArray(list) ? list : [])
+      .map((d) => String(d).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^\*\./, ''))
+      .filter((d) => /^[a-z0-9.-]+$/.test(d));
+  const rules = (list) => clean(list).flatMap((d) => [`browser_*(${d})`, `browser_*(*.${d})`]);
+  return { allow: rules(sites.allow), ask: [], deny: rules(sites.block) };
 }

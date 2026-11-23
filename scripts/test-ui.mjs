@@ -5,7 +5,7 @@
  * IPC-каналы подменены заглушками: тест проверяет фронтенд, а не бэкенд.
  * Запуск: npx electron scripts/test-ui.mjs
  */
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -71,7 +71,10 @@ ipcMain.handle('commands:list', () => [
   { name: 'init', description: 'AGENTS.md', source: 'builtin' },
   { name: 'review', description: 'Ревью изменений', argumentHint: '<путь>', source: 'project' },
   { name: 'handoff', description: 'навык передачи', argumentHint: '<задача>', source: 'skill' },
+  { name: 'mcp__db__review', description: 'Ревью кода', argumentHint: '<file> [focus]', source: 'mcp' },
 ]);
+// Ресурсы MCP (раздел [42]).
+ipcMain.handle('mcp:resources', () => [{ server: 'db', uri: 'db://schema', name: 'Схема', description: '', mimeType: 'text/plain' }]);
 ipcMain.handle('commands:expand', (_e, payload) => {
   expandCalls.push(payload);
   return { ok: true, prompt: `Ревью ${payload.args}` };
@@ -291,6 +294,36 @@ ipcMain.handle('connectors:list', () => [
   { id: 'notion', name: 'Notion', category: 'Вики', description: 'Страницы', url: 'https://mcp.notion.com/mcp', auth: 'oauth', source: 'builtin', installed: connInstalled.has('notion'), status: 'needs_auth' },
   { id: '1c', name: '1С', category: 'Учёт', description: 'Наш 1С', url: 'https://1c.corp/mcp', auth: 'token', source: 'managed', installed: false, status: '' },
 ]);
+// Онбординг и наборы ролей (раздел [41]).
+const roleCalls = [];
+ipcMain.handle('roles:list', () => ({
+  roles: [
+    { id: 'developer', title: 'Разработчик', icon: '💻', summary: 'Код и тесты', connectors: ['github', 'linear'], examples: ['Напиши тесты'], package: 'role-developer', installed: false },
+    { id: 'finance', title: 'Финансы', icon: '💰', summary: 'Бюджеты', connectors: [], examples: ['Сверь выписку банка с реестром', 'Построй бюджет'], package: 'role-finance', installed: true },
+  ],
+  onboarding: null,
+}));
+ipcMain.handle('roles:install', (_e, id) => {
+  roleCalls.push(id);
+  return { ok: true, role: { id }, package: { name: `role-${id}`, parts: { skills: 1, commands: 1 } } };
+});
+const localCalls = [];
+const boardOpens = [];
+ipcMain.handle('boards:open', (_e, payload) => {
+  boardOpens.push(payload);
+  return 1;
+});
+let rwOn = false;
+ipcMain.handle('connectors:local', () => [
+  { id: 'repowise', name: 'Repowise', description: 'Индекс кода', status: rwOn ? 'ready' : 'off', detail: '', action: { kind: 'toggle', enabled: rwOn, label: rwOn ? 'Выключить' : 'Включить' }, category: 'Локальные', local: true },
+  { id: 'multica', name: 'Multica', description: 'Задачи', status: 'missing', detail: 'CLI не найден', action: { kind: 'open', target: 'panel:multica', label: 'Установить' }, category: 'Локальные', local: true },
+  { id: 'postgres', name: 'Postgres', description: 'Артефакты', status: 'ready', detail: 'PostgreSQL 16', action: { kind: 'open', target: 'storage:infra', label: 'Настроить' }, category: 'Локальные', local: true },
+]);
+ipcMain.handle('connectors:localToggle', (_e, payload) => {
+  localCalls.push(`${payload.id}:${payload.enabled}`);
+  rwOn = payload.enabled;
+  return { ok: true };
+});
 ipcMain.handle('connectors:add', (_e, payload) => {
   connCalls.push({ type: 'add', ...payload });
   connInstalled.add(payload.id);
@@ -363,6 +396,46 @@ const INTERRUPTED = {
 };
 ipcMain.handle('sessions:get', (_e, id) => (id === TEST_SESSION.id ? TEST_SESSION : id === INTERRUPTED.id ? INTERRUPTED : null));
 
+// Git: /pr, /security-review, /worktree (раздел [46]).
+const wtCalls = [];
+ipcMain.handle('worktree:list', () => ({ ok: true, repo: '/repo', items: [{ dir: '/repo', branch: 'main', main: true }, { dir: '/data/wt/fix', branch: 'mai/wt-fix', main: false }] }));
+ipcMain.handle('worktree:create', (_e, payload) => {
+  wtCalls.push({ type: 'create', ...payload });
+  return { ok: true, dir: '/data/wt/new-task', branch: 'mai/wt-new-task', repo: '/repo' };
+});
+ipcMain.handle('worktree:open', (_e, dir) => {
+  wtCalls.push({ type: 'open', dir });
+  return { ok: true, dir };
+});
+ipcMain.handle('worktree:remove', (_e, payload) => {
+  wtCalls.push({ type: 'remove', ...payload });
+  return { ok: true, branch: 'mai/wt-fix' };
+});
+// Статусная строка и `!команда` (раздел [45]).
+ipcMain.handle('git:branch', () => 'dev');
+const directCalls = [];
+ipcMain.handle('shell:direct', (_e, payload) => {
+  directCalls.push(payload);
+  return { ok: true, output: '$ npm test\n\nok\n\n[код 0, 5 мс]' };
+});
+// Чаты: имя, копия, файл (раздел [43]).
+const sessCalls = [];
+ipcMain.handle('sessions:rename', (_e, payload) => {
+  sessCalls.push({ type: 'rename', ...payload });
+  return { ok: true, title: payload.title };
+});
+ipcMain.handle('sessions:fork', (_e, payload) => {
+  sessCalls.push({ type: 'fork', ...payload });
+  return { ok: true, id: TEST_SESSION.id, title: `${TEST_SESSION.title} (копия)` };
+});
+ipcMain.handle('sessions:exportFile', (_e, id) => {
+  sessCalls.push({ type: 'export', id });
+  return { ok: true, path: '/tmp/x.mai-chat.json' };
+});
+ipcMain.handle('sessions:importFile', () => {
+  sessCalls.push({ type: 'import' });
+  return { ok: false, canceled: true };
+});
 // Экспорт: записываем вызовы, файл не пишем.
 const exportCalls = [];
 ipcMain.handle('export:message', (_e, payload) => {
@@ -450,6 +523,8 @@ ipcMain.handle('boards:load', () => ({
 }));
 
 app.whenReady().then(async () => {
+  // Как в приложении: тема по умолчанию — тёмная (ADR 0074), а не системная.
+  nativeTheme.themeSource = 'dark';
   const win = new BrowserWindow({
     show: false,
     width: 1200,
@@ -730,8 +805,21 @@ app.whenReady().then(async () => {
         areas,
         items,
         title: document.querySelector('.modal-head h2')?.innerText || '',
+        // Индикатор предела (CC4.5): длинный текст — предупреждение.
+        meter: (() => {
+          const area = body.querySelectorAll('textarea')[0];
+          const before = body.querySelector('.memory-meter-project')?.textContent || '';
+          area.value = 'x'.repeat(12050);
+          area.dispatchEvent(new Event('input'));
+          const node = body.querySelector('.memory-meter-project');
+          const after = { text: node?.textContent || '', over: node?.classList.contains('over') };
+          area.value = 'память проекта';
+          area.dispatchEvent(new Event('input'));
+          return { before, after };
+        })(),
       };
     })()`);
+    check('индикатор памяти: размер из предела, сверх — предупреждение', /^14 из 12000 символов в промпте$/.test(memoryPanel.meter?.before) && memoryPanel.meter?.after?.over && /только первые 12000/.test(memoryPanel.meter?.after?.text), JSON.stringify(memoryPanel.meter));
     check('кнопка панели «Память» найдена', memoryPanel.found === true);
     check('окно памяти открылось', memoryPanel.open === true, JSON.stringify(memoryPanel));
     check('заголовок окна памяти', memoryPanel.title === 'Память (memory.md)', memoryPanel.title);
@@ -859,7 +947,7 @@ app.whenReady().then(async () => {
       return { found: Boolean(picker), items };
     })()`);
     check('меню форматов чата открылось', chatMenu.found === true, JSON.stringify(chatMenu));
-    check('четыре варианта в меню чата', chatMenu.items.length === 4, JSON.stringify(chatMenu.items));
+    check('меню чата: четыре формата и файл чата MAI', chatMenu.items.length === 5 && chatMenu.items[4].startsWith('Файл чата MAI'), JSON.stringify(chatMenu.items));
 
     const chatPick = await win.webContents.executeJavaScript(`(async () => {
       const picker = document.querySelector(".export-picker");
@@ -1435,6 +1523,10 @@ app.whenReady().then(async () => {
       document.querySelector('.shell-sandbox-image').value = 'python:3.12-slim';
       document.querySelector('.shell-sandbox-network').value = 'bridge';
       document.querySelector('.shell-sandbox-host').value = 'git *\\n\\n  gh *  ';
+      // Браузер агента (ADR 0069): включён по умолчанию, сайты — списком через запятую.
+      before.browser = document.querySelector('.browser-enabled')?.checked;
+      document.querySelector('.browser-allow').value = 'wikipedia.org,  docs.python.org ';
+      document.querySelector('.browser-block').value = 'mybank.ru';
       [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Сохранить').click();
       return { found: true, before };
     })()`);
@@ -1442,6 +1534,8 @@ app.whenReady().then(async () => {
     check('по умолчанию выключено, сеть выключена; есть «только в Задаче»', box.before?.docker === false && box.before?.network === 'none' && box.before?.options === 'off,docker,tasks', JSON.stringify(box));
     await new Promise((r) => setTimeout(r, 400));
     const sb = savedSettings.at(-1)?.shellSandbox;
+    const bs = savedSettings.at(-1);
+    check('браузер агента: включён, сайты без вопросов и под запретом сохраняются', box.before?.browser === true && bs?.browserEnabled === true && bs?.browserSites?.allow?.join('|') === 'wikipedia.org|docs.python.org' && bs?.browserSites?.block?.join('|') === 'mybank.ru', JSON.stringify({ b: box.before?.browser, s: bs?.browserSites }));
     check('сохраняется mode/image/network/hostCommands', sb?.mode === 'docker' && sb?.image === 'python:3.12-slim' && sb?.network === 'bridge' && sb?.hostCommands?.join('|') === 'git *|gh *', JSON.stringify(sb));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
 
@@ -1632,7 +1726,7 @@ app.whenReady().then(async () => {
     console.log('\n[37] Каталог коннекторов (ADR 0052)');
     await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/connectors'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
     await new Promise((r) => setTimeout(r, 500));
-    const cards = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.connector')].map((c) => ({ id: c.dataset.id, text: c.textContent, token: Boolean(c.querySelector('.connector-token')), add: Boolean(c.querySelector('.connector-add')), remove: Boolean(c.querySelector('.connector-remove')) }))`);
+    const cards = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.connector:not(.local)')].map((c) => ({ id: c.dataset.id, text: c.textContent, token: Boolean(c.querySelector('.connector-token')), add: Boolean(c.querySelector('.connector-add')), remove: Boolean(c.querySelector('.connector-remove')) }))`);
     const connCard = (id) => cards.find((c) => c.id === id) || {};
     check('карточки каталога', cards.length === 4 && /Вход через браузер/.test(connCard('linear').text) && connCard('linear').add, JSON.stringify(cards));
     check('токен — поле только у токенных', connCard('github').token && !connCard('linear').token);
@@ -1646,6 +1740,16 @@ app.whenReady().then(async () => {
     check('OAuth-коннектор подключается без токена', connCalls.some((c) => c.type === 'add' && c.id === 'linear' && !c.token));
     const linearAfter = await win.webContents.executeJavaScript(`document.querySelector('.connector[data-id=linear]').textContent`);
     check('после подключения — «подключён»', /подключён/.test(linearAfter), linearAfter);
+    // Локальные коннекторы (CW3.3, ADR 0072).
+    const locals = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.connector.local')].map((c) => c.dataset.id + ':' + c.querySelector('.badge').textContent + ':' + c.querySelector('.local-action').textContent).join('|')`);
+    check('локальные — карточками в том же окне', locals === 'repowise:выключен:Включить|multica:не настроен:Установить|postgres:работает:Настроить', locals);
+    await win.webContents.executeJavaScript(`document.querySelector('.connector.local[data-id=repowise] .local-action').click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const rwAfter = await win.webContents.executeJavaScript(`document.querySelector('.connector.local[data-id=repowise]').textContent`);
+    check('«Включить» Repowise — сразу здесь', localCalls.join() === 'repowise:true' && /работает/.test(rwAfter) && /Выключить/.test(rwAfter), `${localCalls} ${rwAfter}`);
+    await win.webContents.executeJavaScript(`document.querySelector('.connector.local[data-id=postgres] .local-action').click()`);
+    await new Promise((r) => setTimeout(r, 300));
+    check('«Настроить» хранилище — окно «Хранилища» на вкладке infra', boardOpens.some((b) => b.board === 'storage' && b.focus === 'tab:infra'), JSON.stringify(boardOpens));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
 
     console.log('\n[38] Глубина рассуждений в поле ввода (ADR 0058)');
@@ -1689,6 +1793,163 @@ app.whenReady().then(async () => {
     const savedProject = projCalls.find((c) => c.type === 'save');
     check('новый проект: папки из диалога, инструкции, вид', savedProject?.name === 'Новый' && savedProject.primaryDir === '/p/new-main' && savedProject.extraDirs.join() === '/p/new-extra' && savedProject.instructions === 'правила' && savedProject.kind === 'code' && savedProject.sandbox === 'docker', JSON.stringify(savedProject));
     await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[41] Онбординг: роль → набор → коннекторы → пример (ADR 0070)');
+    const ui = (code) => win.webContents.executeJavaScript(code);
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '/onboarding'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await wait(500);
+    const roleCards = await ui(`[...document.querySelectorAll('.role-card')].map((c) => c.dataset.role + ':' + c.classList.contains('installed')).join()`);
+    check('/onboarding: карточки ролей, установленный отмечен', roleCards === 'developer:false,finance:true', roleCards);
+    await ui(`document.querySelector('.role-card[data-role=developer]').click()`);
+    await wait(400);
+    const step2 = await ui(`document.querySelector('.onboarding-installed')?.textContent || ''`);
+    check('выбор роли ставит набор и показывает, что в нём', roleCalls.join() === 'developer' && /навыков 1, команд 1/.test(step2), step2);
+    await ui(`document.querySelector('.onboarding-connect').click()`);
+    await wait(500);
+    const shown = await ui(`[...document.querySelectorAll('.connector')].map((c) => c.dataset.id).join()`);
+    check('«Подключить коннекторы» — только коннекторы роли', shown === 'linear,github', shown);
+    const doneSave = savedSettings.findLast((s) => s.onboarding);
+    check('закрытие мастера запоминает «пройден» и роль', doneSave?.onboarding?.done === true && doneSave.onboarding.role === 'developer', JSON.stringify(doneSave));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '/onboarding'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await wait(500);
+    await ui(`document.querySelector('.role-card[data-role=finance]').click()`);
+    await wait(400);
+    const noConn = await ui(`!document.querySelector('.onboarding-connect')`);
+    await ui(`document.querySelector('.onboarding-next').click()`);
+    await wait(200);
+    await ui(`[...document.querySelectorAll('.onboarding-example')][0].click()`);
+    await wait(200);
+    const inputText = await ui(`document.querySelector('#input').value`);
+    const modalGone = await ui(`!document.querySelector('.role-cards, .onboarding-examples')`);
+    check('роль без коннекторов; пример задачи — в поле ввода, мастер закрыт', noConn && inputText === 'Сверь выписку банка с реестром' && modalGone, JSON.stringify({ noConn, inputText, modalGone }));
+
+    console.log('\n[42] MCP: ресурсы @сервер:uri и промпты /mcp__… (ADR 0071)');
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = 'смотри @sch'; i.setSelectionRange(i.value.length, i.value.length); i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await wait(500);
+    const resItems = await ui(`[...document.querySelectorAll('#suggest .suggest-item')].map((b) => b.textContent).join('|')`);
+    check('@ подсказывает ресурс MCP', resItems === 'db:db://schema', resItems);
+    await ui(`(() => { const i = document.querySelector('#input'); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })); })()`);
+    await wait(200);
+    check('выбор вставляет @сервер:uri', (await ui(`document.querySelector('#input').value`)) === 'смотри @db:db://schema ');
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '/mcp__'; i.setSelectionRange(6, 6); i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await wait(400);
+    const promptItem = await ui(`document.querySelector('#suggest .suggest-item')?.textContent || ''`);
+    check('промпт MCP в списке команд с аргументами и меткой', /\/mcp__db__review/.test(promptItem) && /<file> \[focus\]/.test(promptItem) && /MCP$/.test(promptItem), promptItem);
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+
+    console.log('\n[43] Чаты: имя, копия, файл, точки отката (ADR 0073)');
+    await ui(`[...document.querySelectorAll('.session')].find((s) => s.textContent.includes('Тестовый диалог'))?.click()`);
+    await wait(500);
+    await ui(`document.querySelector('.session.active .session-rename').click()`);
+    await wait(200);
+    await ui(`(() => { const i = document.querySelector('.rename-input'); i.value = 'Отчёт за март'; document.querySelector('.rename-save').click(); })()`);
+    await wait(300);
+    check('✎ — переименование уходит в main', sessCalls.some((c) => c.type === 'rename' && c.id === 'test-session' && c.title === 'Отчёт за март'), JSON.stringify(sessCalls));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '/rename Новое имя'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await wait(400);
+    check('/rename с именем — без окна', sessCalls.some((c) => c.type === 'rename' && c.title === 'Новое имя'));
+    await ui(`document.querySelector('.session.active .session-fork').click()`);
+    await wait(500);
+    check('⑂ — копия чата', sessCalls.some((c) => c.type === 'fork' && c.id === 'test-session'));
+    await ui(`(() => { document.activeElement?.blur(); for (let k = 0; k < 2; k += 1) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); })()`);
+    await wait(300);
+    const points = await ui(`[...document.querySelectorAll('.rewind-point')].map((b) => b.textContent).join('|')`);
+    check('двойной Esc — список точек отката, правки отмечены', points === '✎ Покажи отчёт', points);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await wait(200);
+    await ui(`document.querySelector('#export-chat').click()`);
+    await wait(300);
+    await ui(`[...document.querySelectorAll('.export-picker button')].find((b) => b.textContent.startsWith('Файл чата MAI'))?.click()`);
+    await wait(300);
+    check('«Скачать чат» → файл чата MAI', sessCalls.some((c) => c.type === 'export' && c.id === 'test-session'), JSON.stringify(sessCalls));
+
+    console.log('\n[44] Тема: светлая, тёмная, как в системе (ADR 0074)');
+    const bgNow = () => ui(`getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()`);
+    nativeTheme.themeSource = 'light';
+    await wait(300);
+    const lightBg = await bgNow();
+    if (process.env.MAI_SHOT) {
+      win.webContents.invalidate();
+      await wait(1000);
+      fs.writeFileSync(process.env.MAI_SHOT, (await win.webContents.capturePage()).toPNG());
+    }
+    nativeTheme.themeSource = 'dark';
+    await wait(300);
+    const darkBg = await bgNow();
+    check('светлая и тёмная палитры по prefers-color-scheme', lightBg === '#f6f7fb' && darkBg === '#0f1117', `${lightBg} ${darkBg}`);
+    await ui(`document.querySelector('#settings-btn').click()`);
+    await wait(500);
+    const themeOptions = await ui(`(() => { const t = document.querySelector('.theme-select'); const v = [...t.options].map((o) => o.value).join(); t.value = 'system'; [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Сохранить').click(); return v; })()`);
+    await wait(400);
+    check('настройка «Тема» сохраняется', themeOptions === 'dark,light,system' && savedSettings.at(-1)?.theme === 'system', `${themeOptions} ${savedSettings.at(-1)?.theme}`);
+    check('поле «Модель для Плана» сохраняется', savedSettings.at(-1)?.planModel === '', JSON.stringify(savedSettings.at(-1)?.planModel));
+    const ns = savedSettings.at(-1)?.notifications;
+    check('уведомления: по умолчанию все виды на рабочем столе, каналов нет', ns?.enabled === true && ns.desktop.length === 6 && Array.isArray(ns.channels) && ns.channels.length === 0, JSON.stringify(ns));
+    // Канал Telegram: добавить, заполнить, сохранить; у MAX — поля бота и адресата.
+    await ui(`document.querySelector('#settings-btn').click()`);
+    await wait(500);
+    const chanFields = await ui(`(() => {
+      document.querySelector('.channel-add').click();
+      const row = document.querySelector('.notify-channel:last-child');
+      const typeSel = row.querySelector('.channel-type');
+      const types = [...typeSel.options].map((o) => o.value).join();
+      typeSel.value = 'max';
+      typeSel.dispatchEvent(new Event('change'));
+      const maxFields = [...row.querySelectorAll('[data-field]')].map((i) => i.dataset.field).join();
+      typeSel.value = 'telegram';
+      typeSel.dispatchEvent(new Event('change'));
+      row.querySelector('[data-field=token]').value = '123:ABC';
+      row.querySelector('[data-field=chatId]').value = '-100500';
+      [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Сохранить').click();
+      return { types, maxFields };
+    })()`);
+    await wait(400);
+    const savedChan = savedSettings.at(-1)?.notifications?.channels?.[0];
+    check('каналы: Telegram, MAX, WhatsApp, Rocket.Chat, webhook; у MAX — токен, адресат, адрес API', chanFields.types === 'telegram,max,whatsapp,rocketchat,webhook' && chanFields.maxFields === 'token,chatId,target,apiBase', JSON.stringify(chanFields));
+    check('канал Telegram сохраняется с токеном, chat_id и событиями', savedChan?.type === 'telegram' && savedChan.token === '123:ABC' && savedChan.chatId === '-100500' && savedChan.kinds.join() === 'done,error,scheduled' && savedChan.enabled === true, JSON.stringify(savedChan));
+
+    console.log('\n[45] Статусная строка, !команда, доступность (ADR 0074)');
+    await wait(300);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await wait(300);
+    const status = await ui(`(() => { const s = document.querySelector('#statusline'); return { role: s.getAttribute('role'), text: s.textContent, branch: Boolean(s.querySelector('.status-branch')), mode: Boolean(s.querySelector('.status-mode')) }; })()`);
+    check('статусная строка: модель · режим · ветка, role=status', status.role === 'status' && /⎇ dev/.test(status.text) && status.mode, JSON.stringify(status));
+    await ui(`document.querySelector('#settings-btn').click()`);
+    await wait(500);
+    await ui(`(() => { document.querySelector('.statusline-item[data-item=context]').checked = true; document.querySelector('.statusline-item[data-item=cost]').checked = false; [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Сохранить').click(); })()`);
+    await wait(400);
+    check('состав строки сохраняется', JSON.stringify(savedSettings.at(-1)?.statusLine) === JSON.stringify(['model', 'mode', 'branch', 'context']), JSON.stringify(savedSettings.at(-1)?.statusLine));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '!npm test'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await wait(500);
+    check('!команда уходит в main без модели', directCalls.length === 1 && directCalls[0].command === 'npm test' && chatStarts.every((c) => c.text !== '!npm test'), JSON.stringify(directCalls));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; })()`);
+    // Окно: dialog с подписью, фокус внутри, Esc закрывает и возвращает фокус.
+    await ui(`document.querySelector('#settings-btn').focus(); document.querySelector('#settings-btn').click()`);
+    await wait(500);
+    const dlg = await ui(`(() => { const m = document.querySelector('.modal'); const id = m.getAttribute('aria-labelledby'); return { role: m.getAttribute('role'), modal: m.getAttribute('aria-modal'), title: document.getElementById(id)?.textContent, inside: m.contains(document.activeElement) }; })()`);
+    check('окно — role=dialog, aria-modal, подпись, фокус внутри', dlg.role === 'dialog' && dlg.modal === 'true' && dlg.title === 'Настройки' && dlg.inside, JSON.stringify(dlg));
+    await ui(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await wait(200);
+    const after = await ui(`({ open: Boolean(document.querySelector('.modal-backdrop')), focus: document.activeElement?.id })`);
+    check('Esc закрывает окно, фокус возвращается на кнопку', !after.open && after.focus === 'settings-btn', JSON.stringify(after));
+    const labels = await ui(`['settings-btn', 'attach', 'send', 'stop'].every((id) => document.getElementById(id)?.getAttribute('aria-label'))`);
+    check('кнопки-значки подписаны для читалок экрана', labels === true);
+
+    console.log('\n[46] Git: /pr, /security-review, /worktree (ADR 0076)');
+    const sec = await slash('/security-review 7');
+    check('/security-review 7: gh pr diff, только чтение, путь атаки и уверенность', /gh pr diff 7/.test(sec?.text) && /файлы не меняй/.test(sec?.text) && /путь атаки/.test(sec?.text) && /уверенность/.test(sec?.text), sec?.text?.slice(0, 200));
+    const pr = await slash('/pr для релиза');
+    check('/pr: шаблон репозитория, не пушить в защищённую, без merge', /pull_request_template/.test(pr?.text) && /в защищённую ветку не пушь/.test(pr?.text) && /Не мерджи PR/.test(pr?.text) && /для релиза/.test(pr?.text), pr?.text?.slice(0, 200));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = '/worktree'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await wait(500);
+    const wtRows = await ui(`[...document.querySelectorAll('.worktree-row')].map((r) => r.querySelector('b').textContent + ':' + Boolean(r.querySelector('.worktree-remove'))).join('|')`);
+    check('/worktree: основная папка и копии, убрать — только копию', wtRows === 'основная папка:false|mai/wt-fix:true', wtRows);
+    await ui(`(() => { document.querySelector('.worktree-name').value = 'new task'; document.querySelector('.worktree-create').click(); })()`);
+    await wait(600);
+    check('«Создать и открыть» — новая копия, чат в ней', wtCalls.some((c) => c.type === 'create' && c.name === 'new task'), JSON.stringify(wtCalls));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; })()`);
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

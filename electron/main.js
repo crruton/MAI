@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, Notification } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, Notification, nativeTheme } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -6,12 +6,12 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets, secretBox } from './lib/config.js';
-import { titleBarOptions } from './lib/window.js';
+import { titleBarOptions, windowColors, normalizeTheme } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
-import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, setSessionRun, markInterrupted, addSessionRules, removeSessionRules } from './lib/sessions.js';
-import { runAgent, compactSession, describeContext } from './lib/agent.js';
+import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, setSessionRun, markInterrupted, addSessionRules, removeSessionRules, renameSession, forkSession, importSession, expiredSessions } from './lib/sessions.js';
+import { runAgent, compactSession, describeContext, suggestTitle } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
 import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
@@ -19,7 +19,7 @@ import { listAgentDefs } from './lib/agent-defs.js';
 import { normalizeShellSandbox } from './lib/shell-sandbox.js';
 import { createOAuthStore } from './lib/mcp-oauth.js';
 import { listTrash, restoreFromTrash, purgeTrash } from './lib/trash.js';
-import { disposeBackground } from './lib/tools/shell.js';
+import { disposeBackground, execute as executeShell } from './lib/tools/shell.js';
 import { normalizeRoots } from './lib/workroots.js';
 import { listConnectors, connectorServerConfig } from './lib/connectors.js';
 import { sessionResults, previewResult, resultFile } from './lib/results.js';
@@ -28,9 +28,17 @@ import { modelCapabilities } from './lib/capabilities.js';
 import { createTracer, NO_TRACER } from './lib/tracer.js';
 import { createProjectStore } from './lib/projects.js';
 import { renderPdf, renderPng } from './lib/pdf-render.js';
+import { createAgentBrowser } from './lib/browser-agent.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
+import { listRoles, installRole } from './lib/roles.js';
+import { skillConflicts } from './lib/skills.js';
+import { wrapData } from './lib/injection.js';
+import { localConnectors } from './lib/local-connectors.js';
+import { createNotifier } from './lib/notify.js';
+import { currentBranch } from './lib/git-guard.js';
+import { repoRoot, realPath, createWorktree, listWorktrees, removeWorktree, worktreeId } from './lib/worktree.js';
 import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
@@ -83,7 +91,8 @@ import { trustState, setTrust, removeTrust, listTrust, inspectProject } from './
 import { guardIpc } from './lib/ipc-permissions.js';
 import { isImageFile } from './lib/vision.js';
 import { acquireProject } from './lib/project-lock.js';
-import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions } from './lib/commands.js';
+import { isCliInvocation, parseCliArgs, CLI_HELP, streamLine, resultObject } from './lib/cli.js';
+import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions, promptArgs, resolveResourceMentions } from './lib/commands.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
@@ -102,12 +111,18 @@ if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !proc
       NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --use-system-ca`.trim(),
       MAI_CODE_RELAUNCHED: '1',
     },
-    detached: true,
-    stdio: 'ignore',
+    // CLI (CC12.1): вывод и код выхода дочернего процесса — наши.
+    ...(isCliInvocation(process.argv) ? { stdio: 'inherit' } : { detached: true, stdio: 'ignore' }),
   });
-  child.unref();
-  app.exit(0);
+  if (isCliInvocation(process.argv)) child.on('exit', (code) => app.exit(code ?? 1));
+  else {
+    child.unref();
+    app.exit(0);
+  }
 }
+
+// Безголовый запуск (CC12.1, ADR 0077): `mai -p "задача"` — без окна и планировщика.
+const CLI = isCliInvocation(process.argv) ? parseCliArgs(process.argv.slice(process.defaultApp ? 2 : 1), { cwd: process.env.MAI_CLI_CWD || process.cwd() }) : null;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // OAuth удалённых MCP (ADR 0041): токены — в mcp-oauth.json, зашифрованы как ключи провайдеров.
@@ -217,6 +232,26 @@ function dockerReady() {
   return dockerCache.available;
 }
 
+// Браузер агента (CW4.1, ADR 0069): одно окно на приложение, создаётся при первом открытии страницы.
+let agentBrowser = null;
+function browserFor(settings) {
+  if (settings.browserEnabled === false) return null;
+  if (!agentBrowser) agentBrowser = createAgentBrowser({ BrowserWindow });
+  return agentBrowser;
+}
+
+/** Модель для «Плана» (CC13.5): своя, если задана и отличается от основной. */
+function plannerFor(settings, activeKey) {
+  const key = String(settings.planModel || '').trim();
+  if (!key || key === activeKey) return null;
+  try {
+    const r = resolveModel(settings, key);
+    return r.provider?.apiKey ? { provider: r.provider, model: r.modelId, label: key } : null;
+  } catch {
+    return null;
+  }
+}
+
 function agentSettings(settings) {
   const shellSandbox = normalizeShellSandbox(settings.shellSandbox);
   return {
@@ -230,6 +265,7 @@ function agentSettings(settings) {
     renderPdf: (html) => renderPdf(BrowserWindow, html),
     renderPng: (html, options) => renderPng(BrowserWindow, html, options),
     previewDir: path.join(app.getPath('temp'), 'mai-previews'),
+    browser: browserFor(settings),
     // Длинный вывод инструментов — в файл (CC1.13).
     outputDir: path.join(dataDir(), 'tool-output'),
   };
@@ -328,8 +364,8 @@ function openBoardWindow(board, focus = '') {
     height: 900,
     minWidth: 1000,
     minHeight: 640,
-    backgroundColor: '#0f1117',
-    ...titleBarOptions(),
+    backgroundColor: windowColors(nativeTheme.shouldUseDarkColors).background,
+    ...titleBarOptions(process.platform, { dark: nativeTheme.shouldUseDarkColors }),
     title: `MAI Code — ${titles[board] || board}`,
     icon: path.join(__dirname, '..', 'assets', 'icon.ico'),
     autoHideMenuBar: true,
@@ -352,14 +388,30 @@ function openBoardWindow(board, focus = '') {
   return win.id;
 }
 
+/** Тема (CC7.16, ADR 0074): CSS следует prefers-color-scheme, а его задаёт nativeTheme. */
+function applyTheme(theme) {
+  nativeTheme.themeSource = normalizeTheme(theme);
+}
+nativeTheme.on('updated', () => {
+  const colors = windowColors(nativeTheme.shouldUseDarkColors);
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.setBackgroundColor(colors.background);
+      if (process.platform !== 'darwin') win.setTitleBarOverlay?.({ color: colors.color, symbolColor: colors.symbolColor });
+    } catch {
+      /* окно без полосы заголовка (PDF, браузер агента) */
+    }
+  }
+});
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
     minWidth: 980,
     minHeight: 640,
-    backgroundColor: '#0f1117',
-    ...titleBarOptions(),
+    backgroundColor: windowColors(nativeTheme.shouldUseDarkColors).background,
+    ...titleBarOptions(process.platform, { dark: nativeTheme.shouldUseDarkColors }),
     title: 'MAI Code',
     icon: path.join(__dirname, '..', 'assets', 'icon.ico'),
     autoHideMenuBar: true,
@@ -375,12 +427,20 @@ function createWindow() {
   });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   mainWindow.on('closed', () => {
+    // Окно браузера агента не держит приложение открытым.
+    agentBrowser?.close();
     runs.delete(mainWindow?.id);
     mainWindow = null;
   });
 }
 
 app.whenReady().then(async () => {
+  if (CLI) {
+    // Перезапуск с --use-system-ca ещё идёт — ответит дочерний процесс.
+    if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !process.env.MAI_CODE_RELAUNCHED) return;
+    app.exit(await runCli(CLI));
+    return;
+  }
   try {
     installBundledSkills(path.join(app.getAppPath(), 'skills'));
   } catch (err) {
@@ -394,6 +454,7 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error('[secrets] не удалось зашифровать ключи:', err?.message || err);
   }
+  applyTheme(loadSettings().theme);
   createWindow();
   const settings = loadSettings();
   emitLog('MAI Code запущен', { attributes: { platform: process.platform, version: app.getVersion() } });
@@ -404,6 +465,14 @@ app.whenReady().then(async () => {
     if (interrupted.length) emitLog(`Прерванных прогонов: ${interrupted.length}`);
   } catch (err) {
     console.error('[sessions] не удалось отметить прерванные прогоны:', err?.message || err);
+  }
+  // Срок хранения чатов (CC6.9): старше N дней без изменений — удалить.
+  try {
+    const expired = expiredSessions(settings.sessionRetentionDays);
+    for (const id of expired) removeSessionFully(id);
+    if (expired.length) emitLog(`Удалено старых чатов: ${expired.length}`);
+  } catch (err) {
+    console.error('[sessions] не удалось очистить старые чаты:', err?.message || err);
   }
   startScheduler();
   app.on('activate', () => {
@@ -421,6 +490,8 @@ app.on('before-quit', () => {
   disposePluginHosts();
   // Фоновые команды агента (CC1.4) не переживают приложение.
   disposeBackground();
+  // Фоновые субагенты (CC8.6) — тоже.
+  for (const tasks of backgroundAgents.values()) for (const t of tasks.values()) t.abort?.();
   for (const state of runs.values()) {
     try {
       state.stage?.kill();
@@ -502,6 +573,16 @@ ipcMain.handle('settings:save', async (_e, patch) => {
   }
   const current = loadSettings();
   if ('allowOutsideProject' in (patch || {}) && Boolean(patch.allowOutsideProject) !== Boolean(current.allowOutsideProject)) requireAdmin();
+  // Webhook уведомлений (CW5.4) отправляет данные наружу — только admin.
+  if (patch?.notifications && patch.notifications.webhookUrl !== undefined && patch.notifications.webhookUrl !== '***' && String(patch.notifications.webhookUrl || '') !== String(current.notifications?.webhookUrl || '')) requireAdmin();
+  // Каналы мессенджеров (CW5.4) отправляют данные наружу: любое изменение, кроме маски «***», — только admin.
+  if (Array.isArray(patch?.notifications?.channels)) {
+    const strip = (list) => JSON.stringify((list || []).map(({ token: _t, url: _u, ...rest }) => rest));
+    const secretsChanged = patch.notifications.channels.some((c) => (c.token && c.token !== '***') || (c.url && c.url !== '***'));
+    if (secretsChanged || strip(patch.notifications.channels) !== strip(current.notifications?.channels)) requireAdmin();
+  }
+  // Сайты без вопросов для браузера агента (CW4.2) расширяют права — только admin.
+  if (patch?.browserSites && JSON.stringify(patch.browserSites.allow || []) !== JSON.stringify(current.browserSites?.allow || [])) requireAdmin();
   if (patch?.shellSandbox && JSON.stringify(normalizeShellSandbox({ ...current.shellSandbox, ...patch.shellSandbox })) !== JSON.stringify(normalizeShellSandbox(current.shellSandbox))) {
     requireAdmin();
   }
@@ -510,6 +591,7 @@ ipcMain.handle('settings:save', async (_e, patch) => {
   delete clean.baseURL;
   delete clean.model;
   const next = saveSettings(clean);
+  if ('theme' in (patch || {})) applyTheme(next.theme);
   if (patch.mcpServers) await mcp.sync(mcpConfigs(next.projectDir));
   return publicSettings();
 });
@@ -854,6 +936,61 @@ ipcMain.handle('project:pick', async () => {
   return result.filePaths[0];
 });
 
+// ---------- рабочие копии для чатов (CC11.5, ADR 0076) ----------
+
+const worktreesDir = () => path.join(dataDir(), 'worktrees');
+
+ipcMain.handle('worktree:list', (_e, projectDir) => {
+  const repo = repoRoot(String(projectDir || loadSettings().projectDir || ''));
+  if (!repo) return { ok: false, error: 'Папка проекта — не git-репозиторий с коммитами' };
+  const ours = realPath(worktreesDir());
+  return { ok: true, repo, items: listWorktrees(repo).map((w) => ({ ...w, ours: w.dir.startsWith(ours) })) };
+});
+
+/** Новая копия на ветке `mai/wt-<имя>` и переход в неё: новый чат работает там. */
+ipcMain.handle('worktree:create', (_e, payload = {}) => {
+  const source = String(payload.projectDir || loadSettings().projectDir || '');
+  const repo = repoRoot(source);
+  if (!repo) return { ok: false, error: 'Папка проекта — не git-репозиторий с коммитами' };
+  const id = worktreeId(payload.name) || `wt-${crypto.randomBytes(3).toString('hex')}`;
+  try {
+    const wt = createWorktree({ repo, baseDir: path.join(worktreesDir(), path.basename(repo)), id, branchPrefix: 'mai/wt-' });
+    // Копия доверенного репозитория — того же доверия: код в ней тот же.
+    if (isTrusted(repo)) setTrust(dataDir(), wt.dir, 'trusted');
+    const dir = path.join(wt.dir, path.relative(repo, realPath(source)));
+    retirePluginHosts();
+    saveSettings({ projectDir: dir, activeProject: null });
+    audit({ at: new Date().toISOString(), tool: 'worktree:create', source: 'user', cls: 'write', subject: `${wt.branch} ← ${repo}`, decision: 'allow' });
+    return { ok: true, dir, branch: wt.branch, repo };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+ipcMain.handle('worktree:open', (_e, dir) => {
+  const target = realPath(String(dir || ''));
+  if (!fs.existsSync(target)) return { ok: false, error: 'Папки нет' };
+  retirePluginHosts();
+  saveSettings({ projectDir: target, activeProject: null });
+  return { ok: true, dir: target };
+});
+
+/** Убрать копию: несохранённое коммитится в её ветку, ветка остаётся. Основную папку — нельзя. */
+ipcMain.handle('worktree:remove', (_e, payload = {}) => {
+  const repo = repoRoot(String(payload.repo || ''));
+  const dir = realPath(String(payload.dir || ''));
+  const item = repo ? listWorktrees(repo).find((w) => w.dir === dir) : null;
+  if (!item || item.main) return { ok: false, error: 'Это не рабочая копия этого репозитория' };
+  try {
+    removeWorktree({ repo, dir, branch: item.branch }, { keepBranch: true });
+    removeTrust(dataDir(), dir);
+    if (realPath(loadSettings().projectDir || '') === dir) saveSettings({ projectDir: repo, activeProject: null });
+    return { ok: true, branch: item.branch };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
 // ---------- слэш-команды и упоминания файлов (CC7.7–CC7.9) ----------
 
 ipcMain.handle('commands:list', (_e, projectDir) => {
@@ -872,13 +1009,29 @@ ipcMain.handle('commands:list', (_e, projectDir) => {
   const customNames = new Set(custom.map((c) => c.name.toLowerCase()));
   // /commit и /review можно заменить своей командой (ADR 0059).
   const builtins = BUILTIN_COMMANDS.filter((c) => !(c.overridable && customNames.has(c.name)));
-  return [...builtins.map((c) => ({ ...c, source: 'builtin' })), ...custom, ...skills];
+  // Промпты MCP-серверов (CC9.4, ADR 0071): /mcp__сервер__промпт.
+  const prompts = mcp.listPrompts().map((p) => ({
+    name: p.command,
+    description: p.description || `промпт ${p.name} сервера ${p.server}`,
+    argumentHint: p.arguments.map((a) => (a.required ? `<${a.name}>` : `[${a.name}]`)).join(' '),
+    source: 'mcp',
+  }));
+  return [...builtins.map((c) => ({ ...c, source: 'builtin' })), ...custom, ...skills, ...prompts];
 });
 
 /** Своя команда или навык → текст запроса агенту. */
-ipcMain.handle('commands:expand', (_e, payload = {}) => {
+ipcMain.handle('commands:expand', async (_e, payload = {}) => {
   const dir = payload.projectDir || loadSettings().projectDir;
   const name = String(payload.name || '').toLowerCase();
+  // Промпт MCP (CC9.4): сервер собирает текст запроса из аргументов.
+  const prompt = mcp.listPrompts().find((p) => p.command.toLowerCase() === name);
+  if (prompt) {
+    try {
+      return { ok: true, source: 'mcp', prompt: await mcp.getPrompt(prompt.command, promptArgs(prompt.arguments, payload.args)) };
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) };
+    }
+  }
   const trusted = isTrusted(dir);
   const custom = listCustomCommands(dir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(dir), 'commands') }).find((c) => c.name.toLowerCase() === name);
   if (custom) return { ok: true, prompt: expandTemplate(custom.body, payload.args), source: custom.source };
@@ -893,6 +1046,9 @@ ipcMain.handle('commands:expand', (_e, payload = {}) => {
   }
   return { ok: false, error: `Команда /${payload.name} не найдена` };
 });
+
+/** Ресурсы MCP для подсказки `@сервер:uri` (CC9.3). */
+ipcMain.handle('mcp:resources', () => mcp.listResources().map(({ server, uri, name, description, mimeType }) => ({ server, uri, name, description, mimeType })));
 
 ipcMain.handle('files:search', (_e, payload = {}) => {
   const dir = payload.projectDir || loadSettings().projectDir;
@@ -1126,14 +1282,182 @@ ipcMain.handle('workspace:create', async (_e, payload) => {
 ipcMain.handle('sessions:list', (_e, options) => listSessions(options && typeof options === 'object' ? { projectDir: String(options.projectDir || ''), query: String(options.query || '').slice(0, 200) } : {}));
 ipcMain.handle('sessions:get', (_e, id) => getSession(id));
 ipcMain.handle('sessions:create', (_e, data) => createSession(data || {}));
-ipcMain.handle('sessions:delete', (_e, id) => {
+/** Удаление чата вместе с вложениями и чекпоинтами. */
+function removeSessionFully(id) {
   const session = getSession(id);
   if (session?.projectDir) removeSessionUploads(session.projectDir, id);
   removeCheckpoints(dataDir(), id);
   return deleteSession(id);
+}
+ipcMain.handle('sessions:delete', (_e, id) => removeSessionFully(id));
+
+// Переименование и форк (CC6.8, CC6.5, ADR 0073).
+ipcMain.handle('sessions:rename', (_e, payload = {}) => {
+  const session = renameSession(payload.id, payload.title);
+  return session ? { ok: true, title: session.title } : { ok: false, error: 'Нет такого чата или пустое имя' };
+});
+ipcMain.handle('sessions:fork', (_e, payload = {}) => {
+  const session = forkSession(payload.id, { upTo: Number.isInteger(payload.upTo) ? payload.upTo : null });
+  return session ? { ok: true, id: session.id, title: session.title } : { ok: false, error: 'Нет такого чата' };
+});
+
+// Ветка git для статусной строки (CC7.12).
+ipcMain.handle('git:branch', (_e, projectDir) => {
+  try {
+    return currentBranch(String(projectDir || loadSettings().projectDir || '')) || '';
+  } catch {
+    return '';
+  }
+});
+
+// `!команда` (CC7.10, ADR 0074): пользователь сам запускает команду в папке проекта,
+// без модели; вывод — в историю чата, агент увидит его следующим ходом.
+// Guardrails действуют и здесь. Только admin: это выполнение на машине.
+ipcMain.handle('shell:direct', async (event, payload = {}) => {
+  const command = String(payload.command || '').trim();
+  const session = getSession(payload.sessionId);
+  if (!command) return { ok: false, error: 'Пустая команда' };
+  if (!session) return { ok: false, error: 'Нет такого чата' };
+  const projectDir = session.projectDir || loadSettings().projectDir;
+  if (!projectDir || !fs.existsSync(projectDir)) return { ok: false, error: 'Сначала выберите папку проекта' };
+  const guard = checkCommand(command, { guardrails: loadSettings().guardrails });
+  if (!guard.allowed) return { ok: false, error: `Guardrails заблокировали команду: ${guard.reason}` };
+  const output = await executeShell(command, projectDir, {});
+  audit({ at: new Date().toISOString(), tool: 'shell:direct', source: 'user', cls: 'exec', subject: command.slice(0, 300), decision: 'allow' });
+  const fresh = getSession(session.id);
+  fresh.messages.push({
+    role: 'user',
+    content: `Я сам выполнил команду в папке проекта (без тебя), вот вывод — учти его:\n\n${output}`,
+    display: `!${command}\n\n${output.length > 4000 ? `${output.slice(0, 4000)}\n…` : output}`,
+    direct: true,
+  });
+  if (!fresh.title || fresh.title === 'Новый чат') fresh.title = `!${command}`.slice(0, 60);
+  saveSession(fresh);
+  return { ok: true, output };
+});
+
+// Экспорт и импорт чата файлом (CC6.9): JSON с историей, без чекпоинтов и вложений.
+ipcMain.handle('sessions:exportFile', async (event, id) => {
+  const session = getSession(id);
+  if (!session) return { ok: false, error: 'Нет такого чата' };
+  const safe = String(session.title || 'chat').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60);
+  const { canceled, filePath } = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: 'Сохранить чат',
+    defaultPath: `${safe}.mai-chat.json`,
+    filters: [{ name: 'Чат MAI', extensions: ['json'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  const { run: _run, permissionRules: _rules, ...rest } = session;
+  fs.writeFileSync(filePath, JSON.stringify({ format: 'mai-chat', version: 1, exportedAt: new Date().toISOString(), session: rest }, null, 2), 'utf8');
+  return { ok: true, path: filePath };
+});
+ipcMain.handle('sessions:importFile', async (event) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: 'Открыть чат',
+    properties: ['openFile'],
+    filters: [{ name: 'Чат MAI', extensions: ['json'] }],
+  });
+  if (canceled || !filePaths?.[0]) return { ok: false, canceled: true };
+  try {
+    if (fs.statSync(filePaths[0]).size > 50 * 1024 * 1024) throw new Error('Файл больше 50 МБ');
+    const session = importSession(JSON.parse(fs.readFileSync(filePaths[0], 'utf8')));
+    return { ok: true, id: session.id, title: session.title };
+  } catch (err) {
+    return { ok: false, error: `Не удалось импортировать: ${err?.message || err}` };
+  }
 });
 
 // ---------- чат ----------
+
+/* ---------- уведомления (CW5.4, ADR 0081) ---------- */
+
+// Рабочий стол — когда окно не в фокусе; webhook — по настройке. Клик открывает чат.
+const notify = createNotifier({
+  Notification,
+  getSettings: loadSettings,
+  isFocused: () => BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isFocused()),
+  onClick: ({ sessionId }) => {
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : anyWindow();
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    if (sessionId) send(win, { type: 'scheduled:open', sessionId });
+  },
+  log: (text) => logError({ source: 'notify', message: text }),
+});
+
+/** Короткое имя чата для уведомления. */
+const chatTitle = (sessionId) => {
+  try {
+    return getSession(sessionId)?.title || 'чат';
+  } catch {
+    return 'чат';
+  }
+};
+
+/** Проверка уведомлений из настроек: на рабочем столе — даже при окне в фокусе. */
+ipcMain.handle('notify:test', async (_e, channelId) => {
+  const errors = [];
+  const test = createNotifier({ Notification, getSettings: loadSettings, isFocused: () => false, log: (t) => errors.push(t) });
+  const r = await test('done', { title: 'Проверка уведомлений MAI Code', body: 'Так будет выглядеть уведомление, когда агент закончит работу.' }, { channelId: channelId ? String(channelId) : '', force: true });
+  for (const e of errors) logError({ source: 'notify', message: e });
+  return { ok: true, ...r, errors };
+});
+
+/* ---------- фоновые субагенты (CC8.6, ADR 0075) ---------- */
+
+// sessionId → Map(id → задача). Живут дольше прогона родителя, до выхода из приложения.
+const backgroundAgents = new Map();
+
+function backgroundFor(window, sessionId) {
+  if (!backgroundAgents.has(sessionId)) backgroundAgents.set(sessionId, new Map());
+  const tasks = backgroundAgents.get(sessionId);
+  const view = (t) => ({ id: t.id, type: t.type, description: t.description, status: t.status, result: t.result || '' });
+  return {
+    start({ type, description, run, abort }) {
+      const id = `bg-${crypto.randomBytes(3).toString('hex')}`;
+      const task = { id, type, description, status: 'работает', result: '', abort, startedAt: new Date().toISOString() };
+      tasks.set(id, task);
+      send(window, { type: 'agent:background', sessionId, task: view(task) });
+      Promise.resolve()
+        .then(run)
+        .then(
+          (result) => {
+            task.status = 'готово';
+            task.result = String(result || '').slice(0, 20000);
+          },
+          (err) => {
+            task.status = 'ошибка';
+            task.result = err?.message || String(err);
+          },
+        )
+        .finally(() => {
+          task.abort = null;
+          // Итог — в историю чата: агент увидит его следующим ходом, пользователь — в ленте.
+          try {
+            const session = getSession(sessionId);
+            if (session) {
+              session.messages.push({
+                role: 'user',
+                content: `[Фоновый субагент ${task.type} «${task.description}» (${task.id}) завершил работу: ${task.status}]\n\n${task.result}`,
+                display: `⟳ Фоновый субагент «${task.description}»: ${task.status}`,
+                background: task.id,
+              });
+              saveSession(session);
+            }
+          } catch {
+            /* чат удалён */
+          }
+          send(window, { type: 'agent:background', sessionId, task: view(task), done: true });
+          notify('background', { title: `Субагент «${task.description}»: ${task.status}`, body: task.result.slice(0, 180), sessionId }).catch(() => {});
+        });
+      return view(task);
+    },
+    get: (id) => (tasks.has(id) ? view(tasks.get(id)) : null),
+    list: () => [...tasks.values()].map(view),
+  };
+}
 
 ipcMain.handle('chat:start', async (event, payload) => {
   const window = BrowserWindow.fromWebContents(event.sender);
@@ -1223,6 +1547,19 @@ ipcMain.handle('chat:start', async (event, payload) => {
   if (mentions.length) {
     payload.text = `${payload.text}\n\n[Упомянуты: ${mentions.map((m) => `${m.path}${m.dir ? ' (папка)' : ''}`).join(', ')}. Прочитай их через read_file или list_files.]`;
   }
+  // Ресурсы MCP `@сервер:uri` (CC9.3): содержимое — в запрос, в рамке данных.
+  const resources = payload.text ? resolveResourceMentions(payload.text, mcp.listResources()).slice(0, 5) : [];
+  // В чате показываем запрос как написан, без содержимого ресурсов.
+  if (resources.length && !payload.displayText) payload.displayText = payload.text;
+  for (const res of resources) {
+    let body;
+    try {
+      body = await mcp.readResource(res.server, res.uri);
+    } catch (err) {
+      body = `(не прочитан: ${err?.message || err})`;
+    }
+    payload.text = `${payload.text}\n\n[Ресурс MCP ${res.server}:${res.uri}]\n${wrapData(`mcp:${res.server}`, body)}`;
+  }
   // Пути изображений из вложений: в сессии храним путь, base64 собирается на запрос (F1).
   const images = (Array.isArray(payload.images) ? payload.images : [])
     .map((p) => String(p || ''))
@@ -1277,6 +1614,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
         tracer: agentTracer(),
         // Запасная модель при сбое основной (ADR 0057).
         fallback: fallbackFor(settings, activeKey),
+        // Модель для «Плана» (CC13.5, ADR 0078).
+        planner: plannerFor(settings, activeKey),
         // Глубина рассуждений из поля ввода (CC7.11).
         effort: ['low', 'medium', 'high'].includes(payload.effort) ? payload.effort : '',
         // Чекпоинты правок для отката (CC6.1).
@@ -1288,6 +1627,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
         extraDirs: [...new Set([...(project?.extraDirs || []), ...(getSession(session.id)?.extraDirs || [])])].filter((d) => fs.existsSync(d)),
         kind: getSession(session.id)?.kind || 'code',
         project,
+        background: backgroundFor(window, session.id),
         // История сохраняется после каждого шага: при сбое выполненные
         // правки и команды не пропадают из сессии (они уже на диске).
         onHistory: (history) => {
@@ -1305,11 +1645,27 @@ ipcMain.handle('chat:start', async (event, payload) => {
       // runAgent выходит из цикла по abort без исключения — не выдаём это за успех.
       if (controller.signal.aborted) throw new Error('Остановлено пользователем');
       send(window, { type: 'saved', sessionId: session.id, title: session.title, plugins: loaded });
+      {
+        const answer = [...history].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+        notify('done', { title: `Готово: ${chatTitle(session.id)}`, body: String(answer).slice(0, 200), sessionId: session.id }).catch(() => {});
+      }
+      // Автозаголовок (CC6.8): после первого ответа, если чат не назван вручную.
+      const users = history.filter((m) => m.role === 'user');
+      if (settings.autoTitle !== false && users.length === 1 && !getSession(session.id)?.titleManual) {
+        const answer = [...history].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+        suggestTitle({ provider: resolved.provider, model: resolved.modelId, request: users[0].display || users[0].content, answer })
+          .then((title) => {
+            const renamed = title ? renameSession(session.id, title, { auto: true }) : null;
+            if (renamed && !renamed.titleManual) send(window, { type: 'title', sessionId: session.id, title: renamed.title });
+          })
+          .catch(() => {});
+      }
     } catch (err) {
       const aborted = controller.signal.aborted;
       runStatus = aborted ? 'stopped' : 'error';
       const message = aborted ? 'Остановлено пользователем' : err?.message || String(err);
       if (!aborted) logError({ source: 'agent', model, message, cause: err?.cause?.message || '' });
+      if (!aborted) notify('error', { title: `Ошибка: ${chatTitle(session.id)}`, body: message, sessionId: session.id }).catch(() => {});
       send(window, {
         type: 'error',
         message,
@@ -1452,15 +1808,139 @@ async function runScheduled(task, { reason = 'schedule' } = {}) {
   }
 }
 
-function notifyScheduled(task, body, sessionId) {
-  try {
-    if (!Notification.isSupported()) return;
-    const n = new Notification({ title: `⏰ ${task.title}`, body });
-    n.on('click', () => send(anyWindow(), { type: 'scheduled:open', sessionId }));
-    n.show();
-  } catch {
-    /* уведомления недоступны — результат есть в журнале и чате */
+/* ---------- безголовый запуск (CC12.1, CC12.2, ADR 0077) ---------- */
+
+function readStdin() {
+  return new Promise((resolve) => {
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (c) => (data += c));
+    process.stdin.on('end', () => resolve(data));
+    process.stdin.on('error', () => resolve(data));
+  });
+}
+
+/** Прогон агента без окна: те же runAgent, политика, хуки и сессии, что у чата. */
+async function runCli(opts) {
+  const out = (text) => process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
+  const err = (text) => process.stderr.write(`${text}\n`);
+  if (opts.help) {
+    out(CLI_HELP);
+    return 0;
   }
+  if (opts.error) {
+    err(`mai: ${opts.error}\n\n${CLI_HELP}`);
+    return 2;
+  }
+  const started = Date.now();
+  // stdin: лаунчер `mai` кладёт его в файл (Electron на Windows stdin не читает).
+  const fromFile = process.env.MAI_CLI_PROMPT_FILE && fs.existsSync(process.env.MAI_CLI_PROMPT_FILE) ? fs.readFileSync(process.env.MAI_CLI_PROMPT_FILE, 'utf8') : null;
+  const prompt = opts.fromStdin ? (fromFile ?? (await readStdin())).trim() : opts.prompt;
+  if (!prompt) {
+    err('mai: пустая задача');
+    return 2;
+  }
+  const settings = loadSettings();
+  const projectDir = path.resolve(opts.cwd);
+  const finish = (data) => {
+    const result = resultObject({ ...data, durationMs: Date.now() - started, mode: opts.mode });
+    if (opts.output === 'text') {
+      if (result.ok) out(result.result || '');
+      else err(`mai: ${result.error}`);
+    } else out(JSON.stringify(result));
+    return result.ok ? 0 : 1;
+  };
+  if (!fs.existsSync(projectDir) || !fs.statSync(projectDir).isDirectory()) return finish({ ok: false, error: `нет папки ${projectDir}` });
+  let resolved;
+  try {
+    resolved = resolveModel(settings, opts.model || settings.activeModel);
+    if (!resolved.provider.apiKey) throw new Error(`не задан ключ провайдера «${resolved.provider.name}»`);
+  } catch (e) {
+    return finish({ ok: false, error: e.message });
+  }
+  const trusted = isTrusted(projectDir);
+  if (!trusted) err(`mai: папка не доверена — плагины, MCP и инструкции проекта не загружаются (доверить — в приложении)`);
+  // «Без вопросов» — только там, где он разрешён и в окне (ADR 0028, 0038).
+  let mode = opts.mode;
+  if (mode === 'bypass' && bypassBlocked(projectDir)) {
+    err('mai: «Без вопросов» недоступен для этой папки — работаю «только по правилам» (dontAsk)');
+    mode = 'dontAsk';
+  }
+  // Спросить некого: «Вручную» и «Правки» без вопросов превращаются в отказ.
+  const lock = acquireProject(projectDir, { label: 'mai CLI' });
+  if (!lock.ok) return finish({ ok: false, error: lock.error });
+  const session = createSession({ title: `CLI: ${prompt.replace(/\s+/g, ' ').slice(0, 50)}`, model: opts.model || settings.activeModel, projectDir, permissionMode: mode, kind: opts.kind });
+  if (opts.allow.length) addSessionRules(session.id, 'allow', opts.allow.filter((r) => parseRule(r)));
+  session.messages.push({ role: 'user', content: prompt, display: prompt });
+  saveSession(session);
+  setSessionRun(session.id, { status: 'running', startedAt: new Date().toISOString(), cli: true });
+  const denied = [];
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  try {
+    const plugins = trusted ? await loadPluginsFor(projectDir) : { tools: [], transforms: [] };
+    if (trusted) await mcp.sync(mcpConfigs(projectDir)).catch(() => {});
+    const history = await runAgent({
+      settings: { ...agentSettings(settings), ...(opts.maxTurns ? { maxIterations: opts.maxTurns } : {}), browser: null },
+      provider: resolved.provider,
+      projectDir,
+      model: resolved.modelId,
+      messages: session.messages,
+      signal: controller.signal,
+      mcp,
+      pluginTools: plugins.tools,
+      transforms: plugins.transforms,
+      reviewer: null,
+      permissionMode: mode,
+      policy: { ...policyFor(session.id, projectDir), getMode: () => mode },
+      audit,
+      trusted,
+      contextWindow: modelContext(resolved.providerId, resolved.modelId, resolved.provider) || DEFAULT_CONTEXT,
+      tracer: agentTracer(),
+      fallback: fallbackFor(settings, opts.model || settings.activeModel),
+      checkpoint: createRecorder({ dataDir: dataDir(), sessionId: session.id, projectDir }),
+      hooks: hookRunnerFor(null, { projectDir, sessionId: session.id, trusted }),
+      agentDefs: listAgentDefs(projectDir, dataDir(), { includeProject: trusted, extraDirs: packageDirs(packagesFor(projectDir), 'agents') }),
+      skillDirs: packageDirs(packagesFor(projectDir), 'skills'),
+      kind: opts.kind,
+      onHistory: (h) => {
+        session.messages = h;
+        saveSession(session);
+      },
+      // stream-json (CC12.2): те же события, что получает окно.
+      emit: (event) => {
+        if (opts.output === 'stream-json') out(streamLine({ ...event, session_id: session.id }));
+      },
+      approve: async (request) => {
+        denied.push({ tool: request?.tool || '', summary: String(request?.summary || '').slice(0, 300) });
+        return { allow: false, message: 'CLI: спросить некого — разрешите правилом --allow или выберите режим' };
+      },
+      ask: null,
+    });
+    session.messages = history;
+    saveSession(session);
+    if (controller.signal.aborted) throw new Error('остановлено');
+    const answer = [...history].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+    const usage = history.filter((m) => m.role === 'assistant' && m.usage).reduce((sum, m) => ({ input: (sum.input || 0) + (m.usage.input || 0), output: (sum.output || 0) + (m.usage.output || 0) }), {});
+    setSessionRun(session.id, { status: 'done', endedAt: new Date().toISOString(), cli: true });
+    return finish({ ok: true, answer, sessionId: session.id, model: `${resolved.providerId}/${resolved.modelId}`, usage: usage.input || usage.output ? usage : null, denied });
+  } catch (e) {
+    saveSession(session);
+    setSessionRun(session.id, { status: controller.signal.aborted ? 'stopped' : 'error', endedAt: new Date().toISOString(), cli: true });
+    return finish({ ok: false, error: e?.message || String(e), sessionId: session.id, denied });
+  } finally {
+    lock.release();
+    process.removeListener('SIGINT', stop);
+    process.removeListener('SIGTERM', stop);
+    disposePluginHosts();
+    disposeBackground();
+  }
+}
+
+function notifyScheduled(task, body, sessionId) {
+  notify('scheduled', { title: `⏰ ${task.title}`, body, sessionId }).catch(() => {});
 }
 
 let schedulerTimer = null;
@@ -1600,6 +2080,7 @@ function makeApprover(window, state, sessionId) {
       });
       // Для обратной совместимости окна досок: name и summary остаются.
       send(window, { type: 'approval', id, name: payload.tool, ...payload });
+      notify('approval', { title: `Нужно подтверждение: ${chatTitle(sessionId)}`, body: String(payload.summary || payload.tool || '').slice(0, 200), sessionId }).catch(() => {});
     });
   };
 }
@@ -1633,6 +2114,7 @@ function makeAsker(window, state, sessionId, projectDir) {
         resolve(answer);
       });
       send(window, { type: 'question', id, ...request });
+      notify('question', { title: `Агент спрашивает: ${chatTitle(sessionId)}`, body: String(request.question || request.title || '').slice(0, 200), sessionId }).catch(() => {});
     });
 }
 
@@ -1727,6 +2209,43 @@ ipcMain.handle('packages:list', (_e, projectDir) => {
   };
 });
 
+// Наборы по ролям и онбординг (CW6.1, CW6.2, ADR 0070).
+const rolesDir = () => path.join(app.getAppPath(), 'roles');
+ipcMain.handle('roles:list', () => {
+  const settings = loadSettings();
+  const installed = new Set(listPackages('', dataDir(), { includeProject: false }).map((p) => p.name));
+  return {
+    roles: listRoles(rolesDir()).map(({ dir: _dir, ...role }) => ({ ...role, installed: installed.has(role.package) })),
+    onboarding: settings.onboarding || null,
+  };
+});
+
+ipcMain.handle('roles:install', async (_e, id) => {
+  try {
+    const { role, package: pkg } = installRole({ id, rolesDir: rolesDir(), dataDir: dataDir() });
+    // Набор включён, даже если раньше его выключали; роль запоминается.
+    const settings = loadSettings();
+    saveSettings({ packages: { ...(settings.packages || {}), [pkg.name]: { ...(settings.packages?.[pkg.name] || {}), enabled: true } }, onboarding: { ...(settings.onboarding || {}), role: role.id } });
+    audit({ at: new Date().toISOString(), tool: 'role:install', source: 'user', cls: 'external', subject: `${role.id} → ${pkg.name} ${role.version}`, decision: 'allow' });
+    const { dir: _dir, ...clean } = role;
+    return { ok: true, role: clean, package: { name: pkg.name, parts: pkg.parts }, warnings: packageSkillWarnings(pkg.name) };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+/** Навыки только что установленного пакета против уже стоящих (CC10.5). */
+function packageSkillWarnings(pkgName) {
+  try {
+    const dir = loadSettings().projectDir;
+    const all = listSkills(dir, { includeProject: isTrusted(dir), extraDirs: packageDirs(packagesFor(dir), 'skills') });
+    const mine = all.filter((s) => s.scope === `package:${pkgName}`).map((s) => s.name);
+    return skillConflicts(all, mine, `package:${pkgName}`);
+  } catch {
+    return [];
+  }
+}
+
 /** Установка из папки или git-URL в глобальные пакеты. Код пакета исполняется — только admin. */
 ipcMain.handle('packages:install', async (_e, payload = {}) => {
   try {
@@ -1734,7 +2253,7 @@ ipcMain.handle('packages:install', async (_e, payload = {}) => {
     retirePluginHosts();
     await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
     audit({ at: new Date().toISOString(), tool: 'package:install', source: 'user', cls: 'external', subject: `${pkg.name} ← ${String(payload.from).slice(0, 300)}`, decision: 'allow' });
-    return { ok: true, package: pkg };
+    return { ok: true, package: pkg, warnings: packageSkillWarnings(pkg.name) };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }
@@ -1971,7 +2490,7 @@ ipcMain.handle('marketplace:install', async (_e, payload = {}) => {
     retirePluginHosts();
     await mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
     audit({ at: new Date().toISOString(), tool: 'package:install', source: 'user', cls: 'external', subject: `${pkg.name} ${pkg.version} ← каталог ${market.name}`, decision: 'allow' });
-    return { ok: true, package: pkg, ...marketplaceView() };
+    return { ok: true, package: pkg, warnings: packageSkillWarnings(pkg.name), ...marketplaceView() };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }
@@ -2161,9 +2680,16 @@ ipcMain.handle('memory:restore', (_e, payload) => {
 
 // ---------- навыки ----------
 
-ipcMain.handle('skills:list', (_e, projectDir) =>
-  listSkills(projectDir).map(({ name, description, scope, file }) => ({ name, description, scope, file })),
-);
+// Дубли (CC10.5): у второго и дальше с тем же именем — кто его перекрывает.
+ipcMain.handle('skills:list', (_e, projectDir) => {
+  const seen = new Map();
+  return listSkills(projectDir).map(({ name, description, scope, file }) => {
+    const key = String(name).toLowerCase();
+    const overriddenBy = seen.get(key) || '';
+    if (!overriddenBy) seen.set(key, scope);
+    return { name, description, scope, file, ...(overriddenBy ? { overriddenBy } : {}) };
+  });
+});
 ipcMain.handle('skills:create', (_e, { projectDir, ...data }) => {
   requireAdmin();
   return createSkill(projectDir, data);
@@ -2259,6 +2785,23 @@ ipcMain.handle('connectors:list', () => {
     const st = name ? status.find((s) => s.name === name) : null;
     return { ...c, installed: Boolean(name), server: name || null, status: st?.status || (name ? 'не подключён' : ''), loggedIn: Boolean(st?.loggedIn) };
   });
+});
+
+/** Локальные коннекторы (CW3.3, ADR 0072): проверки параллельно, у каждой свой предел. */
+const settle = (fn, ms) => Promise.race([Promise.resolve().then(fn).catch((err) => ({ error: err?.message || String(err) })), new Promise((r) => setTimeout(() => r(null), ms))]);
+ipcMain.handle('connectors:local', async () => {
+  const settings = loadSettings();
+  const [rw, mc, inf] = await Promise.all([settle(() => repowise.detect(), 8000), settle(() => multica.status(), 8000), settle(() => infra.probe(), 8000)]);
+  return localConnectors({ repowise: rw, repowiseEnabled: Boolean(settings.repowise?.enabled), multica: mc, infra: inf, config: settings.infra || {} });
+});
+
+/** Включить/выключить локальный коннектор здесь же. Только admin. */
+ipcMain.handle('connectors:localToggle', (_e, payload = {}) => {
+  if (payload.id !== 'repowise') return { ok: false, error: 'Этот сервис включается в своей настройке' };
+  const settings = loadSettings();
+  saveSettings({ repowise: { ...(settings.repowise || {}), enabled: payload.enabled === true } });
+  audit({ at: new Date().toISOString(), tool: 'connectors:localToggle', source: 'user', cls: 'external', subject: `repowise → ${payload.enabled === true ? 'on' : 'off'}`, decision: 'allow' });
+  return { ok: true };
 });
 
 /** Подключить из каталога: запись в mcpServers, для OAuth — сразу вход в браузере. Только admin. */

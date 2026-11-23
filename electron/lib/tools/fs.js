@@ -4,6 +4,7 @@ import { isSecretPath } from '../guardrails.js';
 import { moveToTrash } from '../trash.js';
 import { normalizeRoots, resolveIn } from '../workroots.js';
 import { IMAGE_LIMITS } from '../vision.js';
+import { renderNotebook } from './notebook.js';
 import { extractPdf } from '../attachments.js';
 
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
@@ -48,7 +49,7 @@ export function markRead(ctx, file) {
 }
 
 /** Ошибка, если существующий файл меняют вслепую или он изменился после чтения. */
-function readGuard(ctx, file) {
+export function readGuard(ctx, file) {
   if (!ctx?.readFiles || !fs.existsSync(file)) return null;
   const seen = ctx.readFiles.get(path.resolve(file));
   if (seen === undefined) return `Сначала прочитай файл read_file: ${file} — правка без чтения запрещена`;
@@ -158,6 +159,17 @@ export const fsTools = [
         if (stat.size > IMAGE_LIMITS.perImageBytes) return `Изображение слишком большое для модели: ${file} (${stat.size} байт, предел ${IMAGE_LIMITS.perImageBytes})`;
         if (typeof ctx.vision === 'function' && !ctx.vision()) return `Текущая модель не принимает изображения: ${file}. Текст на картинке можно распознать OCR или выбрать модель со зрением.`;
         return `Изображение ${file} (${stat.size} байт) — показано модели следующим сообщением.`;
+      }
+      // Ноутбук Jupyter (CC1.10): по ячейкам, правка — notebook_edit.
+      if (ext === '.ipynb') {
+        if (stat.size > MAX_READ_BYTES * 4) throw new Error(`Ноутбук слишком большой: ${stat.size} байт`);
+        try {
+          const text = renderNotebook(JSON.parse(fs.readFileSync(file, 'utf8')));
+          markRead(ctx, file);
+          return truncate(text);
+        } catch {
+          /* не JSON — читаем как текст ниже */
+        }
       }
       if (ext === '.docx' || ext === '.xlsx' || ext === '.pptx') return `Документ ${path.basename(file)} читай инструментом read_document — он покажет текст и таблицы.`;
       if (ext === '.pdf') {

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { withFileLock } from './file-lock.js';
+import { withFileLock, renameWithRetry } from './file-lock.js';
 import { listSkills, readAgents } from './skills.js';
 import { pluginDirs } from './plugins.js';
 
@@ -85,7 +85,7 @@ function writeIndex(projectDir, index) {
   const file = indexPath(projectDir);
   const temp = `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(index, null, 2), 'utf8');
-  fs.renameSync(temp, file);
+  renameWithRetry(temp, file);
 }
 
 /* ---------- блокировка индекса (F11, ADR 0062) ---------- */

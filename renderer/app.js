@@ -553,24 +553,56 @@ async function withTrust(start) {
 
 /* ---------- модальные окна ---------- */
 
+let modalSeq = 0;
 function openModal({ title, body, footer, small = false, wide = false, onClose }) {
   const root = $('#modal-root');
+  // Доступность (CC7.17): фокус уходит в окно и возвращается туда, откуда пришёл.
+  const returnFocus = document.activeElement;
   const close = () => {
     backdrop.remove();
+    document.removeEventListener('keydown', onKey, true);
     onClose?.();
+    if (returnFocus?.isConnected && !document.querySelector('.modal-backdrop')) returnFocus.focus?.();
   };
+  const titleId = `modal-title-${(modalSeq += 1)}`;
   const head = el('div', { class: 'modal-head' }, [
-    el('h2', { text: title }),
-    el('button', { class: 'x', type: 'button', text: '×', onclick: close }),
+    el('h2', { text: title, id: titleId }),
+    el('button', { class: 'x', type: 'button', text: '×', 'aria-label': 'Закрыть', onclick: close }),
   ]);
   const bodyEl = el('div', { class: 'modal-body' }, body);
   const footEl = el('div', { class: 'modal-foot' }, footer || []);
-  const modal = el('div', { class: `modal${small ? ' small' : ''}${wide ? ' wide' : ''}` }, [head, bodyEl, footEl]);
+  const modal = el('div', { class: `modal${small ? ' small' : ''}${wide ? ' wide' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId }, [head, bodyEl, footEl]);
   const backdrop = el('div', { class: 'modal-backdrop' }, [modal]);
   backdrop.addEventListener('mousedown', (event) => {
     if (event.target === backdrop) close();
   });
+  // Esc закрывает верхнее окно; Tab не выходит за его пределы.
+  const focusable = () => [...modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')].filter((n) => !n.disabled && n.offsetParent !== null);
+  const onKey = (event) => {
+    if (backdrop !== root.lastElementChild) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    } else if (event.key === 'Tab') {
+      const list = focusable();
+      if (!list.length) return;
+      const first = list[0];
+      const last = list[list.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !modal.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+  };
+  document.addEventListener('keydown', onKey, true);
   root.append(backdrop);
+  setTimeout(() => {
+    if (!modal.contains(document.activeElement)) (focusable().find((n) => !n.classList.contains('x')) || modal.querySelector('.x'))?.focus();
+  }, 0);
   return { close, bodyEl, footEl, modal };
 }
 
@@ -828,6 +860,7 @@ async function refreshEffort() {
 
 function renderAll() {
   syncKind();
+  renderStatusLine();
   refreshEffort();
   if (!state.running) refreshResults();
   renderWorkDirs();
@@ -1125,10 +1158,10 @@ function exportMenu(markdown) {
  * Спрашивает формат у пользователя через простое меню у кнопки.
  * Возвращает `md`, `txt`, `docx`, `xlsx` или пустую строку при отмене.
  */
-function pickExportFormat(anchor) {
+function pickExportFormat(anchor, { chatFile = false } = {}) {
   return new Promise((resolve) => {
     const menu = el('div', { class: 'export-picker' });
-    const formats = [['md', 'Markdown'], ['txt', 'Текст'], ['docx', 'Word'], ['xlsx', 'Excel']];
+    const formats = [['md', 'Markdown'], ['txt', 'Текст'], ['docx', 'Word'], ['xlsx', 'Excel'], ...(chatFile ? [['json', 'Файл чата MAI — открыть в другом MAI']] : [])];
     let settled = false;
     const close = (value) => {
       if (settled) return;
@@ -1378,10 +1411,16 @@ function renderSessions() {
       }),
       session.match ? el('span', { class: 'session-match', text: `…${session.match}…` }) : null,
     ]);
+    // Переименовать и форк (CC6.8, CC6.5).
+    node.append(
+      el('span', { class: 'del session-rename', text: '✎', title: 'Переименовать', 'aria-label': 'Переименовать чат', onclick: (event) => { event.stopPropagation(); renameChat(session.id, session.title); } }),
+      el('span', { class: 'del session-fork', text: '⑂', title: 'Копия чата — попробовать другой подход', 'aria-label': 'Копия чата', onclick: (event) => { event.stopPropagation(); forkChat(session.id); } }),
+    );
     const del = el('span', {
       class: 'del',
       text: '✕',
       title: 'Удалить чат',
+      'aria-label': 'Удалить чат',
       onclick: async (event) => {
         event.stopPropagation();
         await api.sessions.remove(session.id);
@@ -1573,6 +1612,11 @@ async function send(override = null) {
   const typed = input.value.trim();
   if (!override && typed.startsWith('/') && !typed.startsWith('//')) {
     await runSlash(typed);
+    return;
+  }
+  // `!команда` (CC7.10): выполнить самому, без модели; `!!` — обычный текст.
+  if (!override && /^!\S/.test(typed) && !typed.startsWith('!!') && !typed.includes('\n')) {
+    await runDirect(typed.slice(1).trim());
     return;
   }
   // `# правило` — в память, а не агенту (CC4.3). `##` и многострочный текст — обычное сообщение.
@@ -1781,6 +1825,101 @@ function reviewPrompt(args = '') {
   ].join('\n');
 }
 
+/** Ревью безопасности (CC11.4): то же, что /review, с фокусом на уязвимостях. */
+function securityReviewPrompt(args = '') {
+  const pr = /^\s*#?(\d+)\s*$/.exec(args)?.[1];
+  const target = pr
+    ? `pull request #${pr}: получи изменения командой \`gh pr diff ${pr}\` (если gh нет — \`git fetch origin pull/${pr}/head\` и diff с основной веткой)`
+    : args
+      ? `изменения: ${args}`
+      : 'текущие изменения: `git diff HEAD` и новые файлы из `git status`';
+  return [
+    `Сделай ревью безопасности — ${target}.`,
+    'Только читай: файлы не меняй, ничего не запускай кроме команд git/gh для получения diff. Контекст — соседний код (read_file, grep): откуда приходят данные и куда уходят.',
+    'Ищи уязвимости, которые вносят именно эти изменения: инъекции (SQL, команд ОС, шаблонов, путей — path traversal), XSS, SSRF, небезопасная десериализация, обход проверки прав и аутентификации, IDOR, секреты в коде и логах, слабая криптография, небезопасные настройки по умолчанию, гонки при проверке прав, опасные зависимости.',
+    'Для каждой находки: **критично / высокий / средний / низкий**, уверенность (высокая / средняя), `файл:строка`, путь атаки — откуда приходит недоверенный ввод и что получает атакующий, и исправление.',
+    'Не включай теоретическое без пути атаки, стиль и «хорошо бы» — только то, что можно эксплуатировать. Нет находок — так и скажи. В конце — одна строка общего вывода.',
+  ].join('\n');
+}
+
+/** Pull request (CC11.2): ветка, push, описание по шаблону репозитория, gh/glab. */
+function prPrompt(args = '') {
+  const attribution = String(state.settings?.gitAttribution || '').trim();
+  return [
+    'Создай pull request с текущей работой.',
+    '1. Посмотри `git status`, текущую ветку, `git remote -v` и `git log` относительно основной ветки (`origin/HEAD`). Незакоммиченные изменения — сначала спроси, коммитить ли их (как /commit).',
+    '2. Если ты на основной или защищённой ветке (main, master) — создай новую ветку с понятным именем; в защищённую ветку не пушь.',
+    '3. Найди шаблон описания: `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE/*`, `docs/pull_request_template.md`, `PULL_REQUEST_TEMPLATE.md` (для GitLab — `.gitlab/merge_request_templates/*`). Есть шаблон — заполни его разделы по сути изменений; пункты про секреты, токены, внутренние адреса пропусти. Нет — коротко: что и зачем, как проверено.',
+    '4. Заголовок — короткая суть изменений, как первая строка хорошего коммита.',
+    attribution ? `5. В конце описания добавь подпись:\n${attribution}` : '5. Подпись агента в описание не добавляй.',
+    '6. Отправь ветку: `git push -u origin <ветка>`. Создай PR: GitHub — `gh pr create --title … --body-file <файл>`, GitLab — `glab mr create --title … --description …`; описание — через файл во временной папке. Нет gh/glab — дай ссылку на создание PR из вывода push и готовый текст описания.',
+    '7. В ответе — ссылка на PR и итог. Не мерджи PR, не меняй историю (amend, rebase, force push).',
+    args ? `Уточнение от меня: ${args}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/* ---------- рабочие копии для чатов (CC11.5, ADR 0076) ---------- */
+
+async function openWorktrees(name = '') {
+  if (name) {
+    const r = await api.git.createWorktree(state.projectDir, name);
+    if (!r?.ok) return toast(r?.error || 'Не удалось создать рабочую копию', 'err');
+    await switchToDir(r.dir);
+    toast(`Чат в рабочей копии: ветка ${r.branch}. Основная папка не меняется.`);
+    return;
+  }
+  const info = await api.git.worktrees(state.projectDir);
+  if (!info?.ok) return toast(info?.error || 'Рабочие копии недоступны', 'err');
+  const input = el('input', { class: 'worktree-name', placeholder: 'имя, например fix-login' });
+  const view = openModal({
+    title: 'Рабочие копии (git worktree)',
+    body: [
+      el('p', { class: 'hint-text', text: 'Отдельная папка на своей ветке от последнего коммита: можно вести параллельную задачу, не трогая основную. Новый чат откроется в копии.' }),
+      el(
+        'div',
+        { class: 'worktree-list' },
+        info.items.map((w) =>
+          el('div', { class: `worktree-row${w.dir === state.projectDir ? ' active' : ''}`, 'data-dir': w.dir }, [
+            el('div', { class: 'package-info' }, [el('b', { text: w.main ? 'основная папка' : w.branch || '(без ветки)' }), el('div', { class: 'hint-text', text: w.dir })]),
+            el('button', { class: 'btn ghost small worktree-open', type: 'button', text: 'Открыть', onclick: async () => { view.close(); await api.git.openWorktree(w.dir); await switchToDir(w.dir); } }),
+            w.main
+              ? null
+              : el('button', {
+                  class: 'btn ghost small worktree-remove',
+                  type: 'button',
+                  text: 'Убрать',
+                  title: 'Папка удаляется; несохранённое коммитится в её ветку, ветка остаётся',
+                  onclick: async () => {
+                    if (!window.confirm(`Убрать рабочую копию ${w.branch}? Несохранённое будет закоммичено в ветку, ветка останется.`)) return;
+                    const r = await api.git.removeWorktree(info.repo, w.dir);
+                    if (!r?.ok) return toast(r.error, 'err');
+                    view.close();
+                    if (state.projectDir === w.dir) await switchToDir(info.repo);
+                    toast(`Копия убрана, ветка ${r.branch} осталась`);
+                  },
+                }),
+          ]),
+        ),
+      ),
+      field('Новая копия', input),
+    ],
+    footer: [el('button', { class: 'btn primary worktree-create', type: 'button', text: 'Создать и открыть', onclick: async () => { const n = input.value.trim(); if (!n) return; view.close(); await openWorktrees(n); } })],
+  });
+}
+
+/** Перейти в папку (копию) и начать в ней новый чат. */
+async function switchToDir(dir) {
+  state.settings = await api.settings.get();
+  state.projectDir = dir;
+  updateChrome();
+  newChat();
+  await refreshSessions();
+  refreshBranch();
+  await refreshTrust();
+}
+
 async function loadCommands() {
   try {
     state.commands = await api.commands.list(state.projectDir);
@@ -1874,6 +2013,18 @@ async function runSlash(text) {
       clear();
       await send({ text: reviewPrompt(args), display: `/review${args ? ` ${args}` : ''}` });
       return;
+    case 'security-review':
+      clear();
+      await send({ text: securityReviewPrompt(args), display: `/security-review${args ? ` ${args}` : ''}` });
+      return;
+    case 'pr':
+      clear();
+      await send({ text: prPrompt(args), display: `/pr${args ? ` ${args}` : ''}` });
+      return;
+    case 'worktree':
+      clear();
+      await openWorktrees(args.trim());
+      return;
     case 'memory':
       clear();
       openMemory();
@@ -1918,6 +2069,29 @@ async function runSlash(text) {
     case 'connectors':
       clear();
       await openConnectors();
+      return;
+    case 'onboarding':
+      clear();
+      await openOnboarding();
+      return;
+    case 'rename':
+      clear();
+      if (!state.sessionId) return toast('Сначала начните чат');
+      if (args.trim()) await applyRename(state.sessionId, args.trim());
+      else renameChat(state.sessionId, state.sessions.find((s) => s.id === state.sessionId)?.title || '');
+      return;
+    case 'fork':
+      clear();
+      if (!state.sessionId) return toast('Сначала начните чат');
+      await forkChat(state.sessionId);
+      return;
+    case 'import':
+      clear();
+      await importChat();
+      return;
+    case 'rewind':
+      clear();
+      openRewindList();
       return;
     case 'projects':
       clear();
@@ -2136,10 +2310,125 @@ async function openProjects() {
 
 /* ---------- каталог коннекторов (CW3.1, ADR 0052) ---------- */
 
-async function openConnectors() {
+/* ---------- онбординг: роль → набор → коннекторы → пример задачи (CW6.1, CW6.2, ADR 0070) ---------- */
+
+async function finishOnboarding(role) {
+  try {
+    state.settings = await api.settings.save({ onboarding: { ...(state.settings.onboarding || {}), done: true, ...(role ? { role } : {}) } });
+  } catch {
+    /* гость: настройки не сохраняются — мастер просто закроется */
+  }
+}
+
+async function openOnboarding() {
+  const info = await api.chat.roles();
+  let chosen = null;
+  const view = openModal({
+    title: 'Добро пожаловать в MAI Code',
+    wide: true,
+    body: [],
+    onClose: () => finishOnboarding(chosen?.id),
+  });
+  const step = (body, footer) => {
+    view.bodyEl.replaceChildren(...body);
+    view.footEl.replaceChildren(...footer);
+  };
+
+  const examples = () =>
+    step(
+      [
+        el('p', { class: 'onboarding-step', text: 'Шаг 3 из 3 · С чего начать' }),
+        el('p', { text: 'Выберите пример — он появится в поле ввода, его можно поправить перед отправкой. Для задач с документами выберите вид чата «Задача».' }),
+        el(
+          'div',
+          { class: 'onboarding-examples' },
+          (chosen?.examples || []).map((text) =>
+            el('button', {
+              class: 'btn ghost onboarding-example',
+              type: 'button',
+              text,
+              onclick: () => {
+                const input = $('#input');
+                input.value = text;
+                input.dispatchEvent(new Event('input'));
+                view.close();
+                input.focus();
+              },
+            }),
+          ),
+        ),
+      ],
+      [el('button', { class: 'btn primary', type: 'button', text: 'Готово', onclick: () => view.close() })],
+    );
+
+  const connectors = (installed) => {
+    const ids = chosen.connectors || [];
+    const parts = installed?.parts || {};
+    step(
+      [
+        el('p', { class: 'onboarding-step', text: 'Шаг 2 из 3 · Набор установлен' }),
+        el('p', { class: 'onboarding-installed', text: `«${chosen.title}»: навыков ${parts.skills || 0}, команд ${parts.commands || 0}. Набор — обычный пакет: его можно выключить в «Пакетах» (/packages).` }),
+        ids.length
+          ? el('p', { text: `Подходящие коннекторы: ${ids.join(', ')}. Подключение — вход в сервис через браузер или токен; можно сделать и позже (/connectors).` })
+          : el('p', { text: 'Коннекторы для этой роли не нужны — работа идёт с файлами на компьютере.' }),
+      ],
+      [
+        ids.length
+          ? el('button', {
+              class: 'btn ghost onboarding-connect',
+              type: 'button',
+              text: 'Подключить коннекторы',
+              onclick: () => {
+                view.close();
+                openConnectors({ only: ids });
+              },
+            })
+          : null,
+        el('button', { class: 'btn primary onboarding-next', type: 'button', text: 'Дальше', onclick: examples }),
+      ].filter(Boolean),
+    );
+  };
+
+  const install = async (role) => {
+    chosen = role;
+    step([el('p', { text: `Устанавливаю набор «${role.title}»…` })], []);
+    const result = await api.chat.installRole(role.id);
+    if (!result?.ok) {
+      step([el('p', { class: 'error-text', text: `Не удалось установить набор: ${result?.error || 'ошибка'}` })], [el('button', { class: 'btn', type: 'button', text: 'Назад', onclick: roles })]);
+      return;
+    }
+    for (const w of result.warnings || []) toast(w, 'err');
+    connectors(result.package);
+  };
+
+  function roles() {
+    step(
+      [
+        el('p', { class: 'onboarding-step', text: 'Шаг 1 из 3 · Чем вы занимаетесь?' }),
+        el('p', { class: 'hint-text', text: 'Агент получит навыки и команды для вашей работы. Роль можно сменить позже командой /onboarding.' }),
+        el(
+          'div',
+          { class: 'role-cards' },
+          info.roles.map((role) =>
+            el('button', { class: `role-card${role.installed ? ' installed' : ''}`, type: 'button', 'data-role': role.id, onclick: () => install(role) }, [
+              el('div', { class: 'role-title', text: `${role.icon} ${role.title}` }),
+              el('div', { class: 'hint-text', text: role.summary }),
+              role.installed ? el('span', { class: 'badge ok', text: 'установлен' }) : null,
+            ]),
+          ),
+        ),
+      ],
+      [el('button', { class: 'btn ghost onboarding-skip', type: 'button', text: 'Пропустить', onclick: () => view.close() })],
+    );
+  }
+  roles();
+}
+
+async function openConnectors({ only = [] } = {}) {
   const grid = el('div', { class: 'connectors' });
   const render = async () => {
-    const list = await api.mcp.connectors();
+    // Из онбординга (CW6.2) — только коннекторы, подходящие роли.
+    const list = (await api.mcp.connectors()).filter((c) => !only.length || only.includes(c.id));
     grid.replaceChildren(
       ...list.map((c) => {
         const token = c.auth === 'token' && !c.installed ? el('input', { class: 'connector-token', type: 'password', placeholder: c.tokenHint || 'токен', autocomplete: 'off' }) : null;
@@ -2189,16 +2478,55 @@ async function openConnectors() {
       }),
     );
   };
-  openModal({
+  // Локальные коннекторы (CW3.3, ADR 0072): сервисы на вашей машине или в сети команды.
+  const localGrid = el('div', { class: 'connectors local-connectors' }, [el('p', { class: 'hint-text', text: 'Проверяю локальные сервисы…' })]);
+  const LOCAL_STATUS = { ready: ['работает', 'ok'], off: ['выключен', ''], missing: ['не настроен', ''], error: ['не отвечает', 'warn'] };
+  let view = null;
+  const runLocal = async (action, card) => {
+    if (action.kind === 'toggle') {
+      const r = await api.mcp.toggleLocalConnector(card.id, !action.enabled);
+      if (r?.ok === false) toast(r.error, 'err');
+      state.settings = await api.settings.get();
+      return renderLocal();
+    }
+    const [where, name] = String(action.target).split(':');
+    view?.close();
+    if (where === 'storage') api.boards.open('storage', `tab:${name}`);
+    else document.querySelector(`[data-panel="${name}"]`)?.click();
+  };
+  const renderLocal = async () => {
+    const cards = (await api.mcp.localConnectors?.().catch(() => [])) || [];
+    localGrid.replaceChildren(
+      ...cards.map((c) => {
+        const [label, tone] = LOCAL_STATUS[c.status] || [c.status, ''];
+        return el('div', { class: `connector local${c.status === 'ready' ? ' installed' : ''}`, 'data-id': c.id }, [
+          el('div', { class: 'connector-head' }, [el('b', { text: c.name }), el('span', { class: `badge ${tone}`, text: label })]),
+          el('div', { class: 'hint-text', text: c.description }),
+          c.detail ? el('div', { class: 'hint-text connector-detail', text: c.detail }) : null,
+          el('div', { class: 'connector-actions' }, [
+            el('button', { class: `btn small local-action ${c.action.kind === 'toggle' && !c.action.enabled ? 'primary' : 'ghost'}`, type: 'button', text: c.action.label, onclick: () => runLocal(c.action, c) }),
+            c.extra ? el('button', { class: 'btn ghost small local-extra', type: 'button', text: c.extra.label, onclick: () => runLocal(c.extra, c) }) : null,
+          ]),
+        ]);
+      }),
+    );
+  };
+  view = openModal({
     title: 'Коннекторы',
+    wide: true,
     body: [
       grid,
+      only.length ? null : el('div', { class: 'docs-group-title', text: 'Локальные' }),
+      only.length ? null : localGrid,
       el('p', {
         class: 'hint-text',
         text: 'Коннектор — удалённый MCP-сервер сервиса. Отправка писем, сообщений и публикаций через него всегда спрашивается, даже в «Без вопросов». Свои коннекторы организация задаёт в managed-settings.json (поле connectors). Подключение — роль admin.',
       }),
     ],
   });
+  // Локальные — не мешая основному списку: проверки сервисов идут несколько секунд.
+  if (!only.length) renderLocal();
+  else localGrid.replaceChildren();
   await render();
 }
 
@@ -2575,6 +2903,8 @@ async function openPackages() {
       return;
     }
     toast(`Установлен ${r.package.name}: ${packageParts(r.package.parts)}`, 'ok');
+    // Дубли навыков (CC10.5): какой будет работать.
+    for (const w of r.warnings || []) toast(w, 'err');
     source.value = '';
     state.commands = null;
     render();
@@ -2623,6 +2953,7 @@ async function openPackages() {
                             e.currentTarget.disabled = false;
                             return;
                           }
+                          for (const w of r.warnings || []) toast(w, 'err');
                           toast(`${p.updateAvailable ? 'Обновлён' : 'Установлен'} ${r.package.name} ${r.package.version || ''}: ${packageParts(r.package.parts)}`, 'ok');
                           state.commands = null;
                           renderMarket(r);
@@ -2803,6 +3134,95 @@ async function refreshCheckpoints() {
   }
 }
 
+/* ---------- чаты: имя, копия, файл, точки отката (CC6.2, CC6.5, CC6.8, CC6.9, ADR 0073) ---------- */
+
+/** `!команда`: чат создаётся, если его ещё нет; вывод появляется в ленте. */
+async function runDirect(command) {
+  const input = $('#input');
+  if (!state.sessionId) {
+    const created = await api.sessions.create({ title: 'Новый чат', model: state.model, projectDir: state.projectDir, permissionMode: state.permissionMode, kind: state.kind });
+    state.sessionId = created?.id || null;
+  }
+  if (!state.sessionId) return toast('Не удалось создать чат', 'err');
+  toast(`Выполняю: ${command}`);
+  const r = await api.sessions.shell(state.sessionId, command);
+  if (!r?.ok) return toast(r?.error || 'Команда не выполнена', 'err');
+  input.value = '';
+  autosize();
+  await loadSession(state.sessionId);
+  await refreshSessions();
+}
+
+async function applyRename(id, title) {
+  const r = await api.sessions.rename(id, title);
+  if (!r?.ok) return toast(r?.error || 'Не удалось переименовать', 'err');
+  await refreshSessions();
+}
+
+function renameChat(id, current = '') {
+  const input = el('input', { class: 'rename-input', value: current || '', maxlength: '80' });
+  const save = async () => {
+    const title = input.value.trim();
+    if (!title) return;
+    view.close();
+    await applyRename(id, title);
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      save();
+    }
+  });
+  const view = openModal({
+    title: 'Переименовать чат',
+    small: true,
+    body: [field('Имя', input), el('p', { class: 'hint-text', text: 'Имя, данное вручную, автозаголовок не меняет.' })],
+    footer: [el('button', { class: 'btn primary rename-save', type: 'button', text: 'Сохранить', onclick: save })],
+  });
+  setTimeout(() => input.select(), 0);
+}
+
+async function forkChat(id, upTo = null) {
+  const r = await api.sessions.fork(id, upTo);
+  if (!r?.ok) return toast(r?.error || 'Не удалось сделать копию', 'err');
+  await refreshSessions();
+  await loadSession(r.id);
+  toast(`Копия: ${r.title}. Откат файлов из исходного чата здесь недоступен.`);
+}
+
+async function importChat() {
+  const r = await api.sessions.importFile();
+  if (r?.canceled) return;
+  if (!r?.ok) return toast(r?.error || 'Не удалось открыть файл', 'err');
+  await refreshSessions();
+  await loadSession(r.id);
+  toast(`Открыт чат: ${r.title}`);
+}
+
+/** Список точек отката (двойной Esc): ваши сообщения, правки файлов отмечены. */
+function openRewindList() {
+  if (!state.sessionId) return toast('В этом чате ещё нечего откатывать');
+  const turns = state.messages.map((m, index) => ({ m, index })).filter(({ m }) => m.role === 'user');
+  if (!turns.length) return toast('В этом чате ещё нечего откатывать');
+  const view = openModal({
+    title: 'Вернуться к сообщению',
+    body: [
+      el('p', { class: 'hint-text', text: 'Выберите сообщение: откатится диалог после него, а правки файлов — по вашему выбору на следующем шаге.' }),
+      el(
+        'div',
+        { class: 'rewind-list' },
+        turns
+          .reverse()
+          .map(({ m, index }) =>
+            el('button', { class: 'btn ghost rewind-point', type: 'button', 'data-turn': String(index), onclick: () => { view.close(); openRewind(index); } }, [
+              el('span', { text: `${state.checkpointTurns?.has(index) ? '✎ ' : ''}${String(m.display || m.content || '').replace(/\s+/g, ' ').slice(0, 120)}` }),
+            ]),
+          ),
+      ),
+    ],
+  });
+}
+
 async function openRewind(turn) {
   const plan = await api.chat.rewindPlan(state.sessionId, turn);
   if (!plan?.ok) {
@@ -2903,6 +3323,7 @@ function renderContextMeter() {
   meter.textContent = `контекст ${pct}%`;
   meter.className = `context-meter${pct >= 85 ? ' ctx-high' : pct >= 70 ? ' ctx-mid' : ''}`;
   meter.title = `${c.exact ? '' : '≈ '}${contextLabel(c.used)} из ${contextLabel(c.window)} токенов. С 80% ранняя часть диалога сжимается в сводку. /context — подробно`;
+  renderStatusLine();
 }
 
 async function refreshContext() {
@@ -2983,7 +3404,8 @@ function priceOf(modelKey) {
   return (provider?.models || []).find((m) => m.id === id)?.price || null;
 }
 
-function openCost() {
+/** Стоимость чата по ценам моделей: { total, priced, rows }. */
+function sessionCost() {
   const byModel = new Map();
   for (const m of state.messages) {
     if (m.role !== 'assistant' || !m.usage) continue;
@@ -3002,12 +3424,66 @@ function openCost() {
     const cost = price ? (row.input * price.input + row.output * (price.output || 0)) / 1e6 : null;
     if (cost == null) priced = false;
     else total += cost;
-    return el('div', { class: 'context-row' }, [
+    return { key, row, cost };
+  });
+  return { total, priced, rows };
+}
+
+/* ---------- статусная строка (CC7.12, ADR 0074) ---------- */
+
+const STATUS_ITEMS = [
+  ['model', 'модель'],
+  ['mode', 'режим'],
+  ['branch', 'ветка git'],
+  ['context', 'контекст %'],
+  ['cost', 'стоимость'],
+];
+const STATUS_DEFAULT = ['model', 'mode', 'branch', 'cost'];
+
+async function refreshBranch() {
+  try {
+    state.branch = state.projectDir ? (await api.git?.branch?.(state.projectDir)) || '' : '';
+  } catch {
+    state.branch = '';
+  }
+  renderStatusLine();
+}
+
+function renderStatusLine() {
+  const line = document.querySelector('#statusline');
+  if (!line) return;
+  const items = Array.isArray(state.settings?.statusLine) ? state.settings.statusLine : STATUS_DEFAULT;
+  const parts = [];
+  for (const item of items) {
+    if (item === 'model' && state.model) parts.push(['model', modelLabel(state.model)]);
+    if (item === 'mode') {
+      const mode = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).find((m) => m.id === state.permissionMode);
+      if (mode) parts.push(['mode', mode.label]);
+    }
+    if (item === 'branch' && state.branch) parts.push(['branch', `⎇ ${state.branch}`]);
+    if (item === 'context' && state.context?.window && state.context.used) parts.push(['context', `контекст ${Math.min(100, Math.round((state.context.used / state.context.window) * 100))}%`]);
+    if (item === 'cost') {
+      const cost = sessionCost();
+      if (cost.total) parts.push(['cost', `$${cost.total.toFixed(cost.total < 1 ? 4 : 2)}${cost.priced ? '' : '+'}`]);
+    }
+  }
+  if (!parts.length) {
+    line.textContent = 'Агент может менять файлы и запускать команды — с вашего подтверждения';
+    return;
+  }
+  line.replaceChildren(...parts.flatMap(([key, text], i) => [i ? el('span', { class: 'status-sep', text: ' · ' }) : null, el('span', { class: `status-${key}`, text })]).filter(Boolean));
+  line.title = 'Статусная строка — что показывать, задаётся в «Настройках»';
+}
+
+function openCost() {
+  const { total, priced, rows: data } = sessionCost();
+  const rows = data.map(({ key, row, cost }) =>
+    el('div', { class: 'context-row' }, [
       el('span', { text: modelLabel(key) }),
       el('span', { class: 'context-num', text: `${row.steps} шагов · ↑${contextLabel(row.input)}${row.cached ? ` (кэш ${contextLabel(row.cached)})` : ''} ↓${contextLabel(row.output)}` }),
       el('span', { class: 'context-num', text: cost == null ? 'цена не задана' : `$${cost.toFixed(4)}` }),
-    ]);
-  });
+    ]),
+  );
   openModal({
     title: 'Токены и стоимость чата',
     body: [
@@ -3055,7 +3531,7 @@ function renderSuggest() {
               el('code', { text: `/${item.name}` }),
               item.argumentHint ? el('span', { class: 'hint-text', text: item.argumentHint }) : null,
               el('span', { class: 'suggest-desc', text: item.description || '' }),
-              item.source !== 'builtin' ? el('span', { class: 'suggest-source', text: { project: 'проект', global: 'глобальная', skill: 'навык' }[item.source] || '' }) : null,
+              item.source !== 'builtin' ? el('span', { class: 'suggest-source', text: { project: 'проект', global: 'глобальная', skill: 'навык', mcp: 'MCP' }[item.source] || '' }) : null,
             ]
           : [el('span', { class: 'suggest-path', text: item })],
       ),
@@ -3081,12 +3557,20 @@ async function updateSuggest() {
     return;
   }
   const mention = /(^|\s)@([^\s@]*)$/.exec(before);
-  if (mention && state.projectDir) {
+  if (mention) {
     const query = mention[2];
     const start = before.length - query.length - 1;
     clearTimeout(suggest.timer);
     suggest.timer = setTimeout(async () => {
-      const items = await api.files.search(state.projectDir, query).catch(() => []);
+      const files = state.projectDir ? await api.files.search(state.projectDir, query).catch(() => []) : [];
+      // Ресурсы MCP (CC9.3, ADR 0071): `@сервер:uri`.
+      const q = query.toLowerCase();
+      const resources = (await api.mcp.resources?.().catch(() => []) || [])
+        .map((r) => `${r.server}:${r.uri}`)
+        .filter((ref) => ref.toLowerCase().includes(q))
+        .slice(0, 10);
+      const items = [...files, ...resources];
+      if (!items.length) return closeSuggest();
       // Курсор мог уйти, пока шёл поиск.
       const now = input.value.slice(0, input.selectionStart ?? input.value.length);
       if (!/(^|\s)@([^\s@]*)$/.test(now)) return;
@@ -3297,6 +3781,17 @@ document.addEventListener('keydown', (event) => {
     cancelEdit();
     return;
   }
+  // Двойной Esc (CC6.2): список точек отката.
+  if (event.key === 'Escape') {
+    const now = Date.now();
+    if (state.lastEscape && now - state.lastEscape < 500) {
+      state.lastEscape = 0;
+      event.preventDefault();
+      openRewindList();
+      return;
+    }
+    state.lastEscape = now;
+  }
   if (event.key === 'Tab' && event.shiftKey && (event.target === input || event.target === document.body)) {
     event.preventDefault();
     setPermissionMode(nextMode());
@@ -3447,6 +3942,20 @@ function handleEvent(event) {
       break;
     case 'saved':
       if (event.sessionId) state.sessionId = event.sessionId;
+      refreshSessions();
+      refreshBranch();
+      break;
+    case 'agent:background':
+      // Фоновый субагент (CC8.6): старт и итог; итог уже в истории чата.
+      if (event.done) {
+        toast(`Фоновый субагент «${event.task?.description}»: ${event.task?.status}`, event.task?.status === 'ошибка' ? 'err' : 'ok');
+        if (event.sessionId === state.sessionId && !state.running) loadSession(state.sessionId);
+      } else {
+        toast(`Субагент «${event.task?.description}» работает в фоне (${event.task?.id})`);
+      }
+      break;
+    case 'title':
+      // Автозаголовок от модели (CC6.8).
       refreshSessions();
       break;
     case 'runtime:start': {
@@ -3662,8 +4171,99 @@ async function openSettings() {
   const gitAttribution = el('textarea', { class: 'git-attribution', rows: '2', placeholder: 'Подпись в коммитах агента, например: Co-Authored-By: MAI Code <ai@example.com>' });
   gitAttribution.value = settings.gitAttribution || '';
   const fallbackModel = el('input', { class: 'fallback-model', placeholder: 'провайдер/модель, например openai/gpt-5-mini', value: settings.fallbackModel || '' });
+  // Модель для «Плана» (CC13.5): сильная думает, основная выполняет.
+  const planModel = el('input', { class: 'plan-model', placeholder: 'провайдер/модель; пусто — та же, что у чата', value: settings.planModel || '' });
   const outside = el('input', { type: 'checkbox' });
   outside.checked = Boolean(settings.allowOutsideProject);
+  // Браузер агента (CW4.1, CW4.2, ADR 0069): включение и сайты без вопросов / под запретом.
+  const browserEnabled = el('input', { type: 'checkbox', class: 'browser-enabled' });
+  browserEnabled.checked = settings.browserEnabled !== false;
+  const browserAllow = el('input', { class: 'browser-allow', placeholder: 'например: wikipedia.org, docs.google.com', value: (settings.browserSites?.allow || []).join(', ') });
+  const browserBlock = el('input', { class: 'browser-block', placeholder: 'например: mybank.ru', value: (settings.browserSites?.block || []).join(', ') });
+  // Тема (CC7.16, ADR 0074).
+  const theme = el('select', { class: 'theme-select' }, [['dark', 'Тёмная'], ['light', 'Светлая'], ['system', 'Как в системе']].map(([value, text]) => el('option', { value, text })));
+  theme.value = ['dark', 'light', 'system'].includes(settings.theme) ? settings.theme : 'dark';
+  // Статусная строка (CC7.12): что показывать.
+  const statusOn = new Set(Array.isArray(settings.statusLine) ? settings.statusLine : STATUS_DEFAULT);
+  const statusBoxes = STATUS_ITEMS.map(([key, label]) => {
+    const box = el('input', { type: 'checkbox', class: 'statusline-item', 'data-item': key });
+    box.checked = statusOn.has(key);
+    return el('label', { class: 'hint-text' }, [box, ` ${label} `]);
+  });
+  // Уведомления (CW5.4).
+  const NOTIFY_KINDS = [['done', 'агент закончил'], ['approval', 'нужно подтверждение'], ['question', 'агент спрашивает'], ['error', 'ошибка'], ['background', 'фоновый субагент'], ['scheduled', 'плановая задача']];
+  const nset = settings.notifications || {};
+  const kindBoxes = (cls, current, fallback) =>
+    NOTIFY_KINDS.map(([key, label]) => {
+      const box = el('input', { type: 'checkbox', class: cls, 'data-kind': key });
+      box.checked = (Array.isArray(current) ? current : fallback).includes(key);
+      return el('label', { class: 'hint-text' }, [box, ` ${label} `]);
+    });
+  const notifyOn = el('input', { type: 'checkbox', class: 'notify-enabled' });
+  notifyOn.checked = nset.enabled !== false;
+  const desktopKinds = kindBoxes('notify-desktop', nset.desktop, NOTIFY_KINDS.map(([k]) => k));
+  // Каналы мессенджеров (CW5.4): Telegram, MAX, WhatsApp, Rocket.Chat, webhook.
+  const channelsBox = el('div', { class: 'notify-channels' });
+  const channelRows = [];
+  const CHANNEL_FIELDS = {
+    telegram: [['token', 'Токен бота (@BotFather)', true], ['chatId', 'chat_id (личка, группа или канал)']],
+    max: [['token', 'Токен бота (business.max.ru)', true], ['chatId', 'chat_id или user_id'], ['target', 'Кому', false, [['chat', 'чат (chat_id)'], ['user', 'пользователь (user_id)']]], ['apiBase', 'Адрес API (пусто — platform-api2.max.ru)']],
+    whatsapp: [['token', 'Токен WhatsApp Cloud API', true], ['phoneNumberId', 'Phone number ID отправителя'], ['to', 'Номер получателя, например 79001234567'], ['template', 'Шаблон (вне 24-часового окна; пусто — текст)'], ['lang', 'Язык шаблона, например ru']],
+    rocketchat: [['url', 'Адрес входящего webhook Rocket.Chat', true]],
+    webhook: [['url', 'Адрес webhook: Slack, Mattermost, Discord, Teams', true]],
+  };
+  const TYPE_LABELS = [['telegram', 'Telegram'], ['max', 'MAX'], ['whatsapp', 'WhatsApp'], ['rocketchat', 'Rocket.Chat'], ['webhook', 'Webhook (Slack, Mattermost, Discord, Teams)']];
+  const addChannel = (raw = { type: 'telegram' }) => {
+    const id = raw.id || `ch-${Math.random().toString(36).slice(2, 8)}`;
+    const row = el('div', { class: 'notify-channel', 'data-id': id });
+    const type = el('select', { class: 'channel-type' }, TYPE_LABELS.map(([v, t]) => el('option', { value: v, text: t })));
+    type.value = raw.type || 'telegram';
+    const enabled = el('input', { type: 'checkbox', class: 'channel-enabled' });
+    enabled.checked = raw.enabled !== false;
+    const kinds = kindBoxes('channel-kind', raw.kinds, ['done', 'error', 'scheduled']);
+    const fieldsBox = el('div', { class: 'row channel-fields' });
+    const inputs = {};
+    const renderFields = () => {
+      fieldsBox.replaceChildren(
+        ...CHANNEL_FIELDS[type.value].map(([key, label, secret, options]) => {
+          const input = options ? el('select', { 'data-field': key }, options.map(([v, t]) => el('option', { value: v, text: t }))) : el('input', { 'data-field': key, ...(secret ? { type: 'password', autocomplete: 'off' } : {}), placeholder: label });
+          input.value = raw[key] ?? (options ? options[0][0] : '');
+          inputs[key] = input;
+          return field(label, input);
+        }),
+      );
+    };
+    type.addEventListener('change', () => {
+      for (const k of Object.keys(inputs)) delete inputs[k];
+      renderFields();
+    });
+    renderFields();
+    const test = el('button', { class: 'btn ghost small channel-test', type: 'button', text: 'Проверить', title: 'Сначала сохраните настройки', onclick: async () => { const r = await api.notify?.test(id); toast(r?.channels?.[id] ? 'Доставлено' : `Не доставлено${r?.errors?.[0] ? `: ${r.errors[0]}` : ' — сохраните настройки и проверьте поля'}`, r?.channels?.[id] ? 'ok' : 'err'); } });
+    const remove = el('button', { class: 'btn ghost small channel-remove', type: 'button', text: 'Удалить', onclick: () => { row.remove(); channelRows.splice(channelRows.indexOf(entry), 1); } });
+    row.append(el('div', { class: 'row' }, [el('label', { class: 'hint-text' }, [enabled, ' ']), type, test, remove]), fieldsBox, el('div', { class: 'statusline-items' }, kinds));
+    const entry = {
+      id,
+      value: () => {
+        const out = { id, type: type.value, enabled: enabled.checked, kinds: checked(kinds) };
+        for (const [k, input] of Object.entries(inputs)) out[k] = input.value.trim();
+        return out;
+      },
+    };
+    channelRows.push(entry);
+    channelsBox.append(row);
+  };
+  for (const c of nset.channels || []) addChannel(c);
+  // Старая настройка с одним webhook — каналом, чтобы её было видно и можно удалить.
+  if (nset.webhookSet && !(nset.channels || []).some((c) => c.id === 'legacy')) addChannel({ id: 'legacy', type: 'webhook', url: '***', kinds: nset.webhook });
+  const checked = (boxes) => boxes.map((l) => l.querySelector('input')).filter((b) => b.checked).map((b) => b.dataset.kind);
+  // Инструкции других агентов (CC4.6).
+  const compat = el('input', { type: 'checkbox', class: 'compat-instructions' });
+  compat.checked = settings.compatInstructions !== false;
+  // Чаты (CC6.8, CC6.9).
+  const autoTitle = el('input', { type: 'checkbox', class: 'auto-title' });
+  autoTitle.checked = settings.autoTitle !== false;
+  const retention = el('input', { type: 'number', min: '0', max: '3650', class: 'session-retention', value: String(settings.sessionRetentionDays || 0) });
+  const siteList = (input) => input.value.split(',').map((d) => d.trim()).filter(Boolean);
   const reviewerEnabled = el('input', { type: 'checkbox' });
   reviewerEnabled.checked = Boolean(settings.reviewer?.enabled);
   const reviewerModel = el('input', {
@@ -3798,12 +4398,43 @@ async function openSettings() {
         field('Температура', temperature),
         field('Максимум шагов агента', maxIterations),
         field('Запасная модель', fallbackModel),
+        field('Модель для «Плана»', planModel),
+        field('Тема', theme),
         field('Защищённые ветки (пуш запрещён)', protectedBranches),
         field('Подпись в коммитах (/commit)', gitAttribution),
       ]),
       el('label', { class: 'field' }, [
         el('span', { text: 'Доступ к файлам вне проекта' }),
         el('label', { class: 'hint-text' }, [outside, ' разрешить абсолютные пути вне папки проекта']),
+      ]),
+      el('div', { class: 'field' }, [el('span', { text: 'Статусная строка под полем ввода' }), el('div', { class: 'statusline-items' }, statusBoxes)]),
+      el('div', { class: 'field' }, [
+        el('span', { text: 'Уведомления' }),
+        el('label', { class: 'hint-text' }, [notifyOn, ' на рабочем столе, когда окно MAI не в фокусе:']),
+        el('div', { class: 'statusline-items' }, desktopKinds),
+      ]),
+      el('p', { class: 'hint-text', text: 'Мессенджеры: в канал уходит только заголовок и суть, без файлов. Токены хранятся зашифрованными; каналы задаёт администратор.' }),
+      channelsBox,
+      el('div', { class: 'row' }, [
+        el('button', { class: 'btn ghost small channel-add', type: 'button', text: '＋ Канал', onclick: () => addChannel() }),
+        el('button', { class: 'btn ghost small notify-test', type: 'button', text: 'Проверить на рабочем столе', onclick: async () => { const r = await api.notify?.test(); toast(r?.desktop ? 'Показано на рабочем столе' : 'Не показано — уведомления выключены в системе?', r?.desktop ? 'ok' : 'err'); } }),
+      ]),
+      el('label', { class: 'field' }, [
+        el('span', { text: 'Инструкции других агентов' }),
+        el('label', { class: 'hint-text' }, [compat, ' читать также CLAUDE.md, GEMINI.md, правила Cursor и Copilot (повторы AGENTS.md пропускаются)']),
+      ]),
+      el('label', { class: 'field' }, [
+        el('span', { text: 'Чаты' }),
+        el('label', { class: 'hint-text' }, [autoTitle, ' название чата придумывает модель после первого ответа (переименованные вручную не трогает)']),
+      ]),
+      el('div', { class: 'row' }, [field('Хранить чаты, дней (0 — всегда; старые удаляются при запуске)', retention)]),
+      el('label', { class: 'field' }, [
+        el('span', { text: 'Браузер агента' }),
+        el('label', { class: 'hint-text' }, [browserEnabled, ' агент может открывать сайты в своём окне, нажимать и заполнять формы (пароли и оплату — только вы)']),
+      ]),
+      el('div', { class: 'row' }, [
+        field('Сайты без вопросов (и поддомены)', browserAllow),
+        field('Сайты под запретом', browserBlock),
       ]),
       el('label', { class: 'field' }, [
         el('span', { text: 'Ревизор: вторая модель проверяет ответ' }),
@@ -3900,9 +4531,18 @@ async function openSettings() {
             temperature: Number(temperature.value),
             maxIterations: Number(maxIterations.value),
             fallbackModel: fallbackModel.value.trim(),
+            planModel: planModel.value.trim(),
             protectedBranches: protectedBranches.value.split(',').map((b) => b.trim()).filter(Boolean),
             gitAttribution: gitAttribution.value.trim(),
             allowOutsideProject: outside.checked,
+            browserEnabled: browserEnabled.checked,
+            autoTitle: autoTitle.checked,
+            compatInstructions: compat.checked,
+            notifications: { enabled: notifyOn.checked, desktop: checked(desktopKinds), channels: channelRows.map((r) => r.value()), webhookUrl: '', webhook: [] },
+            theme: theme.value,
+            statusLine: STATUS_ITEMS.map(([key]) => key).filter((key) => statusBoxes.some((l) => l.querySelector(`[data-item=${key}]`)?.checked)),
+            sessionRetentionDays: Math.max(0, Math.min(3650, Math.round(Number(retention.value) || 0))),
+            browserSites: { allow: siteList(browserAllow), block: siteList(browserBlock) },
             reviewer: {
               enabled: reviewerEnabled.checked,
               model: reviewerModel.value.trim(),
@@ -4003,6 +4643,21 @@ async function openMemory() {
   projectArea.value = data.project;
   const globalArea = el('textarea', { rows: '8', placeholder: 'Общие уроки для всех проектов…' });
   globalArea.value = data.global;
+  // Индикатор: сколько памяти попадает в промпт (CC4.5).
+  const meter = (area, scope) => {
+    const limit = data.limits?.[scope]?.limit || (scope === 'project' ? 12000 : 6000);
+    const node = el('p', { class: `hint-text memory-meter memory-meter-${scope}` });
+    const update = () => {
+      const size = area.value.trim().length;
+      node.textContent = size > limit ? `⚠ ${size} символов из ${limit}: агент видит в промпте только первые ${limit}, остальное — по запросу memory_read. Сократите или перенесите в AGENTS.md.` : `${size} из ${limit} символов в промпте`;
+      node.classList.toggle('over', size > limit);
+    };
+    area.addEventListener('input', update);
+    update();
+    return node;
+  };
+  const projectMeter = meter(projectArea, 'project');
+  const globalMeter = meter(globalArea, 'global');
 
   const historyTitle = el('p', { class: 'hint-text', text: 'История версий: проект' });
   const historyBox = el('div', { class: 'list' });
@@ -4070,8 +4725,10 @@ async function openMemory() {
       }),
       el('p', { class: 'hint-text', text: data.projectFile }),
       projectArea,
+      projectMeter,
       el('p', { class: 'hint-text', text: data.globalFile }),
       globalArea,
+      globalMeter,
       el('hr', { style: 'border:0;border-top:1px solid var(--border-soft)' }),
       el('div', { class: 'row' }, [
         el('button', { class: 'btn ghost', type: 'button', text: 'Версии проекта', onclick: () => renderHistory('project') }),
@@ -4376,7 +5033,7 @@ async function openSkills() {
       el('div', { class: 'list-item' }, [
         el('div', {}, [
           el('div', { class: 'title', text: skill.name }),
-          el('div', { class: 'sub', text: `${skill.description || 'без описания'} · ${skill.scope}` }),
+          el('div', { class: 'sub', text: `${skill.description || 'без описания'} · ${skill.scope}${skill.overriddenBy ? ` · не используется: перекрыт навыком «${skill.overriddenBy}» с тем же именем` : ''}` }),
         ]),
         el('div', { class: 'actions' }, [
           el('button', { class: 'btn ghost', type: 'button', text: 'Файл', onclick: () => api.showItem(skill.file) }),
@@ -5348,6 +6005,7 @@ async function pickProject() {
   state.projectDir = dir;
   updateChrome();
   refreshSessions();
+  refreshBranch();
   // Решение о доверии — сразу при выборе папки, как в Claude Code (ADR 0028).
   const trust = await refreshTrust();
   if (trust?.state === 'unknown') await decideTrust(trust);
@@ -5587,6 +6245,11 @@ async function init() {
   await loadModels();
   await refreshSessions();
   renderAll();
+  refreshBranch();
+  // Первый запуск (CW6.2): ещё нет чатов, мастер не пройден — предложить роль.
+  if ((!state.auth || state.auth.role === 'admin') && !state.settings.onboarding?.done && !(state.sessions || []).length) {
+    openOnboarding().catch(() => {});
+  }
 
   api.chat.onEvent(handleEvent);
 
@@ -5612,8 +6275,15 @@ $('#export-chat').addEventListener('click', async (event) => {
     toast('В диалоге пока нет сообщений');
     return;
   }
-  const format = await pickExportFormat(button);
+  const format = await pickExportFormat(button, { chatFile: Boolean(state.sessionId) });
   if (!format) return;
+  // Файл чата (CC6.9): вся история, открывается через /import.
+  if (format === 'json') {
+    const r = await api.sessions.exportFile(state.sessionId);
+    if (r?.ok) toast(`Сохранено: ${r.path}`);
+    else if (r?.error) toast(r.error, 'err');
+    return;
+  }
   button.disabled = true;
   const result = await api.export.chat({ messages, format, title: 'Диалог MAI Code' });
   button.disabled = false;

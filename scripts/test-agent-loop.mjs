@@ -7,8 +7,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
-import { runAgent, trimMessages, toApiMessage, compactSession } from '../electron/lib/agent.js';
+import { runAgent, trimMessages, toApiMessage, compactSession, suggestTitle } from '../electron/lib/agent.js';
 import { loadPlugins } from '../electron/lib/plugins.js';
 import { createRecorder, rewindFiles, rewindPlan } from '../electron/lib/checkpoints.js';
 import { createHookRunner, normalizeHooks } from '../electron/lib/hooks.js';
@@ -1005,7 +1006,11 @@ console.log('\n[24] Возможности модели и глубина рас
   const bodies3 = [];
   const events = [];
   await runAgent(base({ provider: { baseURL: 'http://fake', apiKey: 'k', name: 'fake', models: [{ id: 'plain', tools: false }] }, model: 'plain', messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), emit: (e) => events.push(e), clientFactory: fakeClient([{ text: 'ок' }], bodies3), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
-  check('модель без инструментов — запрос без tools и уведомление', bodies3[0].tools === undefined && events.some((e) => /не вызывает инструменты/.test(e.text || '')));
+  check('модель без инструментов — запрос без tools, уведомление о текстовом протоколе', bodies3[0].tools === undefined && events.some((e) => /текстовый протокол/.test(e.text || '')));
+  const bodies4 = [];
+  const events4 = [];
+  await runAgent(base({ settings: { maxIterations: 6, permissions: {}, textToolProtocol: false }, provider: { baseURL: 'http://fake', apiKey: 'k', name: 'fake', models: [{ id: 'plain', tools: false }] }, model: 'plain', messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), emit: (e) => events4.push(e), clientFactory: fakeClient([{ text: 'ок' }], bodies4), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('протокол выключен — только текст, без описания инструментов', bodies4[0].tools === undefined && !/текстовый протокол/.test(bodies4[0].messages[0].content) && events4.some((e) => /не вызывает инструменты/.test(e.text || '')));
 }
 
 
@@ -1187,6 +1192,284 @@ console.log('\n[28] Проект: инструкции в промпте и то
   const tools = (bodies[0].tools || []).map((t) => t.function.name);
   check('инструкции проекта в системном промпте', /# Проект «Отчётность»/.test(bodies[0].messages[0].content) && /ОСОБОЕ-ПРАВИЛО-ПРОЕКТА/.test(bodies[0].messages[0].content));
   check('только коннекторы проекта', tools.includes('mcp__gmail__read') && !tools.includes('mcp__slack__post') && tools.includes('read_file'), tools.join(','));
+}
+
+{
+  console.log('\n[29] Автозаголовок чата (CC6.8, ADR 0073)');
+  const seen = [];
+  const factory = () => ({ chat: { completions: { create: async (body) => { seen.push(body); return { choices: [{ message: { content: '«Сверка выписки».' } }] }; } } } });
+  const title = await suggestTitle({ provider: { apiKey: 'k', baseURL: 'http://x' }, model: 'm', request: 'сверь выписку с реестром', answer: 'готово', clientFactory: factory });
+  check('suggestTitle: запрос с текстом задачи, ответ очищен', title === 'Сверка выписки' && /сверь выписку с реестром/.test(seen[0].messages[0].content), title);
+}
+
+{
+  console.log('\n[30] Субагент в своей копии проекта (CC8.5, ADR 0075)');
+  const git = (cwd, ...args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' });
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mai-iso-')));
+  git(repo, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'note.txt'), 'исходный', 'utf8');
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-q', '-m', 'init');
+  const runIso = async (allowMerge) => {
+    const asked = [];
+    const recorded = [];
+    let seenDuring = null;
+    await runAgent(
+      base({
+        projectDir: repo,
+        settings: { maxIterations: 6, permissions: {}, worktreeDir: path.join(repo, '..', `wt-${allowMerge}`) },
+        messages: [{ role: 'user', content: 'поправь в копии' }],
+        mcp: fakeMcp(),
+        agentDefs: BUILTIN_AGENTS,
+        checkpoint: { record: (file, turn) => recorded.push({ file, turn }) },
+        approve: async (r) => {
+          asked.push(r.tool);
+          if (r.tool === 'agent_merge') seenDuring = fs.readFileSync(path.join(repo, 'note.txt'), 'utf8');
+          return r.tool === 'agent_merge' ? allowMerge : true;
+        },
+        clientFactory: routed(
+          [{ calls: [{ name: 'agent', args: { type: 'general', prompt: 'поправь note.txt', isolation: 'worktree' } }] }, { text: 'готово' }],
+          (sub, task, n) => (n === 1 ? { calls: [{ name: 'read_file', args: { path: 'note.txt' } }] } : n === 2 ? { calls: [{ name: 'edit_file', args: { path: 'note.txt', old_string: 'исходный', new_string: 'из копии' } }] } : { text: 'поправил' }),
+          [],
+        ),
+        policy: { getMode: () => 'acceptEdits', getRules: () => ({}) },
+      }),
+    );
+    return { asked, recorded, seenDuring };
+  };
+  let r = await runIso(true);
+  check('правка шла в копии: проект не тронут до слияния', r.seenDuring === 'исходный', r.seenDuring);
+  check('слияние — только с подтверждения', r.asked.includes('agent_merge'), JSON.stringify(r.asked));
+  check('после «да» правка в проекте, в чекпоинте хода', fs.readFileSync(path.join(repo, 'note.txt'), 'utf8') === 'из копии' && r.recorded.some((x) => x.file.endsWith('note.txt') && x.turn === 0), JSON.stringify(r.recorded));
+  check('копия и ветка убраны', !git(repo, 'branch', '--list', 'mai/agent-*').stdout.trim() && git(repo, 'worktree', 'list').stdout.trim().split('\n').length === 1);
+  git(repo, 'checkout', '-q', '--', 'note.txt');
+  r = await runIso(false);
+  check('после «нет» проект не изменён, правка в ветке', fs.readFileSync(path.join(repo, 'note.txt'), 'utf8') === 'исходный' && /mai\/agent-/.test(git(repo, 'branch', '--list', 'mai/agent-*').stdout));
+  const plain = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mai-noiso-')));
+  const bodies = [];
+  await runAgent(
+    base({
+      projectDir: plain,
+      messages: [{ role: 'user', content: 'в копии' }],
+      mcp: fakeMcp(),
+      agentDefs: BUILTIN_AGENTS,
+      approve: async () => true,
+      clientFactory: routed([{ calls: [{ name: 'agent', args: { type: 'general', prompt: 'x', isolation: 'worktree' } }] }, { text: 'ок' }], () => ({ text: 'ок' }), bodies),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const toolMsg = bodies.at(-1)?.messages?.find((m) => m.role === 'tool')?.content || '';
+  check('не git — понятный отказ вместо правок в проекте', /не git-репозиторий/.test(toolMsg), toolMsg);
+  fs.rmSync(repo, { recursive: true, force: true });
+  fs.rmSync(plain, { recursive: true, force: true });
+}
+
+{
+  console.log('\n[31] Фоновые субагенты (CC8.6, ADR 0075)');
+  const tasks = new Map();
+  const started = [];
+  const background = {
+    start({ type, description, run }) {
+      const id = `bg-${tasks.size + 1}`;
+      const task = { id, type, description, status: 'работает', result: '' };
+      tasks.set(id, task);
+      started.push(task);
+      task.promise = run().then((res) => {
+        task.status = 'готово';
+        task.result = res;
+      });
+      return task;
+    },
+    get: (id) => tasks.get(id) || null,
+    list: () => [...tasks.values()],
+  };
+  const bodies = [];
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'поищи в фоне' }],
+      mcp: fakeMcp(),
+      agentDefs: BUILTIN_AGENTS,
+      background,
+      approve: async () => true,
+      clientFactory: routed(
+        [
+          { calls: [{ name: 'agent', args: { type: 'explore', description: 'поиск конфига', prompt: 'найди конфиг', background: true } }, { name: 'agent', args: { type: 'general', prompt: 'правь', background: true } }] },
+          { text: 'продолжаю' },
+        ],
+        () => ({ text: 'конфиг в app.json' }),
+        bodies,
+      ),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const mainBody = bodies.filter((b) => !/Ты — субагент/.test(b.messages[0].content)).at(-1);
+  const results = mainBody.messages.filter((m) => m.role === 'tool').map((m) => m.content);
+  check('чтение — в фоне, родитель сразу продолжает', started.length === 1 && /запущен в фоне: bg-1/.test(results[0]), JSON.stringify(results));
+  check('пишущий без изоляции в фон не идёт', /только субагентов для чтения или с isolation/.test(results[1] || ''), results[1]);
+  const parentTools = mainBody.tools;
+  check('у родителя есть agent_result', parentTools.includes('agent_result'), parentTools.join(','));
+  await started[0].promise;
+  check('итог фонового субагента собран', started[0].status === 'готово' && /конфиг в app.json/.test(started[0].result), started[0].result);
+}
+
+{
+  console.log('\n[32] Модель без tool calling: текстовый протокол (CC13.4, ADR 0078)');
+  fs.writeFileSync(path.join(project, 'txt.txt'), 'содержимое для текстового протокола', 'utf8');
+  const bodies = [];
+  const history = await runAgent(
+    base({
+      provider: { baseURL: 'http://fake', apiKey: 'k', name: 'fake', models: [{ id: 'fake-model', tools: false }] },
+      messages: [{ role: 'user', content: 'прочитай txt.txt' }],
+      mcp: fakeMcp(),
+      approve: async () => true,
+      clientFactory: fakeClient([{ text: 'Сейчас прочитаю.\n<tool_call>{"name": "read_file", "arguments": {"path": "txt.txt"}}</tool_call>' }, { text: 'В файле — содержимое.' }], bodies),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  check('инструменты не уходят полем tools, протокол — в системном промпте', !bodies[0].tools && /текстовый протокол/.test(bodies[0].messages[0].content) && /### read_file/.test(bodies[0].messages[0].content));
+  const call = history.find((m) => m.role === 'assistant' && m.tool_calls?.length);
+  check('вызов из текста стал обычным tool_call, текст без блока', call?.tool_calls[0].function.name === 'read_file' && call.content === 'Сейчас прочитаю.', JSON.stringify(call));
+  check('инструмент выполнен', history.some((m) => m.role === 'tool' && /содержимое для текстового протокола/.test(m.content)));
+  const second = bodies[1]?.messages || [];
+  check('второй запрос: вызов блоком у ассистента, результат — сообщением пользователя', second.some((m) => m.role === 'assistant' && /<tool_call>\{"name":"read_file"/.test(m.content || '')) && second.some((m) => m.role === 'user' && /<tool_result name="read_file"/.test(m.content || '')) && !second.some((m) => m.role === 'tool'), JSON.stringify(second.slice(-2)).slice(0, 400));
+
+  // Шлюз отвечает «tools not supported» — дальше текстом, тот же шаг.
+  const seen = [];
+  const notices = [];
+  let n = 0;
+  const rejecting = () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          seen.push(JSON.parse(JSON.stringify(body)));
+          if (body.tools) throw Object.assign(new Error('400 this model does not support tools'), { status: 400 });
+          n += 1;
+          return stream(n === 1 ? { text: '<tool_call>{"name":"read_file","arguments":{"path":"txt.txt"}}</tool_call>' } : { text: 'готово' });
+        },
+      },
+    },
+  });
+  const h2 = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'прочитай' }],
+      mcp: fakeMcp(),
+      emit: (e) => e.type === 'notice' && notices.push(e.text),
+      approve: async () => true,
+      clientFactory: rejecting,
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  check('отказ шлюза → текстовый протокол с уведомлением', seen[0].tools && !seen[1].tools && notices.some((t) => /текстовый протокол/.test(t)), JSON.stringify(notices));
+  check('и вызов прошёл', h2.some((m) => m.role === 'tool' && /содержимое/.test(m.content)));
+}
+
+{
+  console.log('\n[33] Модель для «Плана» (CC13.5, ADR 0078)');
+  const bodies = [];
+  const notices = [];
+  let modeNow = 'plan';
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'спланируй и сделай' }],
+      mcp: fakeMcp(),
+      emit: (e) => e.type === 'notice' && notices.push(e.text),
+      planner: { provider: { baseURL: 'http://fake-plan', apiKey: 'k2', name: 'plan' }, model: 'strong-planner', label: 'plan/strong-planner' },
+      approve: async () => true,
+      clientFactory: fakeClient(
+        [
+          { calls: [{ name: 'read_file', args: { path: 'txt.txt' } }] },
+          { calls: [{ name: 'read_file', args: { path: 'txt.txt' } }] },
+          { text: 'готово' },
+        ],
+        bodies,
+      ),
+      // После первого шага план «утверждён»: режим меняется.
+      policy: { getMode: () => { const m = modeNow; modeNow = 'acceptEdits'; return m; }, getRules: () => ({}) },
+    }),
+  );
+  check('в «Плане» запрос уходит модели планирования', bodies[0]?.model === 'strong-planner', bodies[0]?.model);
+  check('после плана — основная модель', bodies.slice(1).every((b) => b.model === 'fake-model') && bodies.length >= 2, bodies.map((b) => b.model).join(','));
+  check('переключения видны уведомлениями', notices.some((t) => /План составляет plan\/strong-planner/.test(t)) && notices.some((t) => /выполняет fake-model/.test(t)), JSON.stringify(notices));
+}
+
+{
+  console.log('\n[34] Отложенные инструменты и автопроверка (CC1.12, CC1.11, ADR 0079)');
+  const many = {
+    status: () => [{ name: 'big', status: 'ready', tools: [] }],
+    toolSchemas: () =>
+      Array.from({ length: 30 }, (_x, i) => ({
+        type: 'function',
+        function: { name: `mcp__big__t${i}`, description: i === 7 ? 'Найти счёт в бухгалтерии' : `инструмент ${i}`, parameters: { type: 'object', properties: { id: { type: 'string' } } } },
+        annotations: { readOnlyHint: true },
+      })),
+    call: async (name, args) => `вызван ${name} ${JSON.stringify(args)}`,
+  };
+  const bodies = [];
+  const history = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'найди счёт 42' }],
+      mcp: many,
+      approve: async () => true,
+      clientFactory: fakeClient(
+        [{ calls: [{ name: 'tool_search', args: { query: 'счёт бухгалтерии' } }] }, { calls: [{ name: 'mcp__big__t7', args: { id: '42' } }] }, { text: 'нашёл' }],
+        bodies,
+      ),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  const names = (b) => (b.tools || []).map((t) => t.function.name);
+  check('30 MCP: схемы не в запросе, есть tool_search, имена — в промпте', !names(bodies[0]).some((n) => n.startsWith('mcp__')) && names(bodies[0]).includes('tool_search') && /Инструменты по запросу/.test(bodies[0].messages[0].content) && /mcp__big__t29/.test(bodies[0].messages[0].content), names(bodies[0]).join(','));
+  check('tool_search нашёл и загрузил по описанию', history.some((m) => m.role === 'tool' && m.name === 'tool_search' && /Загружено: mcp__big__t7/.test(m.content)));
+  check('со следующего шага схема в запросе, остальные — нет', names(bodies[1]).includes('mcp__big__t7') && !names(bodies[1]).includes('mcp__big__t8'), names(bodies[1]).join(','));
+  check('и вызов выполнен', history.some((m) => m.role === 'tool' && /вызван mcp__big__t7 \{"id":"42"\}/.test(m.content)));
+  const few = [];
+  await runAgent(base({ messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'ок' }], few), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('мало MCP — всё как раньше, без tool_search', names(few[0]).includes('mcp__fs__read_file') && !names(few[0]).includes('tool_search'));
+
+  // Автопроверка после правки: ошибка синтаксиса приходит в результат правки.
+  fs.writeFileSync(path.join(project, 'calc.js'), 'const a = 1;\n', 'utf8');
+  const diagBodies = [];
+  const h2 = await runAgent(
+    base({
+      settings: { maxIterations: 6, permissions: {}, autoDiagnostics: true },
+      messages: [{ role: 'user', content: 'поправь calc.js' }],
+      mcp: fakeMcp(),
+      approve: async () => true,
+      clientFactory: fakeClient(
+        [{ calls: [{ name: 'read_file', args: { path: 'calc.js' } }] }, { calls: [{ name: 'edit_file', args: { path: 'calc.js', old_string: 'const a = 1;', new_string: 'const a = ;' } }] }, { text: 'готово' }],
+        diagBodies,
+      ),
+      policy: { getMode: () => 'acceptEdits', getRules: () => ({}) },
+    }),
+  );
+  const editResult = h2.find((m) => m.role === 'tool' && m.name === 'edit_file')?.content || '';
+  check('autoDiagnostics: ошибка синтаксиса — в результате правки', /\[Диагностика после правки\]/.test(editResult) && /SyntaxError/.test(editResult), editResult);
+  check('инструмент diagnostics есть у агента в «Коде»', names(diagBodies[0]).includes('diagnostics') && names(diagBodies[0]).includes('notebook_edit'));
+}
+
+{
+  console.log('\n[35] Кэш промпта (CC5.4, ADR 0080)');
+  const bodies = [];
+  await runAgent(base({ model: 'claude-sonnet-4.5', messages: [{ role: 'user', content: 'привет' }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'ок' }], bodies), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('Claude: cache_control на системном промпте и последнем сообщении', bodies[0].messages[0].content?.[0]?.cache_control?.type === 'ephemeral' && bodies[0].messages.at(-1).content?.[0]?.cache_control?.type === 'ephemeral', JSON.stringify(bodies[0].messages.at(-1)));
+  const plain = [];
+  await runAgent(base({ model: 'gpt-5', messages: [{ role: 'user', content: 'привет' }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'ок' }], plain), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('остальные модели — без меток (префикс кэшируется сам)', typeof plain[0].messages[0].content === 'string');
+  const sent = [];
+  const notices = [];
+  const strict = () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          sent.push(JSON.parse(JSON.stringify(body)));
+          if (Array.isArray(body.messages[0].content)) throw Object.assign(new Error('400 Extra inputs are not permitted: messages.0.content.0.cache_control'), { status: 400 });
+          return stream({ text: 'ок' });
+        },
+      },
+    },
+  });
+  const h = await runAgent(base({ model: 'claude-x', messages: [{ role: 'user', content: 'привет' }], mcp: fakeMcp(), emit: (e) => e.type === 'notice' && notices.push(e.text), clientFactory: strict, policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('шлюз отверг метки — повтор без них, уведомление', sent.length === 2 && typeof sent[1].messages[0].content === 'string' && h.at(-1)?.content === 'ок' && notices.some((t) => /метки кэша/.test(t)), JSON.stringify(notices));
 }
 
 fs.rmSync(project, { recursive: true, force: true });

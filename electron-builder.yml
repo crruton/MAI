@@ -11,6 +11,7 @@ files:
   - renderer/**/*
   - assets/**/*
   - skills/**/*
+  - roles/**/*
   - docs/**/*
   - package.json
   - README.md
@@ -23,6 +24,8 @@ files:
   - "!node_modules/**/{test,tests,__tests__,example,examples,doc,docs}/**"
   - "!node_modules/**/.github/**"
   - "!node_modules/**/{.eslintrc*,.prettierrc*,tsconfig*.json,.editorconfig}"
+  # pdf-lib (ADR 0083): Node берёт cjs/ — браузерные сборки, исходники и типы не нужны.
+  - "!node_modules/pdf-lib/{dist,es,src,ts3.4}/**"
 
 asar: true
 compression: normal
