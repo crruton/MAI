@@ -386,3 +386,31 @@ export async function syncAll(projectDir, { embed = true } = {}) {
   }
   return report;
 }
+
+/**
+ * Автосинхронизация (F12, ADR 0087): только артефакты — Postgres и SeaweedFS,
+ * если заданы. Ключи в Vault уходят лишь вручную. Ошибка любого сервиса —
+ * исключение, чтобы очередь повторила попытку.
+ */
+export async function autoSync(projectDir, { embed = true } = {}) {
+  const cfg = infra();
+  if (!cfg.postgresUrl && !cfg.seaweedUrl) throw new Error('Не заданы ни Postgres, ни SeaweedFS');
+  const report = {};
+  const errors = [];
+  if (cfg.postgresUrl) {
+    try {
+      report.postgres = await syncArtifacts(projectDir, { embed });
+    } catch (err) {
+      errors.push(`Postgres: ${err?.message || err}`);
+    }
+  }
+  if (cfg.seaweedUrl) {
+    try {
+      report.seaweed = await uploadArtifacts(projectDir);
+    } catch (err) {
+      errors.push(`SeaweedFS: ${err?.message || err}`);
+    }
+  }
+  if (errors.length) throw new Error(errors.join('; '));
+  return report;
+}

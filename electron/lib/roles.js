@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { MANIFEST, NAME_RE, readJson, readPackage } from './packages.js';
+import { removeTree } from './remove-tree.js';
 
 const ROLE_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const SAFE_PARTS = new Set(['commands', 'skills', 'agents', MANIFEST, 'README.md']);
@@ -69,7 +70,7 @@ export function installRole({ id, rolesDir, dataDir }) {
   if (!role) throw new Error(`Нет набора роли «${id}»`);
   const target = path.join(dataDir, 'packages', role.package);
   const temp = `${target}.new-${process.pid}`;
-  fs.rmSync(temp, { recursive: true, force: true });
+  removeTree(temp);
   fs.mkdirSync(temp, { recursive: true });
   for (const entry of fs.readdirSync(role.dir, { withFileTypes: true })) {
     if (!SAFE_PARTS.has(entry.name)) continue;
@@ -77,7 +78,7 @@ export function installRole({ id, rolesDir, dataDir }) {
     if (entry.isDirectory()) copyTree(src, path.join(temp, entry.name));
     else fs.writeFileSync(path.join(temp, entry.name), fs.readFileSync(src));
   }
-  fs.rmSync(target, { recursive: true, force: true });
+  removeTree(target);
   fs.renameSync(temp, target);
   return { role, package: readPackage(target, 'global') };
 }

@@ -99,3 +99,24 @@ ADR фиксируют решения, которые дорого менять:
 | [0081](0081-uvedomleniya.md) | Уведомления на рабочем столе и в мессенджеры (Telegram, MAX, WhatsApp, Rocket.Chat, webhook) | accepted | 2026-11-23 |
 | [0082](0082-nabor-scenariev-eval.md) | Набор сценариев (eval) по профилям агента | accepted | 2026-11-23 |
 | [0083](0083-pdf-obedinenie-i-formy.md) | PDF: объединение, выборка страниц и формы (pdf-lib) | accepted | 2026-11-23 |
+| [0084](0084-zapomnit-i-ocr-instrument.md) | «Запомнить?» после прогона и инструмент ocr | accepted | 2026-11-23 |
+| [0085](0085-runtimes-versiya-i-perenos.md) | Рантаймы: версия CLI и перенос пресетов | accepted | 2026-11-23 |
+| [0086](0086-agent-shem-predlozhenie.md) | Агент схем: предложение с diff и «Применить» | accepted | 2026-11-23 |
+| [0087](0087-avtosinhronizaciya-hranilishcha.md) | Автосинхронизация хранилища с Postgres и SeaweedFS | accepted | 2026-11-23 |
+| [0088](0088-perezapusk-zavisshego-mcp.md) | Перезапуск зависшего MCP-сервера Repowise | accepted | 2026-11-23 |
+| [0089](0089-statusy-multica-v-openspec.md) | Статусы Multica обратно в OpenSpec | accepted | 2026-11-23 |
+| [0090](0090-kalibrator-arhitektury.md) | Калибратор архитектуры и PRD — субагент и вкладка доски | accepted | 2026-11-23 |
+| [0091](0091-proekt-v-otdelnoy-papke.md) | «Проект в отдельной папке» вместо «песочницы проекта» | accepted | 2026-11-23 |
+| [0092](0092-golos-sostoyanie-povtor-dvizhok.md) | Голосовой ввод: состояние на кнопке, повтор и выбор движка | accepted | 2026-11-23 |
+| [0093](0093-korporativnyy-vhod-keycloak.md) | Корпоративный режим: обязательный вход через Keycloak и продление сессии | accepted | 2026-11-23 |
+| [0094](0094-metriki-agenta-grafana.md) | Метрики агента и панели Grafana | accepted | 2026-11-23 |
+| [0095](0095-ustanovshchik-v-ci-i-sistemnye-sertifikaty.md) | Установщик в CI на чистом Windows и системные сертификаты в процессе | accepted | 2026-11-23 |
+| [0096](0096-krossplatformennye-ispolniteli.md) | Кроссплатформенные исполнители: выбор оболочки и остановка дерева процессов | accepted | 2026-11-23 |
+| [0097](0097-signoff.md) | /signoff — статус коммита «тесты проходят у меня» | accepted | 2026-11-23 |
+| [0098](0098-granitsy-dannyh.md) | /privacy — отчёт «куда уходят данные» | accepted | 2026-11-23 |
+| [0099](0099-filtr-sekretov-v-zaprosah.md) | Фильтр секретов в запросах к модели | accepted | 2026-11-23 |
+| [0100](0100-lokalnye-modeli.md) | Локальные модели в один клик | accepted | 2026-11-23 |
+| [0101](0101-impeccable-4-10-i-hook-ui.md) | impeccable 4.10.0, обновление встроенных навыков и пакет с хуком проверки UI | accepted | 2026-11-23 |
+| [0102](0102-skaner-obnovleniy.md) | Проактивный сканер обновлений и обновление на ветке с тестами | accepted | 2026-11-23 |
+| [0103](0103-chistilshchik-staryh-versiy.md) | Чистильщик старых версий | accepted | 2026-11-23 |
+| [0104](0104-electron-45-openai-7.md) | Electron 45, openai 7 и устранение уязвимостей зависимостей | accepted | 2026-11-23 |

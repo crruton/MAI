@@ -15,6 +15,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { corporatePolicy } from './auth-session.js';
 
 export const LEVELS = ['managed', 'user', 'project', 'local', 'session'];
 const KINDS = ['allow', 'ask', 'deny'];
@@ -56,6 +57,8 @@ export function readManaged(file = managedSettingsPath()) {
     // Каталог коннекторов организации (ADR 0052).
     connectors: Array.isArray(data?.connectors) ? data.connectors : [],
     onlyManagedConnectors: data?.onlyManagedConnectors === true,
+    // Корпоративный режим: обязательный вход через Keycloak (F21, ADR 0093).
+    auth: corporatePolicy(data),
   };
 }
 

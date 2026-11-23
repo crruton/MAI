@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { resolveInside, assertNotSecret } from './fs.js';
 import { markdownToHtml, slidesToHtml } from '../export/html.js';
 import { buildDocx, buildXlsx, buildPptx, docxToMarkdown, pptxToMarkdown, readXlsx, sheetsToText } from '../documents.js';
+import { removeTree } from '../remove-tree.js';
 
 /**
  * Документы (CW2.1, CW2.2, ADR 0049): агент создаёт DOCX и XLSX и читает
@@ -86,7 +87,7 @@ function previewFolder(ctx) {
   for (const name of fs.readdirSync(base)) {
     const full = path.join(base, name);
     try {
-      if (Date.now() - fs.statSync(full).mtimeMs > DAY) fs.rmSync(full, { recursive: true, force: true });
+      if (Date.now() - fs.statSync(full).mtimeMs > DAY) removeTree(full);
     } catch {
       /* занято — в следующий раз */
     }

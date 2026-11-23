@@ -4,6 +4,7 @@ import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import { isSecretPath } from './guardrails.js';
 import { ocrImage } from './ocr.js';
+import { removeTree } from './remove-tree.js';
 
 /**
  * Вложения сессии.
@@ -695,7 +696,7 @@ export function removeSessionUploads(projectDir, sessionId) {
   if (!projectDir) return false;
   const dir = path.join(uploadsRoot(projectDir), String(sessionId || '').replace(/[^\w.-]/g, '_'));
   try {
-    fs.rmSync(dir, { recursive: true, force: true });
+    removeTree(dir);
     return true;
   } catch {
     return false;
@@ -730,7 +731,7 @@ export function adoptDraftUploads(projectDir, sessionId) {
       }
       fs.renameSync(source, target);
     }
-    fs.rmSync(from, { recursive: true, force: true });
+    removeTree(from);
     return {
       from: relative(projectDir, from),
       to: relative(projectDir, to),

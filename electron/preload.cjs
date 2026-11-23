@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('mai', {
     save: (id, provider) => invoke('providers:save', { id, provider }),
     remove: (id) => invoke('providers:remove', id),
     test: (id) => invoke('providers:test', id),
+    // Локальные серверы моделей (N4).
+    detectLocal: () => invoke('localModels:detect'),
+    addLocal: (id, activate = false) => invoke('localModels:add', { id, activate }),
   },
   runtimes: {
     list: () => invoke('runtimes:list'),
@@ -25,6 +28,8 @@ contextBridge.exposeInMainWorld('mai', {
     run: (payload) => invoke('runtimes:run', payload),
     runMany: (payload) => invoke('runtimes:runMany', payload),
     stop: () => invoke('runtimes:stop'),
+    exportFile: () => invoke('runtimes:export'),
+    importFile: (replace = false) => invoke('runtimes:import', { replace }),
   },
   project: {
     pick: () => invoke('project:pick'),
@@ -181,12 +186,25 @@ contextBridge.exposeInMainWorld('mai', {
     read: (relative) => invoke('docs:read', relative),
     search: (query) => invoke('docs:search', query),
   },
+  // Signoff (N1): тесты проекта и статус коммита в GitHub.
+  signoff: { run: (payload) => invoke('signoff:run', payload) },
+  // Границы данных (N2).
+  privacy: { report: (payload) => invoke('privacy:report', payload) },
+  // Чистильщик старых версий (N7).
+  cleanup: { plan: () => invoke('cleanup:plan'), apply: (ids) => invoke('cleanup:apply', { ids }) },
+  // Сканер обновлений (N6).
+  updates: {
+    last: () => invoke('updates:last'),
+    scan: (payload) => invoke('updates:scan', payload),
+    apply: (payload) => invoke('updates:apply', payload),
+  },
   multica: {
     status: () => invoke('multica:status'),
     install: () => invoke('multica:install'),
     auth: () => invoke('multica:auth'),
     issues: (limit) => invoke('multica:issues', limit),
     syncDocs: (projectDir) => invoke('multica:syncDocs', projectDir),
+    pullStatuses: (projectDir) => invoke('multica:pullStatuses', projectDir),
   },
   sandbox: {
     status: () => invoke('sandbox:status'),
@@ -217,6 +235,11 @@ contextBridge.exposeInMainWorld('mai', {
     status: () => invoke('mas:status'),
     config: () => invoke('mas:config'),
     transcribe: (payload) => invoke('mas:transcribe', payload),
+  },
+  // Голосовой ввод: движок по настройке (F18).
+  voice: {
+    status: () => invoke('voice:status'),
+    transcribe: (payload) => invoke('voice:transcribe', payload),
   },
   plugins: {
     list: (projectDir) => invoke('plugins:list', projectDir),
@@ -263,6 +286,8 @@ contextBridge.exposeInMainWorld('mai', {
     exportDiagram: (payload) => invoke('boards:exportDiagram', payload),
     rasterize: (payload) => invoke('boards:rasterize', payload),
     diagramChat: (payload) => invoke('boards:diagramChat', payload),
+    diagramApply: (payload) => invoke('boards:diagramApply', payload),
+    calibrate: (payload) => invoke('boards:calibrate', payload),
     saveView: (payload) => invoke('boards:saveView', payload),
     onEvent: (handler) => {
       const listener = (_event, data) => handler(data);
@@ -277,6 +302,8 @@ contextBridge.exposeInMainWorld('mai', {
   },
   infra: {
     status: () => invoke('infra:status'),
+    syncStatus: (payload) => invoke('infra:syncStatus', payload),
+    syncNow: (payload) => invoke('infra:syncNow', payload),
     sync: (payload) => invoke('infra:sync', payload),
     pushSecrets: () => invoke('infra:pushSecrets'),
     pullSecrets: () => invoke('infra:pullSecrets'),
@@ -296,6 +323,7 @@ contextBridge.exposeInMainWorld('mai', {
     risk: (payload) => invoke('repowise:risk', payload),
     distill: (payload) => invoke('repowise:distill', payload),
     connectMcp: (payload) => invoke('repowise:connectMcp', payload),
+    restartMcp: () => invoke('repowise:restartMcp'),
     serve: (payload) => invoke('repowise:serve', payload),
     stopServe: (payload) => invoke('repowise:stopServe', payload),
   },

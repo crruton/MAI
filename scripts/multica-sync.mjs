@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { listChanges, taskMarker } from '../electron/lib/openspec.js';
+import { listChanges, taskMarker, statusUpdatesFromIssues, applyTaskStatuses } from '../electron/lib/openspec.js';
 
 /**
  * CLI-версия синхронизации OpenSpec → Multica.
@@ -9,10 +9,13 @@ import { listChanges, taskMarker } from '../electron/lib/openspec.js';
  *
  * Настройки: переменные окружения MULTICA_COMMAND (по умолчанию multica).
  * Проект: текущая папка или первый аргумент.
+ * `--pull` — обратно (F14): задачи «готово» в Multica ставят [x] в tasks.md.
  */
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const projectDir = path.resolve(process.argv[2] || root);
+const argv = process.argv.slice(2);
+const pull = argv.includes('--pull');
+const projectDir = path.resolve(argv.find((a) => !a.startsWith('--')) || root);
 const command = process.env.MULTICA_COMMAND || 'multica';
 
 function run(args) {
@@ -51,6 +54,16 @@ try {
   console.error(`Не удалось получить задачи Multica: ${err.message}`);
   console.error('Проверьте: multica auth status');
   process.exit(1);
+}
+
+if (pull) {
+  const { updates, cancelled } = statusUpdatesFromIssues(issues);
+  const report = applyTaskStatuses(projectDir, updates);
+  for (const item of report.marked) console.log(`отмечено: ${item}`);
+  for (const item of cancelled) console.log(`отменено в Multica (без галочки): ${item.change}:${item.taskId}`);
+  for (const item of report.missing) console.log(`не найдено в tasks.md: ${item}`);
+  console.log(`Готово: отмечено ${report.marked.length}, уже отмечено ${report.already.length}.`);
+  process.exit(0);
 }
 
 let created = 0;

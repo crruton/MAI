@@ -9,12 +9,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-import { runAgent, trimMessages, toApiMessage, compactSession, suggestTitle } from '../electron/lib/agent.js';
+import { runAgent, trimMessages, toApiMessage, compactSession, suggestTitle, suggestLesson, cleanLesson } from '../electron/lib/agent.js';
 import { loadPlugins } from '../electron/lib/plugins.js';
 import { createRecorder, rewindFiles, rewindPlan } from '../electron/lib/checkpoints.js';
 import { createHookRunner, normalizeHooks } from '../electron/lib/hooks.js';
 import { BUILTIN_AGENTS } from '../electron/lib/agent-defs.js';
 import { disposePluginHosts } from '../electron/lib/plugin-host.js';
+import { removeTree } from '../electron/lib/remove-tree.js';
+// Необработанная ошибка в main Electron не завершает процесс — CI видел бы «завис» вместо причины.
+for (const ev of ['unhandledRejection', 'uncaughtException']) {
+  process.on(ev, (err) => {
+    console.log(`  FAIL исключение (${ev}): ${err?.stack || err}`);
+    process.exit(1);
+  });
+}
 
 let pass = 0;
 let fail = 0;
@@ -1260,8 +1268,9 @@ console.log('\n[28] Проект: инструкции в промпте и то
   );
   const toolMsg = bodies.at(-1)?.messages?.find((m) => m.role === 'tool')?.content || '';
   check('не git — понятный отказ вместо правок в проекте', /не git-репозиторий/.test(toolMsg), toolMsg);
-  fs.rmSync(repo, { recursive: true, force: true });
-  fs.rmSync(plain, { recursive: true, force: true });
+  // В .git файлы «только для чтения»: на Windows Node 24 rmSync их не удаляет (ADR 0104).
+  removeTree(repo);
+  removeTree(plain);
 }
 
 {
@@ -1472,7 +1481,55 @@ console.log('\n[28] Проект: инструкции в промпте и то
   check('шлюз отверг метки — повтор без них, уведомление', sent.length === 2 && typeof sent[1].messages[0].content === 'string' && h.at(-1)?.content === 'ок' && notices.some((t) => /метки кэша/.test(t)), JSON.stringify(notices));
 }
 
+{
+  console.log('\n[36] «Запомнить?» после прогона (F4, ADR 0084)');
+  check('чистка урока: «НЕТ», пусто и длинное — отбрасываются', cleanLesson('НЕТ') === '' && cleanLesson('нет, урока нет') === '' && cleanLesson('') === '' && cleanLesson('x'.repeat(300)) === '' && cleanLesson('Урок: «Сборку запускай npm run build:win».\nещё') === 'Сборку запускай npm run build:win.');
+  const seen = [];
+  const factory = (reply) => () => ({ chat: { completions: { create: async (body) => { seen.push(body); return { choices: [{ message: { content: reply } }] }; } } } });
+  const lesson = await suggestLesson({ provider: { apiKey: 'k', baseURL: 'http://x' }, model: 'm', request: 'почини сборку', actions: 'edit_file {"path":"build.js"}', answer: 'готово', clientFactory: factory('Перед сборкой чисти dist/') });
+  check('suggestLesson: задача, действия и итог в запросе, ответ — строка урока', lesson === 'Перед сборкой чисти dist/' && /почини сборку/.test(seen[0].messages[0].content) && /edit_file/.test(seen[0].messages[0].content) && /НЕТ/.test(seen[0].messages[0].content), lesson);
+  check('нет урока — пусто', (await suggestLesson({ provider: { apiKey: 'k', baseURL: 'http://x' }, model: 'm', request: 'x', clientFactory: factory('НЕТ') })) === '');
+}
+
 fs.rmSync(project, { recursive: true, force: true });
+{
+  console.log('\n[37] Фильтр секретов в запросах (N3, ADR 0099)');
+  const key = 'sk-proj-ABCDEFGHIJKLMNOPQRSTUVWX12345';
+  const bodies = [];
+  const notices = [];
+  const mcp = fakeMcp();
+  // Модель отвечает вызовом записи со знаком из запроса — значение подставится обратно.
+  let placeholder = '';
+  const client = () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          bodies.push(JSON.parse(JSON.stringify(body)));
+          const text = JSON.stringify(body.messages);
+          placeholder ||= /\[СКРЫТО:ключ-openai:[0-9a-f]{6}\]/.exec(text)?.[0] || '';
+          return bodies.length === 1 ? stream({ calls: [{ name: 'mcp__fs__write_file', args: { content: `OPENAI_API_KEY=${placeholder}` } }] }) : stream({ text: 'записал' });
+        },
+      },
+    },
+  });
+  await runAgent(base({ messages: [{ role: 'user', content: `Запиши в .env мой ключ ${key}` }], mcp, clientFactory: client, emit: (e) => e.type === 'notice' && notices.push(e.text), policy: { getMode: () => 'bypass', getRules: () => ({}) }, approve: async () => ({ allow: true }) }));
+  check('ключ не ушёл модели ни в одном запросе', bodies.length === 2 && bodies.every((b) => !JSON.stringify(b).includes(key)) && Boolean(placeholder), placeholder);
+  check('уведомление «Скрыто от модели»', notices.some((t) => /Скрыто от модели: ключ-openai ×1/.test(t)), JSON.stringify(notices));
+  check('правка со знаком — инструмент получил настоящий ключ', mcp.calls[0]?.args.content === `OPENAI_API_KEY=${key}`, JSON.stringify(mcp.calls));
+  check('история вызова — со знаком, не с ключом', !JSON.stringify(bodies[1].messages.filter((m) => m.role === 'assistant')).includes(key));
+  const blocked = [];
+  let blockErr = '';
+  try {
+    await runAgent(base({ settings: { maxIterations: 3, permissions: {}, secretFilter: 'block' }, messages: [{ role: 'user', content: `ключ ${key}` }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'не должно' }], blocked) }));
+  } catch (e) {
+    blockErr = e.message;
+  }
+  check('режим «блокировать» — запрос не отправлен', blocked.length === 0 && /Запрос не отправлен/.test(blockErr), blockErr);
+  const plain = [];
+  await runAgent(base({ settings: { maxIterations: 3, permissions: {}, secretFilter: 'off' }, messages: [{ role: 'user', content: `ключ ${key}` }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'ок' }], plain) }));
+  check('режим «выключен» — как есть', JSON.stringify(plain[0]).includes(key));
+}
+
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();
 process.exit(fail ? 1 : 0);

@@ -156,8 +156,8 @@ main получает манифест и обёртки: `tools[].run` и `tran
 
 Окружение хоста — копия окружения без переменных с `KEY`, `TOKEN`, `SECRET`,
 `PASSW`, `AUTH` и подобными. Модель разрешений Node (`--permission`) в
-`utilityProcess` Electron 38 не включается, поэтому файловая система и процессы
-доступны плагину с правами пользователя.
+`utilityProcess` Electron 38 не включалась (на Electron 45 не перепроверено, ADR 0104),
+поэтому считаем, что файловая система и процессы доступны плагину с правами пользователя.
 
 Окна (A2.5): `sandbox: true`, CSP `script-src 'self'` без inline и eval.
 Буфер обмена — через `app:clipboard`, модуля `clipboard` в песочнице нет.
@@ -312,6 +312,150 @@ ADR 0035. `createHookRunner` в `hookRunnerFor` (main) на каждый про�
 автокомпакцией; `chat:start` — `UserPromptSubmit` и `SessionStart` до записи
 сообщения. IPC `hooks:list(projectDir)`.
 
+### Агент схем
+
+ADR 0086. `diagram-agent.js` — `editDiagram` возвращает `proposal`, `baseHash`
+(`modelHash`), `diff`; `applyDiagram` (IPC `boards:diagramApply`) проверяет
+отпечаток и модель и пишет `boards.json`. В board.js — `proposalBlock`,
+действия `diagram-apply`/`diagram-reject`.
+
+### Автосинхронизация хранилища
+
+ADR 0087. `artifacts.js` — `onArtifactWrite` (слушатели новых версий);
+`sync-queue.js` — `createSyncQueue` (debounce, один прогон на проект, повторы
+30 с / 2 мин / 10 мин, `flush`, `stop`); `infra.autoSync` — Postgres и SeaweedFS
+без Vault. В main.js очередь подписана на запись артефактов при `infra.autoSync`;
+IPC `infra:syncStatus` (ANY) и `infra:syncNow` (ADMIN). В board.js —
+`autoSyncLine`, опрос `pollSyncStatus` раз в 3 с на вкладке «Инфраструктура».
+
+### Перезапуск зависшего MCP
+
+ADR 0088. `mcp.js` — `entry.config`, `callTimeoutMs`; таймаут вызова у stdio →
+`restart(name, reason)` и один повтор для `readOnlyHint`/`retryOnTimeout`;
+`checkHealth` — ping; `status()` — `restarts`, `lastRestartAt`, `lastTimeout`.
+`repowise.mcpConfig` — 60 с и повтор. IPC `repowise:status` (ping, `mcp`) и
+`repowise:restartMcp` (ADMIN). В board.js — `repowiseMcpCard`.
+
+### Статусы Multica → OpenSpec
+
+ADR 0089. `openspec.js` — `parseTaskMarker`, `statusUpdatesFromIssues`,
+`applyTaskStatuses` (по id задачи, CRLF, временный файл); `multica.pullStatuses`;
+IPC `multica:pullStatuses` (ADMIN); `multica-sync.mjs --pull`. В app.js —
+кнопка `.multica-pull` в панели Multica.
+
+### Калибратор
+
+ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,
+`renderMarkdown`, `calibrate`; встроенный субагент `calibrator` в `agent-defs.js`.
+В main.js — `gatherCalibration` и IPC `boards:calibrate` (ADMIN) с записью
+артефакта `calibration:architecture`. В board.js — вкладка «Калибровка»
+(`architectureCalibration`, `runCalibration`).
+
+### Проект в отдельной папке
+
+ADR 0091. Подписи «＋ Новый проект» и панели «Docker» в `index.html`/`app.js`;
+`workspace.js` по-прежнему создаёт проекты в `<данные>/sandboxes/` (совместимость).
+
+### Голосовой ввод
+
+ADR 0092. `voice.js` — `voiceConfig`, `providerVoiceStatus`, `providerTranscribe`;
+IPC `voice:status`/`voice:transcribe` выбирают MAS (`mas.js`) или провайдера. В
+app.js — `setMicState(kind, message)` с состоянием `error`, `transcribeWav`,
+`retryVoice` и кнопкой `#mic-retry` (запись — в `voice.lastWav`).
+
+### Корпоративный вход
+
+ADR 0093. `auth-session.js` (без Electron) — `corporatePolicy`, `tokenState`,
+`refreshTokens`, `identityFromToken`, `sessionGate`, `LOGIN_CHANNELS`;
+`settings-levels.readManaged` отдаёт `auth`. `auth.js` — роль `none` без сессии,
+`sessionGateFor`, `ensureSession` (таймер в main, раз в минуту). `guardIpc` —
+опция `sessionGate`, порядок: сессия → роль → схема. В app.js — `showLoginOnly`
+до `init`, `watchSession`.
+
+### Метрики агента
+
+ADR 0094. `metrics.js` — `createMetrics` (`fromSpan`, `toOtlp`), `priceOf`,
+`METRIC_NAMES`; `telemetry.emitSpan` кормит счётчики, `flushMetrics` — раз в 15 с
+и при выходе. Дашборд `infra/observability/grafana/dashboards/mai-code-overview.json`
+— строка «Агент».
+
+### Процессы и оболочки
+
+ADR 0096. `proc.js` — `shellFor`, `shellLabel`, `spawnShell` (своя группа на
+macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL через 3 с). Его
+используют `tools/shell.js` (`setShellPreference` из `settings.shell` в
+`runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
+«Система: …; оболочка run_shell: …».
+
+### Удаление папок
+
+ADR 0104. `remove-tree.js` — `removeTree(path)`: на Windows снимает «только
+чтение» (объекты git), затем `rmSync` с повторами. Все рекурсивные удаления в
+приложении идут через него.
+
+### Чистильщик
+
+ADR 0103. `cleaner.js` — `trackVersion`, `isStable`, `planCleanup`, `applyCleanup`,
+`formatBytes`. В main — `versionHistory` (`version-history.json`, при старте),
+`cleanupPlan`, IPC `cleanup:plan` (ANY) и `cleanup:apply` (ADMIN, план строится
+заново). В app.js — `openCleanup`.
+
+### Сканер обновлений
+
+ADR 0102. `update-scan.js` — `bumpKind`, `parseOutdated`, `parseAudit`,
+`parseLsProblems`, `skillUpdates`, `toolUpdates`, `scanUpdates`, `scanDue`,
+`installArgs`. В main — `runUpdateScan` (отчёт `update-scan.json`),
+`scheduleUpdateScan` после старта, IPC `updates:last`/`updates:scan` (ANY) и
+`updates:apply` (ADMIN: worktree `mai/update-…`, npm install, тесты). В app.js —
+`openUpdates`.
+
+### Встроенные навыки и хуки пакетов
+
+ADR 0101. `skills.js` — `skillVersion`, `compareSkillVersions`,
+`installBundledSkills(src, { target })` с обновлением по версии и `.previous/`.
+`packages.js` — `expandPackageDir` для `${MAI_PACKAGE_DIR}` в `packageHooks`.
+Пример пакета — `examples/packages/impeccable-check`.
+
+### Локальные модели
+
+ADR 0100. `local-models.js` — `LOCAL_SERVERS`, `detectLocalModels`,
+`providerFromLocal`, `parseModels`. IPC `localModels:detect` (ANY) и
+`localModels:add` (ADMIN). В app.js — блок «Локальные модели» в `openProviders`.
+
+### Фильтр секретов
+
+ADR 0099. `secret-filter.js` — `SECRET_RULES`, `findSecrets`, `createSecretFilter`
+(`mask`, `unmask`, `found`), `maskMessages`, `filterNotice`. В `runAgentInner` —
+фильтр на прогон: `buildRequest` маскирует запрос, `execCall` делает `unmask`
+аргументов; `completeOnce` и `reviewer` маскируют всегда.
+
+### Границы данных
+
+ADR 0098. `data-boundary.js` — `isLocalUrl`, `dataBoundaryReport(settings, {mcp, connectors, schedules})`;
+IPC `privacy:report` (ANY) собирает MCP из `mcpConfigs`, коннекторы — серверы с
+`connector`, задачи — `scheduleStore`. В app.js — `openPrivacy`.
+
+### Signoff
+
+ADR 0097. `signoff.js` — `statusContext`, `parseSignoffArgs`, `parseGithubRemote`,
+`testCommandFor`, `detailsUrl`, `gitState`, `runSignoff` (git, exec, post
+инъекцией). В main — IPC `signoff:run` (ADMIN): git через `spawnSync`, тесты —
+`spawnShell` с таймаутом, статус — `gh api`. В app.js — `runSignoffCommand`.
+
+### Рантаймы: версия и перенос
+
+ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,
+`compareVersions`, `minVersion`), `exportRuntimes` (env без значений),
+`importRuntimes` (проверка, слияние, `replace`); IPC `runtimes:export`,
+`runtimes:import` (admin).
+
+### «Запомнить?» и ocr
+
+ADR 0084. `suggestLesson`/`cleanLesson` в agent.js; main после прогона с
+правками (`runStart`, класс write/delete) шлёт `memory:suggest`, renderer —
+`showMemorySuggest` (плашка, `memory:append`). `tools/ocr.js` — инструмент
+`ocr`, `ctx.ocr` = `ocrImage` с настройками из `runAgent`.
+
 ### Уведомления
 
 ADR 0081. `notify.js` — `notifySettings` (каналы + перенос старого
@@ -352,8 +496,9 @@ ADR 0077. `cli.js` — `isCliInvocation`, `parseCliArgs`, `resultObject`,
 `streamLine`. В main константа `CLI` (разбор `process.argv`) переключает
 `whenReady` на `runCli`: окно, планировщик и навыки не запускаются; прогон —
 как у плановой задачи (`runAgent` с `policyFor`, хуками, чекпоинтами, сессией,
-`acquireProject`), `approve` отказывает, `emit` пишет stream-json. Перезапуск
-с `--use-system-ca` в CLI наследует stdio. Лаунчер — `bin/mai.mjs`.
+`acquireProject`), `approve` отказывает, `emit` пишет stream-json. Запасной
+перезапуск с `--use-system-ca` (если нет API `tls`, ADR 0095) в CLI наследует
+stdio. Лаунчер — `bin/mai.mjs`.
 
 ### Субагенты
 
@@ -709,5 +854,13 @@ IPC-каналы: `export:message` (один ответ) и `export:chat` (ве�
 ## Сертификаты
 
 Node в Electron не доверяет корпоративному корню Windows, поэтому `main.js` при старте
-проверяет `NODE_OPTIONS` и, если флага нет, перезапускает приложение с `--use-system-ca`
-(переменная `MAI_CODE_RELAUNCHED` защищает от цикла).
+вызывает `applySystemCa()` (`system-ca.js`, ADR 0095): встроенные + системные корни
+через `tls.setDefaultCACertificates`. В собранном Electron `NODE_OPTIONS` игнорируется,
+поэтому прежний перезапуск с `--use-system-ca` (`MAI_CODE_RELAUNCHED` против цикла)
+остался только запасным путём, если API нет (`NEEDS_RELAUNCH`).
+
+### Самопроверка установки
+
+ADR 0095. `self-check.js` — `isSelfCheck`, `selfCheckOut`, `runSelfCheck`; в main
+`--self-check` переключает `whenReady` на отчёт и выход. CI: задача `installer`
+и `scripts/check-installer.ps1`.

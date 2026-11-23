@@ -57,6 +57,7 @@ jobs:
           xvfb-run -a npx electron --no-sandbox scripts/test-memory-tools.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-plugin-host.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-secrets-electron.mjs
+          xvfb-run -a npx electron --no-sandbox scripts/test-auth-electron.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-ui.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-storage-safety.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-telemetry.mjs
@@ -113,7 +114,7 @@ jobs:
         run: |
           $electron = Join-Path $PWD 'node_modules\electron\dist\electron.exe'
           $failed = @()
-          foreach ($t in 'test-agent-loop', 'test-memory-tools', 'test-plugin-host', 'test-secrets-electron', 'test-ui', 'test-storage-safety', 'test-telemetry', 'test-pdf', 'test-browser', 'smoke-electron') {
+          foreach ($t in 'test-agent-loop', 'test-memory-tools', 'test-plugin-host', 'test-secrets-electron', 'test-auth-electron', 'test-ui', 'test-storage-safety', 'test-telemetry', 'test-pdf', 'test-browser', 'smoke-electron') {
             Write-Host "== $t"
             $p = Start-Process -FilePath $electron -ArgumentList "scripts/$t.mjs" -NoNewWindow -PassThru -RedirectStandardOutput "$t.out.txt" -RedirectStandardError "$t.err.txt"
             $null = $p.Handle  # без этого ExitCode после WaitForExit бывает пустым
@@ -137,3 +138,66 @@ jobs:
 
       - name: Набор сценариев (дымовая)
         run: node scripts/smoke-eval.mjs
+
+  # macOS (F26, ADR 0096): пути /private/var, zsh, группы процессов BSD.
+  # Только вручную (Actions → ci → Run workflow): 23.11.2026 раннер macOS не
+  # выдавался 15 минут подряд и отменял весь прогон.
+  macos:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Тесты
+        run: npm test
+
+      - name: Electron (интерфейс и smoke)
+        run: |
+          npx electron scripts/smoke-electron.mjs
+          npx electron scripts/test-ui.mjs
+
+  # Установщик на чистом Windows-раннере (F25, ADR 0095): сборка NSIS и portable,
+  # тихая установка, самопроверка без Node.js в PATH, удаление.
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Сборка установщиков
+        run: npx electron-builder --win --publish never
+        env:
+          # Подписи нет: сертификат — секрет организации (ADR 0095).
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Установка, самопроверка, удаление
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/check-installer.ps1 -Dist dist
+
+      - name: Контрольные суммы
+        run: node scripts/make-sums.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mai-code-win-ci
+          path: |
+            dist/*.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: warn
+          retention-days: 7

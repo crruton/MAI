@@ -77,7 +77,20 @@ $env:OTEL_SERVICE_NAME = "mai-code"
 - дерево спанов прогона агента (ADR 0063): `agent.run` → `agent.step` (запрос
   к модели: токены, повторы, запасная модель) → `agent.tool` (инструмент, класс,
   решение PolicyEngine и кто решил, подтверждение) → `agent.subagent`.
-  Аргументы и результаты инструментов не отправляются — только метаданные.
+  Аргументы и результаты инструментов не отправляются — только метаданные;
+- метрики агента (ADR 0094) раз в 15 с в `/v1/metrics`: `mai_agent_runs_total`,
+  `mai_tokens_total{model,kind}`, `mai_cost_usd_total{model}`,
+  `mai_model_errors_total`, `mai_tool_calls_total{tool,cls,ok}`,
+  `mai_permission_decisions_total{cls,decision,approved}` — на дашборде это строка
+  «Агент»: токены и стоимость за сутки, ошибки инструментов и отказы разрешений.
+
+Стоимость считается по ценам в `settings.json` (USD за 1 млн токенов):
+
+```json
+{ "telemetry": { "pricing": { "openai/gpt-5": { "input": 1.25, "output": 10 } } } }
+```
+
+Модели без цены видны только в токенах.
 
 Отправка не блокирует UI: ошибки сети игнорируются.
 

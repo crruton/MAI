@@ -1862,6 +1862,217 @@ function prPrompt(args = '') {
 
 /* ---------- рабочие копии для чатов (CC11.5, ADR 0076) ---------- */
 
+/**
+ * /signoff [fail] [контекст] (N1, ADR 0097): тесты проекта → статус коммита в
+ * GitHub. Окно показывает шаги, вывод упавших тестов и итог.
+ */
+const fmtBytes = (n) => {
+  if (n < 1024) return `${n} Б`;
+  const u = ['КБ', 'МБ', 'ГБ'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(v >= 10 ? 0 : 1).replace('.', ',')} ${u[i]}`;
+};
+
+/** /cleanup (N7, ADR 0103): старые копии, вывод, временное и кеши — по отметкам. */
+async function openCleanup() {
+  const plan = await api.cleanup.plan();
+  const picks = new Map();
+  const total = el('p', { class: 'cleanup-total' });
+  const update = () => {
+    const bytes = [...picks.values()].reduce((s, b) => s + b, 0);
+    total.textContent = picks.size ? `Выбрано: ${picks.size}, освободится ${fmtBytes(bytes)}` : 'Ничего не выбрано';
+    removeBtn.disabled = !picks.size;
+  };
+  const removeBtn = el('button', {
+    class: 'btn primary cleanup-apply',
+    type: 'button',
+    text: 'Удалить отмеченное',
+    onclick: async () => {
+      const res = await api.cleanup.apply([...picks.keys()]);
+      if (!res.ok) return toast(res.error || 'Не удалось', 'err');
+      toast(`Освобождено ${res.freed}${res.skipped.length ? `, пропущено ${res.skipped.length}` : ''}`, 'ok');
+      modal.close();
+      openCleanup();
+    },
+  });
+  const rows = plan.items.map((item) => {
+    const cb = item.removable ? el('input', { type: 'checkbox', class: 'cleanup-pick' }) : null;
+    if (cb) {
+      cb.checked = true;
+      picks.set(item.id, item.bytes);
+      cb.onchange = () => {
+        if (cb.checked) picks.set(item.id, item.bytes);
+        else picks.delete(item.id);
+        update();
+      };
+    }
+    return el('div', { class: `list-item cleanup-item${item.removable ? '' : ' readonly'}` }, [
+      cb,
+      el('div', { class: 'grow' }, [
+        el('div', { class: 'title', text: `${item.kind} · ${fmtBytes(item.bytes)} · ${item.ageDays} дн.` }),
+        el('div', { class: 'sub mono', text: item.path }),
+        el('div', { class: 'sub', text: item.reason }),
+      ]),
+    ]);
+  });
+  const status = plan.stable
+    ? `Версия ${plan.version} работает стабильно с ${new Date(plan.since).toLocaleDateString()} — старые копии можно удалять.`
+    : `Версия ${plan.version || '—'} работает с ${plan.since ? new Date(plan.since).toLocaleDateString() : 'сегодня'}: старые копии навыков удалятся, когда она проработает несколько дней без сбоев.`;
+  const modal = openModal({
+    title: 'Освободить место',
+    wide: true,
+    body: [el('p', { class: 'hint-text cleanup-status', text: status }), rows.length ? el('div', { class: 'cleanup-list' }, rows) : el('div', { class: 'empty-note', text: 'Удалять нечего.' }), total],
+    footer: [removeBtn, el('button', { class: 'btn ghost', type: 'button', text: 'Закрыть', onclick: () => modal.close() })],
+  });
+  update();
+}
+
+/**
+ * /updates (N6, ADR 0102): обновления по риску; пакеты npm — обновить на
+ * отдельной ветке с тестами, в проект — только после слияния.
+ */
+async function openUpdates() {
+  const RISK = { high: ['red', 'высокий'], medium: ['amber', 'средний'], low: ['green', 'низкий'], info: ['', 'сведения'] };
+  const KIND = { update: 'обновление', security: 'уязвимость', conflict: 'конфликт' };
+  const head = el('p', { class: 'hint-text updates-head', text: 'Загружаю последний отчёт…' });
+  const box = el('div', { class: 'updates-list' });
+  const result = el('pre', { class: 'output updates-result', hidden: true });
+  const selected = new Map();
+  const applyBtn = el('button', { class: 'btn primary updates-apply', type: 'button', text: 'Обновить на ветке и прогнать тесты', disabled: true });
+  const render = (report) => {
+    box.replaceChildren();
+    selected.clear();
+    applyBtn.disabled = true;
+    if (!report) {
+      head.textContent = 'Отчёта ещё нет — нажмите «Проверить сейчас».';
+      return;
+    }
+    const c = report.counts || {};
+    head.textContent = `Проверено ${new Date(report.at).toLocaleString()}: высокий риск ${c.high || 0}, средний ${c.medium || 0}, низкий ${c.low || 0}.${report.npmChecked ? '' : ' Зависимости npm не проверялись: нет package.json или папка не доверена.'}${report.errors?.length ? ` Не проверено: ${report.errors.join('; ')}` : ''}`;
+    if (!report.items.length) box.append(el('div', { class: 'empty-note', text: 'Всё актуально.' }));
+    for (const item of report.items) {
+      const [color, label] = RISK[item.risk] || RISK.info;
+      const pick = item.source === 'npm' && item.kind === 'update' && item.current && item.latest;
+      const cb = pick ? el('input', { type: 'checkbox', class: 'updates-pick', 'data-name': item.name }) : null;
+      if (cb) {
+        cb.onchange = () => {
+          if (cb.checked) selected.set(item.name, item.latest);
+          else selected.delete(item.name);
+          applyBtn.disabled = !selected.size;
+        };
+      }
+      box.append(
+        el('div', { class: `list-item updates-item risk-${item.risk}` }, [
+          cb,
+          el('div', { class: 'grow' }, [
+            el('div', { class: 'title' }, [el('span', { class: `badge ${color}`, text: label }), ` ${item.source} · ${KIND[item.kind] || item.kind}: ${item.name}${item.current ? ` ${item.current}` : ''}${item.latest ? ` → ${item.latest}` : ''}`]),
+            item.note ? el('div', { class: 'sub', text: item.note }) : null,
+          ]),
+        ]),
+      );
+    }
+  };
+  const scanBtn = el('button', {
+    class: 'btn updates-scan',
+    type: 'button',
+    text: 'Проверить сейчас',
+    onclick: async () => {
+      scanBtn.disabled = true;
+      head.textContent = 'Проверяю npm, навыки, CLI и релизы MAI Code…';
+      const res = await api.updates.scan({ projectDir: state.projectDir }).catch((err) => ({ ok: false, error: err.message }));
+      scanBtn.disabled = false;
+      if (!res.ok) return toast(`Обновления: ${res.error}`, 'err');
+      render(res.report);
+    },
+  });
+  applyBtn.onclick = async () => {
+    const packages = [...selected].map(([name, version]) => ({ name, version }));
+    applyBtn.disabled = true;
+    result.hidden = false;
+    result.textContent = `Создаю ветку mai/update-…, ставлю ${packages.map((p) => `${p.name}@${p.version}`).join(', ')} и запускаю тесты…`;
+    const res = await api.updates.apply({ projectDir: state.projectDir, packages }).catch((err) => ({ ok: false, error: err.message }));
+    applyBtn.disabled = false;
+    if (res.error && !res.branch) {
+      result.textContent = `✗ ${res.error}`;
+      return;
+    }
+    result.textContent = [
+      res.ok ? `✓ Стабильно: ветка ${res.branch}${res.testsRun ? `, тесты (${res.command}) прошли` : ', тестов в проекте нет — проверьте вручную'}.` : `✗ ${!res.installOk ? 'npm install не прошёл' : 'тесты не прошли'} на ветке ${res.branch} — проект не тронут.`,
+      `Рабочая копия: ${res.dir}. Слить — /worktree, удалить — там же.`,
+      '',
+      res.output || '',
+    ].join('\n');
+  };
+  const modal = openModal({
+    title: 'Обновления',
+    wide: true,
+    body: [el('p', { class: 'hint-text', text: 'Раз в сутки MAI сам проверяет зависимости, уязвимости, конфликты версий, встроенные навыки, CLI и новую версию приложения. Обновление — только на отдельной ветке с тестами.' }), head, box, result],
+    footer: [scanBtn, applyBtn, el('button', { class: 'btn ghost', type: 'button', text: 'Закрыть', onclick: () => modal.close() })],
+  });
+  render(await api.updates.last().catch(() => null));
+}
+
+/** /privacy (N2, ADR 0098): куда уходят данные и чек-лист «строго локально». */
+async function openPrivacy() {
+  const report = await api.privacy.report({ projectDir: state.projectDir });
+  const LEVEL = { fail: ['red', 'наружу'], warn: ['amber', 'может уйти'], info: ['green', 'локально'] };
+  const verdict = report.strictLocal
+    ? el('p', { class: 'privacy-verdict ok-text', text: '✓ Строго локально: данные не покидают этот компьютер и частную сеть.' })
+    : el('p', { class: 'privacy-verdict', text: `Наружу: ${report.counts.fail} · может уйти: ${report.counts.warn} · локально: ${report.counts.info}` });
+  const list = el(
+    'div',
+    { class: 'privacy-findings' },
+    report.findings.map((f) =>
+      el('div', { class: `privacy-finding level-${f.level}` }, [
+        el('div', { class: 'privacy-title' }, [el('span', { class: `badge ${LEVEL[f.level][0]}`, text: LEVEL[f.level][1] }), ` ${f.area}: ${f.title}`]),
+        el('div', { class: 'hint-text', text: f.detail }),
+        f.fix ? el('div', { class: 'hint-text', text: `→ ${f.fix}` }) : null,
+      ]),
+    ),
+  );
+  const checklist = el(
+    'ul',
+    { class: 'privacy-checklist' },
+    report.checklist.map((c) => el('li', { class: c.ok ? 'ok' : 'no', text: `${c.ok ? '✓' : '✗'} ${c.label}${c.detail ? ` — ${c.detail}` : ''}` })),
+  );
+  const modal = openModal({
+    title: 'Куда уходят данные',
+    wide: true,
+    body: [
+      el('p', { class: 'hint-text', text: 'Отчёт по текущим настройкам и подключениям. Он ничего не меняет — исправлять в настройках, коннекторах и MCP.' }),
+      verdict,
+      list,
+      el('div', { class: 'docs-group-title', text: 'Чек-лист «строго локально»' }),
+      checklist,
+    ],
+    footer: [el('button', { class: 'btn primary', type: 'button', text: 'Закрыть', onclick: () => modal.close() })],
+  });
+}
+
+async function runSignoffCommand(text = '') {
+  const parts = text.split(/\s+/).filter(Boolean);
+  const fail = parts[0]?.toLowerCase() === 'fail';
+  const context = (fail ? parts[1] : parts[0]) || '';
+  const name = context ? `signoff/${context}` : 'signoff';
+  const steps = el('pre', { class: 'output signoff-log', text: fail ? `Отмечаю ${name} = failure…` : 'Проверяю git и запускаю тесты проекта…' });
+  const verdict = el('p', { class: 'hint-text signoff-verdict', text: 'Выполняется — тесты могут идти несколько минут.' });
+  const modal = openModal({
+    title: `Signoff · ${name}`,
+    body: [el('p', { class: 'hint-text', text: 'Тесты проекта проходят на вашей машине → статус коммита в GitHub на HEAD. Правила ветки не меняются.' }), verdict, steps],
+    footer: [el('button', { class: 'btn primary', type: 'button', text: 'Закрыть', onclick: () => modal.close() })],
+  });
+  const res = await api.signoff.run({ projectDir: state.projectDir, context, fail }).catch((err) => ({ ok: false, error: err.message, log: [] }));
+  steps.textContent = [...(res.log || []), ...(res.output ? ['', '— вывод тестов (конец) —', res.output] : [])].join('\n') || '—';
+  verdict.textContent = res.ok ? `✓ ${res.context} = ${res.state} на ${res.repo}@${String(res.sha).slice(0, 7)}` : `✗ ${res.error}`;
+  verdict.classList.toggle('err-text', !res.ok);
+  toast(res.ok ? `Signoff: ${res.context} = ${res.state}` : `Signoff: ${res.error}`, res.ok ? 'ok' : 'err');
+}
+
 async function openWorktrees(name = '') {
   if (name) {
     const r = await api.git.createWorktree(state.projectDir, name);
@@ -2024,6 +2235,22 @@ async function runSlash(text) {
     case 'worktree':
       clear();
       await openWorktrees(args.trim());
+      return;
+    case 'signoff':
+      clear();
+      await runSignoffCommand(args.trim());
+      return;
+    case 'privacy':
+      clear();
+      await openPrivacy();
+      return;
+    case 'updates':
+      clear();
+      await openUpdates();
+      return;
+    case 'cleanup':
+      clear();
+      await openCleanup();
       return;
     case 'memory':
       clear();
@@ -3013,6 +3240,26 @@ async function openPackages() {
 
 /* ---------- быстрая запись в память (CC4.3) ---------- */
 
+/** Плашка «Запомнить?» (F4): урок от модели — в память проекта, глобальную или нет. */
+function showMemorySuggest(text) {
+  document.querySelector('.memory-suggest')?.remove();
+  const bar = el('div', { class: 'memory-suggest', role: 'status' });
+  const save = async (scope) => {
+    const result = await api.memory.append({ projectDir: state.projectDir, scope, text });
+    bar.remove();
+    if (result?.ok === false) toast(result.error || 'Не удалось записать в память', 'err');
+    else toast(result?.changed === false ? 'Это уже есть в памяти' : `Записано в ${scope === 'global' ? 'глобальную память' : 'память проекта'}`, 'ok');
+  };
+  bar.append(
+    el('span', { class: 'memory-suggest-text', text: `💡 Запомнить: «${text}»?` }),
+    el('button', { class: 'btn small primary memory-suggest-project', type: 'button', text: 'В проект', onclick: () => save('project') }),
+    el('button', { class: 'btn small ghost memory-suggest-global', type: 'button', text: 'Глобально', onclick: () => save('global') }),
+    el('button', { class: 'btn small ghost memory-suggest-no', type: 'button', text: 'Нет', onclick: () => bar.remove() }),
+  );
+  const composer = document.querySelector('.composer') || document.querySelector('#input')?.parentElement;
+  composer?.parentElement?.insertBefore(bar, composer);
+}
+
 function rememberLine(text) {
   const save = async (scope) => {
     modal.close();
@@ -3954,6 +4201,10 @@ function handleEvent(event) {
         toast(`Субагент «${event.task?.description}» работает в фоне (${event.task?.id})`);
       }
       break;
+    case 'memory:suggest':
+      // «Запомнить?» (F4): плашка над полем ввода, без модального окна.
+      if (event.sessionId === state.sessionId) showMemorySuggest(event.text);
+      break;
     case 'title':
       // Автозаголовок от модели (CC6.8).
       refreshSessions();
@@ -4256,6 +4507,9 @@ async function openSettings() {
   // Старая настройка с одним webhook — каналом, чтобы её было видно и можно удалить.
   if (nset.webhookSet && !(nset.channels || []).some((c) => c.id === 'legacy')) addChannel({ id: 'legacy', type: 'webhook', url: '***', kinds: nset.webhook });
   const checked = (boxes) => boxes.map((l) => l.querySelector('input')).filter((b) => b.checked).map((b) => b.dataset.kind);
+  // «Запомнить?» после прогона (F4).
+  const suggestMem = el('input', { type: 'checkbox', class: 'suggest-memory' });
+  suggestMem.checked = settings.suggestMemory !== false;
   // Инструкции других агентов (CC4.6).
   const compat = el('input', { type: 'checkbox', class: 'compat-instructions' });
   compat.checked = settings.compatInstructions !== false;
@@ -4300,6 +4554,22 @@ async function openSettings() {
   guardExtra.value = (guard.extraDeny || []).join('\n');
   // Песочница для команд агента (ADR 0040).
   const shellBox = settings.shellSandbox || {};
+  // Фильтр секретов в запросах к модели (N3).
+  const secretMode = el('select', { class: 'secret-filter-mode' }, [
+    el('option', { value: 'mask', text: 'маскировать — модель видит [СКРЫТО:…] (рекомендуется)' }),
+    el('option', { value: 'warn', text: 'предупреждать — отправлять как есть' }),
+    el('option', { value: 'block', text: 'блокировать — не отправлять запрос' }),
+    el('option', { value: 'off', text: 'выключен' }),
+  ]);
+  secretMode.value = settings.secretFilter || 'mask';
+  // Оболочка команд агента (F26): auto — по ОС.
+  const isWin = /Windows/i.test(navigator.userAgent);
+  const shellKind = el('select', { class: 'shell-kind' }, [
+    el('option', { value: 'auto', text: isWin ? 'авто — cmd.exe' : 'авто — $SHELL (bash/zsh) или sh' }),
+    ...(isWin ? [el('option', { value: 'cmd', text: 'cmd.exe' }), el('option', { value: 'powershell', text: 'Windows PowerShell' })] : [el('option', { value: 'bash', text: 'bash' }), el('option', { value: 'zsh', text: 'zsh' }), el('option', { value: 'sh', text: 'sh' })]),
+    el('option', { value: 'pwsh', text: 'PowerShell 7 (pwsh)' }),
+  ]);
+  shellKind.value = settings.shell || 'auto';
   const shellMode = el('select', { class: 'shell-sandbox-mode' }, [
     el('option', { value: 'off', text: 'выключена — команды на компьютере' }),
     el('option', { value: 'docker', text: 'всегда в Docker' }),
@@ -4348,6 +4618,15 @@ async function openSettings() {
     value: '',
     placeholder: mas.tokenSet ? 'токен сохранён — оставьте пусто' : 'автоматически из %APPDATA%\\MAS\\data\\api-token',
   });
+  // Движок голосового ввода (F18): MAS локально или провайдер.
+  const voiceSettings = settings.voice || {};
+  const voiceEngine = el('select', { class: 'voice-engine' }, [
+    el('option', { value: 'mas', text: 'MAS — локально, запись не покидает компьютер' }),
+    el('option', { value: 'provider', text: 'Провайдер — audio/transcriptions (Whisper и др.)' }),
+  ]);
+  voiceEngine.value = voiceSettings.engine === 'provider' ? 'provider' : 'mas';
+  const voiceModel = el('input', { class: 'voice-model', value: voiceSettings.model || '', placeholder: 'openai/whisper-1' });
+  const voiceLanguage = el('input', { class: 'voice-language', value: voiceSettings.language || 'ru', placeholder: 'ru' });
   const masCheck = el('button', {
     class: 'btn',
     type: 'button',
@@ -4422,6 +4701,7 @@ async function openSettings() {
       el('label', { class: 'field' }, [
         el('span', { text: 'Инструкции других агентов' }),
         el('label', { class: 'hint-text' }, [compat, ' читать также CLAUDE.md, GEMINI.md, правила Cursor и Copilot (повторы AGENTS.md пропускаются)']),
+        el('label', { class: 'hint-text' }, [suggestMem, ' после работы с правками предлагать «Запомнить?» урок в память (один короткий запрос к модели)']),
       ]),
       el('label', { class: 'field' }, [
         el('span', { text: 'Чаты' }),
@@ -4477,6 +4757,8 @@ async function openSettings() {
         text: 'Guardrails не заменяют песочницу: внешние рантаймы запускаются как отдельные процессы/контейнеры и не проходят эти проверки.',
       }),
       el('div', { class: 'docs-group-title', text: 'Команды агента' }),
+      field('Оболочка run_shell на компьютере', shellKind),
+      field('Секреты в запросах к модели (ключи, токены, пароли, номера карт)', secretMode),
       field('Песочница run_shell (проект в /workspace, папки чата в /mnt, без лишних прав)', shellMode),
       el('div', { class: 'row' }, [field('Образ', shellImage), field('Сеть в контейнере', shellNetwork)]),
       field('На хосте (маски)', shellHost),
@@ -4494,7 +4776,12 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Локальный стек: npm run obs:up. Grafana — http://localhost:3001, Tempo/Loki — 72 часа.',
       }),
-      el('div', { class: 'docs-group-title', text: 'MAS — распознавание речи' }),
+      el('div', { class: 'docs-group-title', text: 'Голос — распознавание речи' }),
+      el('div', { class: 'row' }, [field('Движок', voiceEngine), field('Модель провайдера', voiceModel), field('Язык', voiceLanguage)]),
+      el('p', {
+        class: 'hint-text',
+        text: 'Провайдер: модель вида «провайдер/модель» (например, openai/whisper-1); запись уходит этому провайдеру. MAS ниже — локальный движок.',
+      }),
       el('label', { class: 'hint-text' }, [masEnabled, ' кнопка микрофона отправляет запись в локальный MAS']),
       el('div', { class: 'row' }, [field('Адрес MAS', masUrl), field('Модель', masModel)]),
       el('div', { class: 'row' }, [field('Токен', masToken), masCheck]),
@@ -4538,6 +4825,7 @@ async function openSettings() {
             browserEnabled: browserEnabled.checked,
             autoTitle: autoTitle.checked,
             compatInstructions: compat.checked,
+            suggestMemory: suggestMem.checked,
             notifications: { enabled: notifyOn.checked, desktop: checked(desktopKinds), channels: channelRows.map((r) => r.value()), webhookUrl: '', webhook: [] },
             theme: theme.value,
             statusLine: STATUS_ITEMS.map(([key]) => key).filter((key) => statusBoxes.some((l) => l.querySelector(`[data-item=${key}]`)?.checked)),
@@ -4558,6 +4846,8 @@ async function openSettings() {
               extraDeny: guardExtra.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean),
             },
             webSearch: { provider: webProvider.value, url: webUrl.value.trim(), apiKey: webKey.value, allowPrivate: webPrivate.checked },
+            shell: shellKind.value || 'auto',
+            secretFilter: secretMode.value || 'mask',
             shellSandbox: {
               mode: shellMode.value,
               image: shellImage.value.trim(),
@@ -4569,6 +4859,7 @@ async function openSettings() {
               endpoint: telemetryEndpoint.value.trim() || 'http://127.0.0.1:4318',
               serviceName: 'mai-code',
             },
+            voice: { engine: voiceEngine.value, model: voiceModel.value.trim(), language: voiceLanguage.value.trim() || 'ru' },
             mas: {
               enabled: masEnabled.checked,
               url: masUrl.value.trim() || 'http://127.0.0.1:8765',
@@ -4789,7 +5080,7 @@ function applyRoleGuard() {
   const newProject = $('#new-project-btn');
   if (newProject) {
     newProject.disabled = !admin;
-    newProject.title = admin ? 'Создать изолированную песочницу проекта' : 'Создание проектов доступно роли admin';
+    newProject.title = admin ? 'Создать проект в отдельной папке (это не изоляция: агент работает с вашими правами)' : 'Создание проектов доступно роли admin';
   }
   const projectButton = $('#project-btn');
   if (projectButton) {
@@ -4843,9 +5134,10 @@ async function openAuth() {
         el('dt', { text: 'Сессия Keycloak' }),
         el('dd', { text: auth.loggedIn ? 'активна' : 'нет' }),
       ]),
-      el('div', { class: 'row' }, [field('Issuer Keycloak', issuer), field('Client ID', clientId)]),
+      auth.required ? el('p', { class: 'hint-text auth-corporate', text: `Корпоративный режим: вход обязателен, адрес Keycloak задан организацией (${auth.issuer || '—'}). Локальной роли нет.` }) : null,
+      auth.required ? null : el('div', { class: 'row' }, [field('Issuer Keycloak', issuer), field('Client ID', clientId)]),
       el('div', { class: 'row' }, [
-        el('button', {
+        auth.required ? null : el('button', {
           class: 'btn',
           type: 'button',
           text: 'Сохранить Keycloak',
@@ -4885,14 +5177,16 @@ async function openAuth() {
           text: 'Выйти',
           onclick: async () => {
             state.auth = await api.auth.logout();
-            applyRoleGuard();
             modal.close();
+            // Корпоративный режим: после выхода — только экран входа.
+            if (state.auth.required) return showLoginOnly(state.auth);
+            applyRoleGuard();
             toast('Вы вышли, включён локальный admin', 'ok');
             openAuth();
           },
         }),
       ]),
-      el('div', { class: 'row' }, [
+      auth.required ? null : el('div', { class: 'row' }, [
         field('Локальная роль', role),
         el('button', {
           class: 'btn',
@@ -4924,7 +5218,7 @@ async function openAuth() {
   });
 }
 
-/* ---------- новый проект / песочница ---------- */
+/* ---------- новый проект в отдельной папке (F16) ---------- */
 
 async function newProjectModal() {
   let root = '';
@@ -4954,11 +5248,11 @@ async function newProjectModal() {
   ]);
 
   const modal = openModal({
-    title: 'Новый проект в песочнице',
+    title: 'Новый проект в отдельной папке',
     body: [
       el('p', {
         class: 'hint-text',
-        text: 'Проект получит отдельную папку, свой .mai-code, memory.md и загрузки. Глобальные навыки и AGENTS.md остаются общими.',
+        text: 'Проект получит отдельную папку, свой .mai-code, memory.md и загрузки. Глобальные навыки и AGENTS.md остаются общими. Это не изоляция: агент работает с вашими правами; процессы и сеть изолирует только Docker («Docker» на панели).',
       }),
       el('div', { class: 'row' }, [field('Имя проекта', name), field('Шаблон', template)]),
       field('Описание', description),
@@ -5209,6 +5503,48 @@ async function openProviders() {
     );
   }
 
+  // Локальные модели (N4, ADR 0100): Ollama, LM Studio, colibri, llama.cpp, Jan.
+  const localBox = el('div', { class: 'list local-models' });
+  const localHint = el('p', { class: 'hint-text local-models-hint', text: 'Ищу запущенные серверы на этом компьютере…' });
+  const renderLocal = (found) => {
+    localBox.replaceChildren();
+    localHint.textContent = found.length
+      ? 'Данные не покидают компьютер. Модель без вызова инструментов работает через текстовый протокол — медленнее и с ошибками чаще.'
+      : 'Не найдено: Ollama (11434), LM Studio (1234), colibri или vLLM (8000), llama.cpp (8080), Jan (1337). Запустите сервер и нажмите «Найти».';
+    for (const f of found) {
+      localBox.append(
+        el('div', { class: 'list-item local-model' }, [
+          el('div', {}, [
+            el('div', { class: 'title' }, [f.name, ' ', el('span', { class: `badge ${f.added ? 'ok' : ''}`, text: f.added ? 'добавлен' : f.empty ? 'нет моделей' : `${f.models.length} моделей` })]),
+            el('div', { class: 'sub', text: `${f.baseURL}${f.models.length ? ` · ${f.models.slice(0, 4).join(', ')}${f.models.length > 4 ? '…' : ''}` : ` · ${f.hint}`}` }),
+          ]),
+          f.added || f.empty
+            ? null
+            : el('div', { class: 'actions' }, [
+                el('button', {
+                  class: 'btn primary local-add',
+                  type: 'button',
+                  text: 'Добавить',
+                  onclick: async () => {
+                    const res = await api.providers.addLocal(f.id, !state.settings?.activeModel);
+                    if (!res.ok) return toast(res.error, 'err');
+                    state.settings = await api.settings.get();
+                    await loadModels(true);
+                    toast(`${f.name}: добавлено моделей ${res.models}`, 'ok');
+                    modal.close();
+                    openProviders();
+                  },
+                }),
+              ]),
+        ]),
+      );
+    }
+  };
+  const findLocal = async () => {
+    localHint.textContent = 'Ищу запущенные серверы на этом компьютере…';
+    renderLocal(await api.providers.detectLocal().catch(() => []));
+  };
+
   const modal = openModal({
     title: 'Провайдеры',
     body: [
@@ -5217,6 +5553,9 @@ async function openProviders() {
         class: 'hint-text',
         text: 'Любой OpenAI-совместимый шлюз: MAI, AgentRouter, OpenAI, DeepSeek. Anthropic подключается через совместимый режим.',
       }),
+      el('div', { class: 'docs-group-title' }, ['Локальные модели ', el('button', { class: 'btn small ghost local-find', type: 'button', text: 'Найти', onclick: findLocal })]),
+      localHint,
+      localBox,
     ],
     footer: [
       el('button', {
@@ -5230,6 +5569,7 @@ async function openProviders() {
       }),
     ],
   });
+  findLocal();
 }
 
 /* ---------- рантаймы ---------- */
@@ -5329,8 +5669,9 @@ async function openRuntimes() {
       class: `badge ${probe.available ? 'ok' : 'err'}`,
       text: runtime.mode === 'docker'
         ? (probe.available ? 'образ есть' : 'образа нет')
-        : (probe.available ? 'CLI найден' : 'CLI не найден'),
+        : (probe.available ? `CLI найден${probe.version ? ` · ${probe.version}` : ''}` : 'CLI не найден'),
     });
+    if (probe.outdated) availability.classList.replace('ok', 'warn');
     const sub = el('div', { class: 'sub' }, [
       `${runtime.command || 'команда не задана'}${runtime.mode === 'docker' ? ` · docker ${runtime.image || ''}` : ''}`,
       probe.error ? ` · ${probe.error}` : '',
@@ -5387,6 +5728,24 @@ async function openRuntimes() {
       }),
     ],
     footer: [
+      // Перенос пресетов между машинами (F7): JSON без значений env.
+      el('button', { class: 'btn ghost runtimes-export', type: 'button', text: 'Экспорт', onclick: async () => { const r = await api.runtimes.exportFile(); if (r?.ok) toast(`Сохранено рантаймов: ${r.count} — ${r.path}`, 'ok'); } }),
+      el('button', {
+        class: 'btn ghost runtimes-import',
+        type: 'button',
+        text: 'Импорт',
+        onclick: async () => {
+          const replace = window.confirm('Заменять рантаймы с теми же именами из файла? «Отмена» — оставить свои, добавить только новые.');
+          const r = await api.runtimes.importFile(replace);
+          if (r?.canceled) return;
+          if (!r?.ok) return toast(r?.error || 'Не импортировано', 'err');
+          toast(`Добавлено: ${r.added.length}, заменено: ${r.replaced.length}${r.skipped.length ? `, оставлены свои: ${r.skipped.join(', ')}` : ''}${r.errors.length ? `, с ошибками: ${r.errors.join('; ')}` : ''}. Ключи в env заполните сами.`, r.errors.length ? 'err' : 'ok');
+          modal.close();
+          state.runtimes = await api.runtimes.list();
+          renderRuntimes();
+          openRuntimes();
+        },
+      }),
       el('button', {
         class: 'btn primary',
         type: 'button',
@@ -5873,6 +6232,22 @@ async function openMultica() {
           }
         },
       }),
+      // Обратное направление (F14): «готово» в Multica → [x] в tasks.md.
+      el('button', {
+        class: 'btn multica-pull',
+        type: 'button',
+        text: 'Статусы → tasks.md',
+        title: 'Задачи, закрытые в Multica, отмечаются [x] в openspec/changes/*/tasks.md',
+        onclick: async () => {
+          try {
+            const res = await api.multica.pullStatuses(state.projectDir);
+            toast(res.message || `Отмечено ${res.marked?.length || 0}`, 'ok');
+            if (res.cancelled?.length) toast(`Отменены в Multica (галочка не ставится): ${res.cancelled.join(', ').slice(0, 300)}`);
+          } catch (err) {
+            toast(`Multica: ${err.message}`, 'err');
+          }
+        },
+      }),
     ],
   });
 }
@@ -6024,19 +6399,72 @@ const voice = {
   chunks: [],
   startedAt: 0,
   ticker: null,
+  // Последняя запись, которую не удалось распознать (F18): «повторить» без новой записи.
+  lastWav: null,
+  error: '',
 };
 
-function setMicState(kind) {
+const VOICE_ENGINE_NAMES = { mas: 'MAS', provider: 'провайдер' };
+
+/**
+ * Состояние кнопки микрофона (F18): запись, распознавание, ошибка с причиной.
+ * При ошибке распознавания рядом — «↻» (та же запись ещё раз).
+ */
+function setMicState(kind, message = '') {
   const button = $('#mic');
   if (!button) return;
+  const engine = VOICE_ENGINE_NAMES[state.settings?.voice?.engine] || 'MAS';
+  voice.error = kind === 'error' ? message : '';
   button.classList.toggle('recording', kind === 'recording');
   button.classList.toggle('busy', kind === 'busy');
+  button.classList.toggle('error', kind === 'error');
   button.disabled = kind === 'busy';
   button.setAttribute('aria-pressed', kind === 'recording' ? 'true' : 'false');
   button.title =
     kind === 'recording'
       ? 'Идёт запись: нажмите, чтобы распознать'
-      : 'Голосовой ввод (MAS): нажмите, продиктуйте задачу, нажмите ещё раз';
+      : kind === 'busy'
+        ? `Распознаю (${engine})…`
+        : kind === 'error'
+          ? `Ошибка: ${message}. Нажмите, чтобы записать снова${voice.lastWav ? '; ↻ — распознать ту же запись ещё раз' : ''}`
+          : `Голосовой ввод (${engine}): нажмите, продиктуйте задачу, нажмите ещё раз`;
+  let retry = $('#mic-retry');
+  if (kind === 'error' && voice.lastWav) {
+    if (!retry) {
+      retry = el('button', { class: 'btn icon mic-retry', id: 'mic-retry', type: 'button', text: '↻', title: 'Распознать ту же запись ещё раз', 'aria-label': 'Повторить распознавание', onclick: () => retryVoice() });
+      button.after(retry);
+    }
+  } else {
+    retry?.remove();
+  }
+}
+
+/** Отправка записи на распознавание; при ошибке запись остаётся для «↻». */
+async function transcribeWav(wav) {
+  voice.busy = true;
+  setMicState('busy');
+  try {
+    const result = await api.voice.transcribe({ wav });
+    if (!result.text) {
+      voice.lastWav = wav;
+      setMicState('error', 'речь не разобрана — попробуйте ближе к микрофону');
+      return;
+    }
+    voice.lastWav = null;
+    insertIntoInput(result.text);
+    setMicState('');
+    toast(`Распознано за ${(result.elapsedMs / 1000).toFixed(1)} с (${VOICE_ENGINE_NAMES[result.engine] || 'MAS'})`, 'ok');
+  } catch (error) {
+    voice.lastWav = wav;
+    setMicState('error', String(error?.message || error).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+  } finally {
+    voice.busy = false;
+  }
+}
+
+function retryVoice() {
+  if (!voice.lastWav || voice.busy || voice.recording) return;
+  transcribeWav(voice.lastWav);
 }
 
 function writeAscii(view, offset, text) {
@@ -6096,18 +6524,20 @@ function insertIntoInput(text) {
 async function startVoice() {
   if (voice.recording || voice.busy) return;
 
-  const status = await api.mas.status().catch((error) => ({ ok: false, error: error?.message || String(error) }));
+  const status = await api.voice.status().catch((error) => ({ ok: false, error: error?.message || String(error) }));
   if (!status.ok) {
-    toast(status.error || 'MAS недоступен', 'error');
+    voice.lastWav = null;
+    setMicState('error', status.error || 'распознавание недоступно');
     return;
   }
+  voice.lastWav = null;
 
   try {
     voice.stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
   } catch (error) {
-    toast(`Нет доступа к микрофону: ${error?.message || error}`, 'error');
+    setMicState('error', `нет доступа к микрофону: ${error?.message || error}`);
     return;
   }
 
@@ -6127,7 +6557,7 @@ async function startVoice() {
     voice.sink.connect(voice.context.destination);
   } catch (error) {
     stopTracks();
-    toast(`Не удалось начать запись: ${error?.message || error}`, 'error');
+    setMicState('error', `не удалось начать запись: ${error?.message || error}`);
     return;
   }
 
@@ -6177,26 +6607,11 @@ async function stopVoice() {
   voice.chunks = [];
 
   if (seconds < 0.6) {
-    setMicState('');
-    toast('Слишком короткая запись: удерживайте кнопку и говорите дольше', 'error');
+    setMicState('error', 'слишком короткая запись — говорите дольше');
     return;
   }
 
-  setMicState('busy');
-  try {
-    const wav = encodeWav(chunks, sampleRate);
-    const result = await api.mas.transcribe({ wav });
-    if (!result.text) {
-      toast('MAS не разобрал речь: попробуйте ближе к микрофону', 'error');
-      return;
-    }
-    insertIntoInput(result.text);
-    toast(`Распознано за ${(result.elapsedMs / 1000).toFixed(1)} с`, 'ok');
-  } catch (error) {
-    toast(error?.message || String(error), 'error');
-  } finally {
-    setMicState('');
-  }
+  await transcribeWav(encodeWav(chunks, sampleRate));
 }
 
 function toggleVoice() {
@@ -6218,7 +6633,61 @@ function autosize() {
 
 /* ---------- запуск ---------- */
 
+/**
+ * Экран «только вход» (F21, ADR 0093): корпоративный режим без сессии Keycloak.
+ * Остальной интерфейс не грузится — каналы закрыты в main до входа.
+ */
+function showLoginOnly(auth = {}) {
+  if (document.querySelector('.login-only')) return;
+  const message = el('p', { class: 'login-only-status hint-text', text: auth.expired ? 'Сессия истекла — войдите снова.' : 'В вашей организации MAI Code работает только после входа.' });
+  const button = el('button', {
+    class: 'btn primary login-only-button',
+    type: 'button',
+    text: 'Войти через Keycloak',
+    onclick: async () => {
+      button.disabled = true;
+      message.textContent = 'Открываю браузер. Подтвердите вход и вернитесь в приложение…';
+      const res = await api.auth.login().catch((err) => ({ ok: false, error: err.message }));
+      if (res.ok && res.loggedIn !== false) {
+        message.textContent = `Вход выполнен: ${res.user?.name || 'пользователь'}. Загружаю…`;
+        location.reload();
+        return;
+      }
+      button.disabled = false;
+      button.textContent = 'Повторить вход';
+      message.textContent = `Не удалось войти: ${res.error || 'нет ответа'}`;
+    },
+  });
+  const screen = el('div', { class: 'login-only', role: 'dialog', 'aria-label': 'Вход' }, [
+    el('div', { class: 'login-only-card' }, [
+      el('h1', { text: 'MAI Code' }),
+      el('p', { text: 'Вход через Keycloak обязателен' }),
+      el('p', { class: 'hint-text mono', text: auth.issuer || 'адрес Keycloak не задан в managed-settings.json' }),
+      message,
+      button,
+    ]),
+  ]);
+  document.body.append(screen);
+  button.focus();
+}
+
+/** Сессия могла истечь во время работы: раз в минуту — проверка и экран входа. */
+function watchSession() {
+  setInterval(async () => {
+    const auth = await api.auth.status().catch(() => null);
+    if (auth?.required && !auth.loggedIn) showLoginOnly({ ...auth, expired: true });
+  }, 60_000);
+}
+
 async function init() {
+  // Корпоративный режим (F21): без входа — только экран входа, до любых других вызовов.
+  const auth0 = await api.auth.status().catch(() => null);
+  if (auth0?.required && !auth0.loggedIn) {
+    showLoginOnly(auth0);
+    watchSession();
+    return;
+  }
+  if (auth0?.required) watchSession();
   state.settings = await api.settings.get();
   state.projectDir = state.settings.projectDir || '';
   state.model = state.settings.activeModel || '';

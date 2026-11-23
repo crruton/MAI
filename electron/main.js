@@ -1,17 +1,18 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, Notification, nativeTheme } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, Notification, nativeTheme, safeStorage } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets, secretBox } from './lib/config.js';
 import { titleBarOptions, windowColors, normalizeTheme } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
+import { voiceConfig, providerVoiceStatus, providerTranscribe } from './lib/voice.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
-import { startRuntime, describeRuntime, probeRuntime, permissionPlan } from './lib/runtimes.js';
+import { startRuntime, describeRuntime, probeRuntime, permissionPlan, exportRuntimes, importRuntimes } from './lib/runtimes.js';
 import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, setSessionRun, markInterrupted, addSessionRules, removeSessionRules, renameSession, forkSession, importSession, expiredSessions } from './lib/sessions.js';
-import { runAgent, compactSession, describeContext, suggestTitle } from './lib/agent.js';
+import { runAgent, compactSession, describeContext, suggestTitle, suggestLesson } from './lib/agent.js';
 import { DEFAULT_CONTEXT } from './lib/context.js';
 import { createRecorder, rewindPlan, rewindFiles, checkpointTurns, removeCheckpoints } from './lib/checkpoints.js';
 import { collectHooks, createHookRunner, HOOK_EVENTS } from './lib/hooks.js';
@@ -39,12 +40,16 @@ import { localConnectors } from './lib/local-connectors.js';
 import { createNotifier } from './lib/notify.js';
 import { currentBranch } from './lib/git-guard.js';
 import { repoRoot, realPath, createWorktree, listWorktrees, removeWorktree, worktreeId } from './lib/worktree.js';
-import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
+import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills, skillVersion } from './lib/skills.js';
+import { scanUpdates, scanDue, installArgs } from './lib/update-scan.js';
+import { trackVersion, planCleanup, applyCleanup, formatBytes } from './lib/cleaner.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
 import { loadPlugins, pluginDirs } from './lib/plugins.js';
 import { disposePluginHosts, retirePluginHosts } from './lib/plugin-host.js';
+import { createSyncQueue } from './lib/sync-queue.js';
 import {
+  onArtifactWrite,
   listArtifacts,
   readArtifact,
   writeArtifact,
@@ -73,12 +78,15 @@ import {
 import { gitStatus, gitDiff, gitHead } from './lib/git.js';
 import { runStage } from './lib/deploy.js';
 import { checkCommand, redactSecrets } from './lib/guardrails.js';
-import { emitLog, emitSpan, telemetryStatus } from './lib/telemetry.js';
+import { removeTree } from './lib/remove-tree.js';
+import { emitLog, emitSpan, telemetryStatus, flushMetrics } from './lib/telemetry.js';
 import * as infra from './lib/infra.js';
 import * as repowise from './lib/repowise.js';
-import { editDiagram } from './lib/diagram-agent.js';
+import { editDiagram, applyDiagram } from './lib/diagram-agent.js';
+import { buildContext as calibrationContext, calibrate, renderMarkdown as calibrationMarkdown } from './lib/calibrator.js';
+import { listChanges as openspecChanges } from './lib/openspec.js';
 import { createWorkspace, listWorkspaces, sandboxRoot } from './lib/workspace.js';
-import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin } from './lib/auth.js';
+import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin, sessionGateFor, ensureSession } from './lib/auth.js';
 import { listDocs, readDoc, searchDocs } from './lib/docs.js';
 import * as multica from './lib/multica.js';
 import * as sandbox from './lib/container.js';
@@ -92,13 +100,22 @@ import { guardIpc } from './lib/ipc-permissions.js';
 import { isImageFile } from './lib/vision.js';
 import { acquireProject } from './lib/project-lock.js';
 import { isCliInvocation, parseCliArgs, CLI_HELP, streamLine, resultObject } from './lib/cli.js';
+import { isSelfCheck, selfCheckOut, runSelfCheck } from './lib/self-check.js';
+import { applySystemCa } from './lib/system-ca.js';
+import { runSignoff, testCommandFor } from './lib/signoff.js';
+import { dataBoundaryReport } from './lib/data-boundary.js';
+import { detectLocalModels, providerFromLocal } from './lib/local-models.js';
+import { spawnShell, killTree as killProcessTree } from './lib/proc.js';
 import { BUILTIN_COMMANDS, listCustomCommands, expandTemplate, searchFiles, resolveMentions, promptArgs, resolveResourceMentions } from './lib/commands.js';
 import { buildExport, fileNameFor, chatToMarkdown, FORMATS } from './lib/export/index.js';
 // Node внутри Electron не доверяет корпоративным корневым сертификатам Windows,
 // и запросы к api-ai.mai.ru падают с «unable to get local issuer certificate».
-// Флаг --use-system-ca решает проблему, но его нужно передать до старта Node,
-// поэтому при первом запуске приложение перезапускает себя с этим флагом.
-if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !process.env.MAI_CODE_RELAUNCHED) {
+// Системные корни подключаются прямо в процессе (ADR 0095): NODE_OPTIONS в
+// собранном Electron игнорируется. Если API нет (старый Electron) — запасной путь:
+// перезапуск с --use-system-ca, как раньше.
+const SYSTEM_CA = applySystemCa();
+const NEEDS_RELAUNCH = !SYSTEM_CA && !String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !process.env.MAI_CODE_RELAUNCHED;
+if (NEEDS_RELAUNCH) {
   // В dev-режиме argv: [electron, путь-к-приложению, ...флаги], в упакованном:
   // [exe, ...флаги]. Нельзя резать одинаково, иначе упакованное приложение
   // теряет первый аргумент (например, --remote-debugging-port).
@@ -111,10 +128,10 @@ if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !proc
       NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --use-system-ca`.trim(),
       MAI_CODE_RELAUNCHED: '1',
     },
-    // CLI (CC12.1): вывод и код выхода дочернего процесса — наши.
-    ...(isCliInvocation(process.argv) ? { stdio: 'inherit' } : { detached: true, stdio: 'ignore' }),
+    // CLI (CC12.1) и самопроверка (F25): вывод и код выхода дочернего процесса — наши.
+    ...(isCliInvocation(process.argv) || isSelfCheck(process.argv) ? { stdio: 'inherit' } : { detached: true, stdio: 'ignore' }),
   });
-  if (isCliInvocation(process.argv)) child.on('exit', (code) => app.exit(code ?? 1));
+  if (isCliInvocation(process.argv) || isSelfCheck(process.argv)) child.on('exit', (code) => app.exit(code ?? 1));
   else {
     child.unref();
     app.exit(0);
@@ -146,7 +163,13 @@ let mainWindow = null;
 // Канал без записи в матрице считается admin-only.
 guardIpc(ipcMain, requireAdmin, {
   onUnknown: (channel) => console.warn(`[ipc] канал ${channel} не внесён в матрицу прав — доступен только admin`),
+  sessionGate: sessionGateFor,
 });
+
+// Продление сессии Keycloak (F21): раз в минуту истёкший access token
+// обновляется по refresh_token; не вышло — сессия закрывается.
+const sessionTimer = setInterval(() => ensureSession().catch(() => {}), 60_000);
+sessionTimer.unref?.();
 
 /**
  * MCP-серверы проекта лежат в <проект>/.mai-code/mcp.json и дополняют
@@ -435,9 +458,26 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // Самопроверка установленного приложения (F25, ADR 0095): без окна, отчёт JSON.
+  if (isSelfCheck(process.argv)) {
+    if (NEEDS_RELAUNCH) return;
+    const report = await runSelfCheck({ appPath: app.getAppPath(), userData: app.getPath('userData'), version: app.getVersion(), safeStorage, systemCa: SYSTEM_CA }).catch((err) => ({ ok: false, error: err?.message || String(err), checks: [] }));
+    const out = selfCheckOut(process.argv);
+    const text = JSON.stringify(report, null, 2);
+    if (out) {
+      try {
+        fs.writeFileSync(out, text, 'utf8');
+      } catch (err) {
+        console.error(`[self-check] не записан ${out}: ${err?.message || err}`);
+      }
+    }
+    console.log(text);
+    app.exit(report.ok ? 0 : 1);
+    return;
+  }
   if (CLI) {
     // Перезапуск с --use-system-ca ещё идёт — ответит дочерний процесс.
-    if (!String(process.env.NODE_OPTIONS || '').includes('--use-system-ca') && !process.env.MAI_CODE_RELAUNCHED) return;
+    if (NEEDS_RELAUNCH) return;
     app.exit(await runCli(CLI));
     return;
   }
@@ -456,6 +496,10 @@ app.whenReady().then(async () => {
   }
   applyTheme(loadSettings().theme);
   createWindow();
+  // Сканер обновлений (N6): раз в сутки, в фоне, через полторы минуты после старта.
+  scheduleUpdateScan();
+  // Чистильщик (N7): отсчёт стабильной работы версии — с её первого запуска.
+  versionHistory();
   const settings = loadSettings();
   emitLog('MAI Code запущен', { attributes: { platform: process.platform, version: app.getVersion() } });
   mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
@@ -544,6 +588,22 @@ ipcMain.handle('mas:transcribe', async (_e, payload) => {
   return masTranscribe({ wav: Buffer.from(wav), model: payload?.model });
 });
 
+// Голосовой ввод (F18, ADR 0092): движок — MAS или провайдер (audio/transcriptions).
+ipcMain.handle('voice:status', async () => {
+  const settings = loadSettings();
+  const config = voiceConfig(settings);
+  if (config.engine === 'provider') return providerVoiceStatus(config, (key) => resolveModel(settings, key));
+  return { ...(await masStatus()), engine: 'mas' };
+});
+ipcMain.handle('voice:transcribe', async (_e, payload) => {
+  const wav = payload?.wav;
+  if (!wav || !wav.byteLength) throw new Error('Пустая запись');
+  const settings = loadSettings();
+  const config = voiceConfig(settings);
+  if (config.engine === 'provider') return providerTranscribe({ wav, config, resolve: (key) => resolveModel(settings, key) });
+  return { ...(await masTranscribe({ wav: Buffer.from(wav) })), engine: 'mas' };
+});
+
 // ---------- OCR: распознавание текста на изображениях ----------
 
 ipcMain.handle('ocr:status', async (_e, payload) => {
@@ -573,6 +633,10 @@ ipcMain.handle('settings:save', async (_e, patch) => {
   }
   const current = loadSettings();
   if ('allowOutsideProject' in (patch || {}) && Boolean(patch.allowOutsideProject) !== Boolean(current.allowOutsideProject)) requireAdmin();
+  // Ослабить фильтр секретов (N3) — только admin.
+  if ('secretFilter' in (patch || {}) && String(patch.secretFilter || 'mask') !== String(current.secretFilter || 'mask')) requireAdmin();
+  // Оболочка команд агента (F26) меняет, как исполняются команды, — только admin.
+  if ('shell' in (patch || {}) && String(patch.shell || 'auto') !== String(current.shell || 'auto')) requireAdmin();
   // Webhook уведомлений (CW5.4) отправляет данные наружу — только admin.
   if (patch?.notifications && patch.notifications.webhookUrl !== undefined && patch.notifications.webhookUrl !== '***' && String(patch.notifications.webhookUrl || '') !== String(current.notifications?.webhookUrl || '')) requireAdmin();
   // Каналы мессенджеров (CW5.4) отправляют данные наружу: любое изменение, кроме маски «***», — только admin.
@@ -598,7 +662,7 @@ ipcMain.handle('settings:save', async (_e, patch) => {
 
 // ---------- роли и доступ ----------
 
-ipcMain.handle('auth:status', () => authStatus());
+ipcMain.handle('auth:status', () => ensureSession().catch(() => authStatus()));
 
 ipcMain.handle('auth:configure', (_e, payload) => {
   requireAdmin();
@@ -697,6 +761,22 @@ ipcMain.handle('providers:test', async (_e, id) => {
   }
 });
 
+// Локальные модели (N4, ADR 0100): найти сервер на этой машине и добавить в один клик.
+ipcMain.handle('localModels:detect', () => detectLocalModels({ providers: loadSettings().providers }));
+ipcMain.handle('localModels:add', async (_e, payload = {}) => {
+  requireAdmin();
+  const found = (await detectLocalModels({ providers: loadSettings().providers })).find((f) => f.id === payload.id);
+  if (!found) return { ok: false, error: 'Сервер больше не отвечает — запустите его и нажмите «Найти» ещё раз' };
+  if (!found.models.length) return { ok: false, error: `${found.name} запущен, но моделей нет — загрузите модель` };
+  const settings = loadSettings();
+  const { id, provider } = providerFromLocal(found, settings.providers);
+  const patch = { providers: { ...settings.providers, [id]: provider } };
+  // Первая модель — активной, только если об этом попросили.
+  if (payload.activate) patch.activeModel = `${id}/${provider.models[0].id}`;
+  saveSettings(patch);
+  return { ok: true, id, models: provider.models.length, activeModel: patch.activeModel || '', providers: publicSettings().providers };
+});
+
 // ---------- рантаймы ----------
 
 ipcMain.handle('runtimes:list', () => loadSettings().runtimes || {});
@@ -705,6 +785,39 @@ ipcMain.handle('runtimes:save', (_e, runtimes) => {
   requireAdmin();
   saveSettings({ runtimes });
   return loadSettings().runtimes;
+});
+
+// Экспорт и импорт рантаймов (F7, ADR 0085): файл JSON, без значений env.
+ipcMain.handle('runtimes:export', async (event) => {
+  const { canceled, filePath } = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: 'Сохранить рантаймы',
+    defaultPath: 'mai-runtimes.json',
+    filters: [{ name: 'Рантаймы MAI', extensions: ['json'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  const data = exportRuntimes(loadSettings().runtimes || {});
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  return { ok: true, path: filePath, count: Object.keys(data.runtimes).length };
+});
+
+ipcMain.handle('runtimes:import', async (event, payload = {}) => {
+  requireAdmin();
+  const { canceled, filePaths } = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: 'Открыть рантаймы',
+    properties: ['openFile'],
+    filters: [{ name: 'Рантаймы MAI', extensions: ['json'] }],
+  });
+  if (canceled || !filePaths?.[0]) return { ok: false, canceled: true };
+  try {
+    if (fs.statSync(filePaths[0]).size > 2 * 1024 * 1024) throw new Error('файл больше 2 МБ');
+    const result = importRuntimes(JSON.parse(fs.readFileSync(filePaths[0], 'utf8')), loadSettings().runtimes || {}, { replace: payload.replace === true });
+    if (result.added.length || result.replaced.length) saveSettings({ runtimes: result.runtimes });
+    audit({ at: new Date().toISOString(), tool: 'runtimes:import', source: 'user', cls: 'exec', subject: `+${result.added.join(',')} ~${result.replaced.join(',')}`.slice(0, 300), decision: 'allow' });
+    const { runtimes: _r, ...report } = result;
+    return { ok: true, ...report };
+  } catch (err) {
+    return { ok: false, error: `Не удалось импортировать: ${err?.message || err}` };
+  }
 });
 
 ipcMain.handle('runtimes:probe', (_e, payload) => {
@@ -1241,10 +1354,10 @@ ipcMain.handle('attachments:remove', (_e, payload) => {
     return { ok: false, error: 'путь вне папки вложений' };
   }
   try {
-    fs.rmSync(full, { recursive: true, force: true });
+    removeTree(full);
     fs.rmSync(`${full}.txt`, { force: true });
     fs.rmSync(`${full}.index.txt`, { force: true });
-    fs.rmSync(`${full}.extracted`, { recursive: true, force: true });
+    removeTree(`${full}.extracted`);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
@@ -1566,9 +1679,12 @@ ipcMain.handle('chat:start', async (event, payload) => {
     .map((p) => (adopted ? p.split(adopted.from).join(adopted.to) : p))
     .filter((p) => isImageFile(p))
     .slice(0, 20);
+  // Начало этого прогона в истории — для «Запомнить?» (F4).
+  let runStart = session.messages.length;
   if (payload.text) {
     const display = payload.displayText || payload.text;
     session.messages.push({ role: 'user', content: payload.text, display, ...(images.length ? { images } : {}) });
+    runStart = session.messages.length - 1;
     if (!session.title || session.title === 'Новый чат') {
       session.title = display.trim().slice(0, 60) || 'Новый чат';
     }
@@ -1648,6 +1764,23 @@ ipcMain.handle('chat:start', async (event, payload) => {
       {
         const answer = [...history].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
         notify('done', { title: `Готово: ${chatTitle(session.id)}`, body: String(answer).slice(0, 200), sessionId: session.id }).catch(() => {});
+      }
+      // «Запомнить?» (F4): прогон с правками — модель предлагает урок для памяти проекта.
+      {
+        const fresh = history.slice(runStart);
+        const edits = fresh.filter((m) => m.role === 'assistant' && m.tool_calls?.length).flatMap((m) => m.tool_calls).filter((c) => ['write', 'delete'].includes(classifyTool(c.function?.name)));
+        if (settings.suggestMemory !== false && edits.length && trusted) {
+          const actions = fresh
+            .filter((m) => m.role === 'assistant' && m.tool_calls?.length)
+            .flatMap((m) => m.tool_calls.map((c) => `${c.function?.name} ${String(c.function?.arguments || '').slice(0, 160)}`))
+            .join('\n');
+          const answer = [...fresh].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '';
+          suggestLesson({ provider: resolved.provider, model: resolved.modelId, request: payload.displayText || payload.text, actions, answer })
+            .then((text) => {
+              if (text) send(window, { type: 'memory:suggest', sessionId: session.id, text });
+            })
+            .catch(() => {});
+        }
       }
       // Автозаголовок (CC6.8): после первого ответа, если чат не назван вручную.
       const users = history.filter((m) => m.role === 'user');
@@ -2461,7 +2594,7 @@ ipcMain.handle('marketplace:add', (_e, payload = {}) => {
 
 ipcMain.handle('marketplace:remove', (_e, name) => {
   saveSettings({ marketplaces: marketplaces().filter((m) => m.name !== name) });
-  fs.rmSync(path.join(dataDir(), 'marketplaces', String(name).replace(/[^a-z0-9._-]/gi, '')), { recursive: true, force: true });
+  removeTree(path.join(dataDir(), 'marketplaces', String(name).replace(/[^a-z0-9._-]/gi, '')));
   return { ok: true, ...marketplaceView() };
 });
 
@@ -2699,6 +2832,232 @@ ipcMain.handle('skills:delete', (_e, file) => {
   return deleteSkill(file);
 });
 
+// ---------- Сканер обновлений (N6, ADR 0102) ----------
+
+const updateReportFile = () => path.join(dataDir(), 'update-scan.json');
+const readUpdateReport = () => {
+  try {
+    return JSON.parse(fs.readFileSync(updateReportFile(), 'utf8'));
+  } catch {
+    return null;
+  }
+};
+let updateScanRunning = null;
+
+/** Скан: npm (только доверенный проект с package.json), навыки, CLI, MAI Code. */
+function runUpdateScan(projectDir) {
+  if (updateScanRunning) return updateScanRunning;
+  const settings = loadSettings();
+  const run = (cmd, args, cwd) => {
+    // npm на Windows — .cmd-обёртка; аргументы фиксированные, оболочка безопасна.
+    const r = spawnSync(cmd, args, { cwd: cwd || process.cwd(), encoding: 'utf8', windowsHide: true, timeout: 120_000, shell: process.platform === 'win32', maxBuffer: 32 * 1024 * 1024 });
+    return { code: r.status ?? -1, stdout: r.stdout || '' };
+  };
+  const fetchJson = async (url) => {
+    const res = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'mai-code-update-scan' }, signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  };
+  const bundledDir = path.join(app.getAppPath(), 'skills');
+  const installedDir = path.join(dataDir(), 'skills');
+  let skills = [];
+  try {
+    skills = fs.readdirSync(bundledDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => ({ name: e.name, bundled: skillVersion(path.join(bundledDir, e.name)), installed: skillVersion(path.join(installedDir, e.name)) }));
+  } catch {
+    /* нет встроенных навыков */
+  }
+  const hasPackageJson = Boolean(projectDir) && isTrusted(projectDir) && fs.existsSync(path.join(projectDir, 'package.json'));
+  updateScanRunning = scanUpdates({ projectDir, hasPackageJson, appVersion: app.getVersion(), skills, releasesRepo: settings.updateScan?.releasesRepo ?? 'crruton/MAI', run, fetchJson })
+    .then((report) => {
+      const full = { ...report, projectDir, npmChecked: hasPackageJson };
+      fs.writeFileSync(updateReportFile(), JSON.stringify(full, null, 2), 'utf8');
+      return full;
+    })
+    .finally(() => {
+      updateScanRunning = null;
+    });
+  return updateScanRunning;
+}
+
+ipcMain.handle('updates:last', () => readUpdateReport());
+ipcMain.handle('updates:scan', async (_e, payload = {}) => {
+  try {
+    return { ok: true, report: await runUpdateScan(projectOf(payload)) };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+/**
+ * Обновить на ветке (N6): отдельная рабочая копия mai/update-…, npm install
+ * выбранных, тесты проекта. В проект ничего не попадает до слияния вручную.
+ */
+ipcMain.handle('updates:apply', async (_e, payload = {}) => {
+  requireAdmin();
+  const projectDir = projectOf(payload);
+  const settings = loadSettings();
+  const repo = repoRoot(projectDir);
+  if (!repo) return { ok: false, error: 'Папка проекта — не git-репозиторий: обновлять негде, кроме самого проекта' };
+  let args;
+  try {
+    args = installArgs(payload.packages);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 12);
+  let wt;
+  try {
+    wt = createWorktree({ repo, baseDir: path.join(worktreesDir(), path.basename(repo)), id: `deps-${stamp}`, branchPrefix: 'mai/update-' });
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+  if (isTrusted(repo)) setTrust(dataDir(), wt.dir, 'trusted');
+  const dir = path.join(wt.dir, path.relative(repo, realPath(projectDir)));
+  const install = await signoffExec(dir, `npm ${args.join(' ')}`, { ...settings, signoff: { timeoutMin: 15 } });
+  const command = testCommandFor(dir, settings);
+  const tests = install.code === 0 && command ? await signoffExec(dir, command, settings) : null;
+  audit({ at: new Date().toISOString(), tool: 'updates:apply', source: 'user', cls: 'exec', subject: `${wt.branch}: ${args.slice(1).join(' ')}`.slice(0, 300), decision: 'allow' });
+  return {
+    ok: install.code === 0 && (!tests || tests.code === 0),
+    branch: wt.branch,
+    dir,
+    installOk: install.code === 0,
+    testsRun: Boolean(tests),
+    testsOk: tests ? tests.code === 0 : null,
+    command,
+    output: String((tests || install).output || '').slice(-4000),
+  };
+});
+
+/** Раз в сутки после запуска — тихий скан; уязвимости высокого риска — уведомлением. */
+function scheduleUpdateScan() {
+  const settings = loadSettings();
+  if (settings.updateScan?.enabled === false) return;
+  const timer = setTimeout(async () => {
+    if (!scanDue(readUpdateReport()?.at, { intervalHours: Number(settings.updateScan?.intervalHours) || 24 })) return;
+    try {
+      const report = await runUpdateScan(loadSettings().projectDir);
+      const urgent = report.items.filter((i) => i.risk === 'high');
+      if (urgent.length) notify('background', { title: `Обновления: ${urgent.length} высокого риска`, body: urgent.slice(0, 3).map((i) => `${i.name}: ${i.note || i.latest}`).join('; ').slice(0, 200) }).catch(() => {});
+      // Чистильщик (N7): версия стабильна и есть что освободить (от 100 МБ) — подсказка.
+      const plan = cleanupPlan();
+      if (plan.stable && plan.bytes >= 100 * 1024 * 1024) notify('background', { title: `Можно освободить ${formatBytes(plan.bytes)}`, body: 'Старые копии, временные файлы и кеши — /cleanup' }).catch(() => {});
+    } catch {
+      /* сеть или npm недоступны — попробуем при следующем запуске */
+    }
+  }, Number(process.env.MAI_UPDATE_SCAN_DELAY_MS || 90_000));
+  timer.unref?.();
+}
+
+// ---------- Чистильщик старых версий (N7, ADR 0103) ----------
+
+const versionFile = () => path.join(dataDir(), 'version-history.json');
+/** С какого момента работает текущая версия: запись при каждой смене версии. */
+function versionHistory() {
+  let history = null;
+  try {
+    history = JSON.parse(fs.readFileSync(versionFile(), 'utf8'));
+  } catch {
+    /* первый запуск */
+  }
+  const next = trackVersion(history, app.getVersion());
+  if (next !== history) {
+    try {
+      fs.writeFileSync(versionFile(), JSON.stringify(next, null, 2), 'utf8');
+    } catch {
+      /* только чтение — план всё равно строится */
+    }
+  }
+  return next;
+}
+
+function cleanupPlan() {
+  const settings = loadSettings();
+  const c = settings.cleaner || {};
+  let worktrees = [];
+  try {
+    const base = worktreesDir();
+    worktrees = fs.readdirSync(base, { withFileTypes: true }).filter((e) => e.isDirectory()).flatMap((repo) => fs.readdirSync(path.join(base, repo.name), { withFileTypes: true }).filter((w) => w.isDirectory()).map((w) => ({ dir: path.join(base, repo.name, w.name), branch: w.name })));
+  } catch {
+    /* рабочих копий нет */
+  }
+  return planCleanup({ dataDir: dataDir(), tmpDir: os.tmpdir(), history: versionHistory(), marketplaces: settings.marketplaces || [], worktrees, stableDays: c.stableDays ?? 3, previousDays: c.previousDays ?? 14, outputDays: c.outputDays ?? 7 });
+}
+
+ipcMain.handle('cleanup:plan', () => cleanupPlan());
+ipcMain.handle('cleanup:apply', (_e, payload = {}) => {
+  requireAdmin();
+  // План строится заново: удаляется только то, что в нём есть сейчас.
+  const result = applyCleanup(cleanupPlan(), Array.isArray(payload.ids) ? payload.ids : [], { dataDir: dataDir(), tmpDir: os.tmpdir() });
+  audit({ at: new Date().toISOString(), tool: 'cleanup', source: 'user', cls: 'delete', subject: `удалено ${result.removed.length}, ${formatBytes(result.bytes)}`, decision: 'allow' });
+  return { ok: true, ...result, freed: formatBytes(result.bytes) };
+});
+
+// ---------- Границы данных (N2, ADR 0098) ----------
+
+ipcMain.handle('privacy:report', (_e, payload = {}) => {
+  const settings = loadSettings();
+  const servers = mcpConfigs(projectOf(payload));
+  const mcpList = Object.entries(servers)
+    .filter(([, c]) => c && !c.disabled)
+    .map(([name, c]) => ({ name, url: c.url || '', transport: c.url ? 'http' : 'stdio', connector: c.connector || '' }));
+  const connectors = mcpList.filter((m) => m.connector).map((m) => ({ name: m.name, connected: true }));
+  const schedules = scheduleStore().list().map((t) => ({ title: t.title, model: t.model, enabled: t.enabled }));
+  return dataBoundaryReport(settings, { mcp: mcpList.filter((m) => !m.connector), connectors, schedules });
+});
+
+// ---------- Signoff (N1, ADR 0097) ----------
+
+/** Тесты проекта для signoff: оболочка из настроек, таймаут signoff.timeoutMin (20 мин). */
+function signoffExec(projectDir, command, settings) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    let output = '';
+    let child;
+    try {
+      child = spawnShell(command, { shell: settings.shell, cwd: projectDir, env: { ...process.env, FORCE_COLOR: '0', CI: '1' } });
+    } catch (err) {
+      resolve({ code: -1, output: err.message, ms: 0 });
+      return;
+    }
+    const push = (d) => {
+      output = `${output}${d}`.slice(-200_000);
+    };
+    child.stdout?.on('data', push);
+    child.stderr?.on('data', push);
+    const minutes = Math.max(1, Math.min(120, Number(settings.signoff?.timeoutMin) || 20));
+    const timer = setTimeout(() => {
+      push(`\n[таймаут ${minutes} мин — тесты остановлены]`);
+      killProcessTree(child);
+    }, minutes * 60_000);
+    child.on('error', (err) => push(`\n${err.message}`));
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? -1, output, ms: Date.now() - started });
+    });
+  });
+}
+
+ipcMain.handle('signoff:run', async (_e, payload = {}) => {
+  requireAdmin();
+  const projectDir = projectOf(payload);
+  const settings = loadSettings();
+  const git = (args) => {
+    const r = spawnSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true, timeout: 20_000 });
+    return { code: r.status ?? -1, stdout: r.stdout || '' };
+  };
+  const post = ({ owner, repo, sha, state, context, description, targetUrl }) => {
+    const args = ['api', '-X', 'POST', `repos/${owner}/${repo}/statuses/${sha}`, '-f', `state=${state}`, '-f', `context=${context}`, '-f', `description=${description}`];
+    if (targetUrl) args.push('-f', `target_url=${targetUrl}`);
+    const r = spawnSync('gh', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+    if (r.error) return { ok: false, error: /ENOENT/.test(r.error.message) ? 'нет GitHub CLI (gh) — установите и выполните gh auth login' : r.error.message };
+    return r.status === 0 ? { ok: true } : { ok: false, error: (r.stderr || r.stdout || `код ${r.status}`).trim().slice(0, 400) };
+  };
+  const result = await runSignoff({ projectDir, context: payload.context, fail: payload.fail === true, settings, git, exec: (command) => signoffExec(projectDir, command, settings), post });
+  audit({ at: new Date().toISOString(), tool: 'signoff', source: 'user', cls: 'external', subject: `${result.context || payload.context || 'signoff'} ${result.state || 'не поставлен'} ${String(result.sha || '').slice(0, 7)}`, decision: result.ok ? 'allow' : 'deny' });
+  return result;
+});
+
 // ---------- Multica ----------
 
 ipcMain.handle('multica:status', () => multica.status());
@@ -2711,6 +3070,11 @@ ipcMain.handle('multica:issues', (_e, limit) => multica.listIssues(limit || 30))
 ipcMain.handle('multica:syncDocs', (_e, projectDir) => {
   requireAdmin();
   return multica.syncOpenSpec(projectDir || loadSettings().projectDir);
+});
+// Статусы Multica → галочки в openspec/changes/*/tasks.md (F14, ADR 0089).
+ipcMain.handle('multica:pullStatuses', (_e, projectDir) => {
+  requireAdmin();
+  return multica.pullStatuses(projectDir || loadSettings().projectDir);
 });
 
 // ---------- Docker-песочницы ----------
@@ -3434,6 +3798,92 @@ ipcMain.handle('boards:diagramChat', async (_e, payload) => {
   }
 });
 
+/** Вход калибратора (F15): PRD, модель и C1–C3, ADR (доска и docs/adr), OpenSpec. */
+function gatherCalibration(projectDir) {
+  const readSafe = (file, n = 20_000) => {
+    try {
+      return fs.readFileSync(file, 'utf8').slice(0, n);
+    } catch {
+      return '';
+    }
+  };
+  const data = loadBoards(projectDir);
+  const { views } = generateViews(projectDir, '');
+  const adrs = (data.architecture?.adrs || []).map((a) => {
+    let content = '';
+    try {
+      content = a.artifactId ? readArtifact(projectDir, a.artifactId)?.content || '' : '';
+    } catch {
+      /* артефакт удалён */
+    }
+    return { title: a.title, status: a.status, content };
+  });
+  const adrDir = path.join(projectDir, 'docs', 'adr');
+  try {
+    for (const name of fs.readdirSync(adrDir).filter((n) => /^\d{3,4}-.*\.md$/.test(n)).sort().slice(-40)) {
+      const text = readSafe(path.join(adrDir, name), 4000);
+      adrs.push({ title: /^#\s+(.+)$/m.exec(text)?.[1] || name, status: /Статус:\*{0,2}\s*([^\s,]+)/i.exec(text)?.[1] || '', content: text });
+    }
+  } catch {
+    /* нет docs/adr */
+  }
+  const openspec = openspecChanges(projectDir).map((c) => ({ name: c.name, title: c.title, summary: c.summary, open: c.tasks.filter((t) => !t.done).map((t) => t.text) }));
+  return calibrationContext({ prd: readSafe(path.join(projectDir, 'docs', 'PRD.md')) || readSafe(path.join(projectDir, 'PRD.md')), model: data.architecture?.model || {}, views, adrs, openspec });
+}
+
+const CALIBRATION_ID = 'calibration:architecture';
+
+/** Калибровка архитектуры и PRD (F15, ADR 0090): отчёт → артефакт note с версиями. */
+ipcMain.handle('boards:calibrate', async (_e, payload = {}) => {
+  requireAdmin();
+  const log = [];
+  const settings = loadSettings();
+  try {
+    const resolved = resolveModel(settings, payload.model || settings.activeModel);
+    const projectDir = projectOf(payload);
+    const context = gatherCalibration(projectDir);
+    log.push(`Контекст собран: ${context.length} симв.`);
+    let prev = null;
+    try {
+      prev = readArtifact(projectDir, CALIBRATION_ID);
+    } catch {
+      /* первый запуск */
+    }
+    const result = await calibrate({
+      provider: resolved.provider,
+      model: resolved.modelId,
+      context,
+      prev: prev?.meta?.report || null,
+      prevBaseline: prev?.meta?.baseline || '',
+      onLog: (line) => log.push(line),
+    });
+    const at = new Date().toISOString();
+    const artifact = writeArtifact(projectDir, {
+      id: CALIBRATION_ID,
+      kind: 'note',
+      name: 'Калибровка архитектуры',
+      title: 'Калибровка архитектуры и PRD',
+      content: calibrationMarkdown(result.report, { at, model: resolved.modelId, baseline: result.baseline }),
+      meta: { report: result.report, baseline: result.baseline, model: resolved.modelId, at },
+      note: result.diff ? `калибровка: +${result.diff.added.length} −${result.diff.resolved.length}` : 'первая калибровка',
+    });
+    log.push(`Сохранено: ${CALIBRATION_ID} v${artifact.current}`);
+    return { ok: true, ...result, at, artifact: { id: artifact.id, current: artifact.current }, log };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err), log };
+  }
+});
+
+/** Применить предложение агента схем (F10, ADR 0086). Только admin. */
+ipcMain.handle('boards:diagramApply', (_e, payload = {}) => {
+  requireAdmin();
+  try {
+    return applyDiagram({ projectDir: projectOf(payload), proposal: payload.proposal, baseHash: String(payload.baseHash || '') });
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
 ipcMain.handle('boards:saveView', (_e, payload) => {
   requireAdmin();
   const projectDir = projectOf(payload);
@@ -3463,6 +3913,27 @@ const infraResult = async (fn) => {
 };
 
 ipcMain.handle('infra:status', () => infra.probe());
+
+// Автосинхронизация хранилища (F12, ADR 0087): правки артефактов → фоновая очередь.
+const autoSyncEnabled = () => {
+  const cfg = loadSettings().infra || {};
+  return Boolean(cfg.autoSync && (cfg.postgresUrl || cfg.seaweedUrl));
+};
+const syncQueue = createSyncQueue({
+  run: (projectDir) => infra.autoSync(projectDir, { embed: loadSettings().infra?.autoSyncEmbed !== false }),
+  debounceMs: Number(process.env.MAI_SYNC_DEBOUNCE_MS || 5000),
+});
+onArtifactWrite((projectDir, artifact) => {
+  if (autoSyncEnabled()) syncQueue.schedule(projectDir, artifact?.id || '');
+});
+app.on('before-quit', () => syncQueue.stop());
+// Метрики агента (F23): последнюю порцию — при выходе, без ожидания.
+app.on('before-quit', () => void flushMetrics());
+ipcMain.handle('infra:syncStatus', (_e, payload) => ({ enabled: autoSyncEnabled(), ...syncQueue.status(projectOf(payload)) }));
+ipcMain.handle('infra:syncNow', async (_e, payload) => {
+  requireAdmin();
+  return { enabled: autoSyncEnabled(), ...(await syncQueue.flush(projectOf(payload))) };
+});
 ipcMain.handle('infra:sync', (_e, payload) =>
   infraResult(() => infra.syncAll(projectOf(payload), { embed: payload?.embed !== false })),
 );
@@ -3486,7 +3957,30 @@ const repowiseResult = async (fn) => {
   }
 };
 
-ipcMain.handle('repowise:status', (_e, payload) => repowise.status(projectOf(payload)));
+ipcMain.handle('repowise:status', async (_e, payload) => {
+  const base = await repowise.status(projectOf(payload));
+  // Состояние MCP-сервера `serve --no-ui` (F13): проверка ping, перезапуски.
+  const settings = loadSettings();
+  const saved = settings.mcpServers?.repowise;
+  const configured = Boolean(saved);
+  // Конфиг, сохранённый до F13, — без таймаута и перезапуска: дополняем.
+  if (saved && saved.callTimeoutMs === undefined) {
+    const { callTimeoutMs, restartOnTimeout, retryOnTimeout } = repowise.mcpConfig(saved.cwd || projectOf(payload));
+    const upgraded = { ...saved, callTimeoutMs, restartOnTimeout, retryOnTimeout };
+    saveSettings({ mcpServers: { ...settings.mcpServers, repowise: upgraded } });
+    const live = mcp.servers.get('repowise');
+    if (live) live.config = upgraded;
+  }
+  if (configured && mcp.servers.has('repowise')) await mcp.checkHealth('repowise').catch(() => {});
+  return { ...base, mcp: configured ? mcp.status().find((s) => s.name === 'repowise') || { name: 'repowise', status: 'disconnected', restarts: 0 } : null };
+});
+ipcMain.handle('repowise:restartMcp', async () => {
+  requireAdmin();
+  const config = loadSettings().mcpServers?.repowise;
+  if (!config) return { ok: false, error: 'MCP repowise не подключён — нажмите «Подключить MCP»' };
+  const res = mcp.servers.has('repowise') ? await mcp.restart('repowise') : await mcp.connect('repowise', config);
+  return { ...res, mcp: mcp.status().find((s) => s.name === 'repowise') || null };
+});
 ipcMain.handle('repowise:install', () => repowiseResult(() => repowise.install()));
 ipcMain.handle('repowise:init', (_e, payload) =>
   repowiseResult(() => repowise.init(projectOf(payload), { editorSetup: Boolean(payload?.editorSetup) })),

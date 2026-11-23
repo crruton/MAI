@@ -20,7 +20,7 @@ function withTimeout(promise, ms, message, signal) {
   return Promise.race([
     promise,
     new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), ms);
+      timer = setTimeout(() => reject(Object.assign(new Error(message), { mcpTimeout: true })), ms);
     }),
     // Остановка пользователем рвёт ожидание сразу, а не через 120 с.
     ...(signal
@@ -58,6 +58,8 @@ export class McpManager {
   constructor({ oauth = null } = {}) {
     this.servers = new Map(); // name -> { status, error, client, tools }
     this.oauth = oauth;
+    // Перезапуски зависших stdio-серверов (F13): переживают переподключение.
+    this.health = new Map(); // name -> { restarts, lastRestartAt, lastTimeout }
   }
 
   redirectUrl() {
@@ -92,6 +94,9 @@ export class McpManager {
       prompts: (s.prompts || []).length,
       transport: s.transport || '',
       loggedIn: Boolean(this.oauth?.store?.has(name)),
+      restarts: this.health.get(name)?.restarts || 0,
+      lastRestartAt: this.health.get(name)?.lastRestartAt || '',
+      lastTimeout: this.health.get(name)?.lastTimeout || '',
     }));
   }
 
@@ -108,7 +113,7 @@ export class McpManager {
 
   async connect(name, config) {
     await this.disconnect(name);
-    const entry = { status: 'connecting', error: '', client: null, tools: [], resources: [], prompts: [], transport: '' };
+    const entry = { status: 'connecting', error: '', client: null, tools: [], resources: [], prompts: [], transport: '', config };
     this.servers.set(name, entry);
     try {
       let client = new Client({ name: 'mai-code', version: '0.1.0' }, { capabilities: {} });
@@ -275,16 +280,66 @@ export class McpManager {
     if (!entry || entry.status !== 'ready') throw new Error(`MCP-сервер ${serverKey} не подключён`);
     const tool = entry.tools.find((t) => t.name.replace(/[^a-zA-Z0-9_-]/g, '_') === rawTool);
     if (!tool) throw new Error(`Инструмент ${rawTool} не найден на ${serverKey}`);
-    const result = await withTimeout(
-      entry.client.callTool({ name: tool.name, arguments: args || {} }),
-      120_000,
-      `MCP ${serverKey}: инструмент ${rawTool} не ответил за 120 с`,
-      signal,
-    );
+    const name = [...this.servers.entries()].find(([, e]) => e === entry)[0];
+    const timeoutMs = Number(entry.config?.callTimeoutMs) > 0 ? Number(entry.config.callTimeoutMs) : 120_000;
+    const invoke = (e) =>
+      withTimeout(
+        e.client.callTool({ name: tool.name, arguments: args || {} }),
+        timeoutMs,
+        `MCP ${serverKey}: инструмент ${rawTool} не ответил за ${Math.round(timeoutMs / 1000)} с`,
+        signal,
+      );
+    let result;
+    try {
+      result = await invoke(entry);
+    } catch (err) {
+      // Зависший локальный сервер (F13, ADR 0088): перезапуск процесса; повтор —
+      // только для инструментов «только чтение» (readOnlyHint или retryOnTimeout).
+      if (!err?.mcpTimeout || entry.transport !== 'stdio' || entry.config?.restartOnTimeout === false) throw err;
+      const restarted = await this.restart(name, `таймаут ${rawTool}`);
+      const canRetry = restarted.ok && (tool.annotations?.readOnlyHint === true || entry.config?.retryOnTimeout === true);
+      if (!canRetry) throw new Error(`${err.message}; сервер ${restarted.ok ? 'перезапущен — повторите запрос' : `не перезапустился: ${restarted.error}`}`);
+      const fresh = this.servers.get(name);
+      const again = fresh?.tools.find((t) => t.name === tool.name);
+      if (fresh?.status !== 'ready' || !again) throw new Error(`${err.message}; после перезапуска инструмента нет`);
+      result = await invoke(fresh);
+    }
     const parts = (result.content || []).map((c) =>
       c.type === 'text' ? c.text : c.type === 'resource' ? `[resource ${c.resource?.uri}]` : `[${c.type}]`,
     );
     return parts.join('\n') || '(пустой ответ)';
+  }
+
+  /**
+   * Перезапуск сервера (F13): закрыть процесс и подключиться заново с той же
+   * конфигурацией. Счётчик и время — в status().
+   */
+  async restart(name, reason = 'вручную') {
+    const entry = this.servers.get(name);
+    if (!entry?.config) return { ok: false, error: `MCP-сервер ${name} не настроен` };
+    const h = this.health.get(name) || { restarts: 0, lastRestartAt: '', lastTimeout: '' };
+    h.restarts += 1;
+    h.lastRestartAt = new Date().toISOString();
+    if (reason !== 'вручную') h.lastTimeout = `${h.lastRestartAt} · ${reason}`;
+    this.health.set(name, h);
+    return this.connect(name, entry.config);
+  }
+
+  /**
+   * Проверка «жив ли» (F13): ping с таймаутом; нет ответа у stdio — перезапуск.
+   */
+  async checkHealth(name, { timeoutMs = 10_000 } = {}) {
+    const entry = this.servers.get(name);
+    if (!entry) return { ok: false, status: 'missing' };
+    if (entry.status !== 'ready') return { ok: false, status: entry.status, error: entry.error };
+    try {
+      await withTimeout(entry.client.ping(), timeoutMs, `MCP ${name}: нет ответа на ping за ${Math.round(timeoutMs / 1000)} с`);
+      return { ok: true, status: 'ready' };
+    } catch (err) {
+      if (entry.transport !== 'stdio' || entry.config?.restartOnTimeout === false) return { ok: false, status: 'unresponsive', error: err.message };
+      const res = await this.restart(name, 'нет ответа на ping');
+      return { ok: Boolean(res.ok), status: this.servers.get(name)?.status || 'error', restarted: true, error: res.ok ? '' : res.error };
+    }
   }
 
   /* ---------- ресурсы и промпты (CC9.3, CC9.4, ADR 0071) ---------- */

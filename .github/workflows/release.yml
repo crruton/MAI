@@ -37,6 +37,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Перед публикацией — та же проверка, что в CI (F25, ADR 0095).
+      - name: Установка и самопроверка (Windows)
+        if: matrix.target == 'win'
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/check-installer.ps1 -Dist dist
+
       - name: Source tarball
         if: matrix.target == 'linux'
         run: npm run pack:tar

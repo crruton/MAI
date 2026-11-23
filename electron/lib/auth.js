@@ -3,6 +3,8 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { shell, safeStorage } from 'electron';
 import { dataDir } from './config.js';
+import { readManaged } from './settings-levels.js';
+import { corporatePolicy, identityFromToken, refreshTokens, sessionGate, stampTokens, tokenState } from './auth-session.js';
 
 /**
  * Роли и вход.
@@ -13,7 +15,19 @@ import { dataDir } from './config.js';
  *
  * Важно: в локальном режиме это разграничение интерфейса, а не защита от
  * владельца машины. Настоящая граница появляется только в серверном режиме.
+ *
+ * Корпоративный режим (F21, ADR 0093): managed-settings.json → auth.required.
+ * Без входа работает только экран входа; локальной роли нет; access token
+ * обновляется по refresh_token, роль — из нового токена.
  */
+
+let policyCache = { at: 0, value: corporatePolicy(null) };
+/** Политика входа организации (кэш 5 с: читается на каждом admin-вызове). */
+export function authPolicy() {
+  if (process.env.MAI_TEST_AUTH_POLICY) return corporatePolicy({ auth: JSON.parse(process.env.MAI_TEST_AUTH_POLICY) });
+  if (Date.now() - policyCache.at > 5000) policyCache = { at: Date.now(), value: readManaged().auth };
+  return policyCache.value;
+}
 
 const ROLES = new Set(['admin', 'guest']);
 
@@ -47,6 +61,20 @@ function decryptTokens(value) {
 function readAuth() {
   const raw = readRaw();
   const tokens = decryptTokens(raw?.tokens);
+  const policy = authPolicy();
+  if (policy.required) {
+    // Корпоративный режим: роль только из действующей сессии Keycloak.
+    const live = raw?.mode === 'keycloak' && tokenState(tokens) !== 'none' && tokenState(tokens) !== 'expired';
+    return {
+      mode: 'keycloak',
+      role: live && ROLES.has(raw?.role) ? raw.role : 'none',
+      user: live ? raw?.user || null : null,
+      issuer: policy.issuer,
+      clientId: policy.clientId,
+      tokens: live ? tokens : null,
+      required: true,
+    };
+  }
   return {
     mode: raw?.mode === 'keycloak' ? 'keycloak' : 'local',
     role: ROLES.has(raw?.role) ? raw.role : 'admin',
@@ -54,6 +82,7 @@ function readAuth() {
     issuer: raw?.issuer || '',
     clientId: raw?.clientId || 'mai-code-desktop',
     tokens,
+    required: false,
   };
 }
 
@@ -88,17 +117,60 @@ export function authStatus() {
     loggedIn: Boolean(auth.tokens?.access_token),
     encryption: safeStorage.isEncryptionAvailable(),
     keycloakConfigured: Boolean(auth.issuer),
+    // Корпоративный режим (F21): без входа — только экран входа.
+    required: auth.required,
+    session: tokenState(auth.tokens),
   };
 }
 
 export function requireAdmin() {
-  const { role } = readAuth();
+  const { role, required } = readAuth();
+  if (required && role === 'none') throw new Error('Нужен вход через Keycloak');
   if (role !== 'admin') throw new Error('Недостаточно прав: требуется роль admin');
   return true;
 }
 
+/** Гейт IPC (F21): в корпоративном режиме без входа — только каналы экрана входа. */
+export function sessionGateFor(channel) {
+  // Без корпоративного режима — сразу «можно»: файл авторизации не читаем на каждый вызов.
+  if (!authPolicy().required) return '';
+  const auth = readAuth();
+  return sessionGate(channel, { required: auth.required, loggedIn: Boolean(auth.tokens?.access_token) });
+}
+
+/**
+ * Продлить сессию (F21): истёкший access token обновляется по refresh_token,
+ * роль пересчитывается из нового токена. Не вышло (refresh отозван, истёк) —
+ * сессия закрывается. Вызывается по таймеру и при запросе статуса.
+ */
+export async function ensureSession({ post = postForm } = {}) {
+  const raw = readRaw();
+  if (raw?.mode !== 'keycloak') return authStatus();
+  const tokens = decryptTokens(raw.tokens);
+  const state = tokenState(tokens);
+  if (state === 'valid' || state === 'none') return authStatus();
+  const policy = authPolicy();
+  const issuer = policy.required ? policy.issuer : raw.issuer;
+  const clientId = policy.required ? policy.clientId : raw.clientId || 'mai-code-desktop';
+  if (state === 'refreshable') {
+    try {
+      const next = await refreshTokens({ issuer, clientId, tokens, post });
+      const id = identityFromToken(next.access_token, clientId);
+      writeAuth({ mode: 'keycloak', role: id.role, user: id.user, issuer, clientId, tokens: next });
+      return { ...authStatus(), refreshed: true };
+    } catch (err) {
+      // Сеть недоступна — не выкидываем сразу: попробуем на следующем такте.
+      if (!err?.code || Number(err.status) >= 500 || err.code === 'bad_response') return { ...authStatus(), refreshError: err?.message || String(err) };
+    }
+  }
+  // Истекло или refresh отозван: сессия закрыта.
+  writeAuth({ mode: 'keycloak', role: 'guest', user: null, issuer, clientId, tokens: null });
+  return { ...authStatus(), expired: true };
+}
+
 export function configureAuth({ issuer, clientId }) {
   const current = readAuth();
+  if (current.required) throw new Error('Адрес Keycloak задан организацией (managed-settings.json) и здесь не меняется');
   const next = writeAuth({
     ...current,
     issuer: String(issuer || '').replace(/\/$/, ''),
@@ -110,6 +182,7 @@ export function configureAuth({ issuer, clientId }) {
 export function setLocalRole(role) {
   if (!ROLES.has(role)) throw new Error(`Неизвестная роль: ${role}`);
   const current = readAuth();
+  if (current.required) throw new Error('Корпоративный режим: роль задаётся в Keycloak, локальной роли нет');
   if (current.mode === 'keycloak' && current.tokens) {
     throw new Error('Роль задаётся в Keycloak; сначала выйдите из аккаунта');
   }
@@ -119,6 +192,13 @@ export function setLocalRole(role) {
 
 export function logout() {
   const current = readAuth();
+  if (current.required) {
+    // Корпоративный режим: выход — обратно на экран входа, не в локального admin.
+    // Сессию на сервере закрываем по возможности, не дожидаясь ответа.
+    if (current.tokens?.refresh_token) postForm(`${current.issuer}/protocol/openid-connect/logout`, { client_id: current.clientId, refresh_token: current.tokens.refresh_token }).catch(() => {});
+    writeAuth({ mode: 'keycloak', role: 'guest', user: null, issuer: current.issuer, clientId: current.clientId, tokens: null });
+    return authStatus();
+  }
   writeAuth({
     mode: 'local',
     role: 'admin',
@@ -128,17 +208,6 @@ export function logout() {
     tokens: null,
   });
   return authStatus();
-}
-
-function decodeJwt(token) {
-  try {
-    const part = String(token).split('.')[1];
-    if (!part) return {};
-    const normalized = part.replace(/-/g, '+').replace(/_/g, '/');
-    return JSON.parse(Buffer.from(normalized, 'base64').toString('utf8'));
-  } catch {
-    return {};
-  }
 }
 
 async function postForm(url, params) {
@@ -151,6 +220,7 @@ async function postForm(url, params) {
   if (!res.ok) {
     const err = new Error(data.error_description || data.error || `HTTP ${res.status}`);
     err.code = data.error || `http_${res.status}`;
+    err.status = res.status;
     throw err;
   }
   return data;
@@ -215,25 +285,9 @@ export async function loginKeycloak() {
 
   if (!token?.access_token) throw new Error('Keycloak не подтвердил вход за отведённое время');
 
-  const payload = decodeJwt(token.access_token);
-  const roles = new Set([
-    ...(payload.realm_access?.roles || []),
-    ...(payload.resource_access?.[clientId]?.roles || []),
-  ]);
-  const role = roles.has('admin') ? 'admin' : 'guest';
-
-  writeAuth({
-    mode: 'keycloak',
-    role,
-    user: {
-      name: payload.name || payload.preferred_username || payload.email || 'Пользователь Keycloak',
-      email: payload.email || '',
-      sub: payload.sub || '',
-    },
-    issuer: base,
-    clientId,
-    tokens: token,
-  });
+  const { role, user } = identityFromToken(token.access_token, clientId);
+  // Отметка времени — от неё считаются сроки access и refresh (F21).
+  writeAuth({ mode: 'keycloak', role, user, issuer: base, clientId, tokens: stampTokens(token) });
 
   return {
     ...authStatus(),

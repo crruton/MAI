@@ -85,5 +85,28 @@ const own = JSON.parse(fs.readFileSync(path.join(root, '.mai-code', 'hooks.json'
 check('репозиторий MAI сам использует примеры', JSON.stringify(own) === JSON.stringify(example));
 
 fs.rmSync(repo, { recursive: true, force: true });
+console.log('\n[пакет impeccable-check: PostToolUse после правки UI (N5, ADR 0101)]');
+{
+  const { expandPackageDir } = await import('../electron/lib/packages.js');
+  const { checkUi } = await import('../examples/packages/impeccable-check/hooks/ui-check.mjs');
+  const pkgDir = path.join(root, 'examples', 'packages', 'impeccable-check');
+  const config = expandPackageDir(JSON.parse(fs.readFileSync(path.join(pkgDir, 'hooks.json'), 'utf8')), pkgDir);
+  check('${MAI_PACKAGE_DIR} → папка пакета в кавычках', config.PostToolUse[0].hooks[0].command === `node "${path.join(pkgDir, 'hooks', 'ui-check.mjs')}"`, config.PostToolUse[0].hooks[0].command);
+  const ids = (file, text) => checkUi(file, text).map((f) => f.id).join();
+  check('CSS: outline, transition all, мелкий шрифт, z-index, !important ×3', ids('a.css', '.a{outline:none}\n.b{transition: all .2s}\n.c{font-size:11px}\n.d{z-index:99999}\n.e{color:red!important;top:0!important;left:0!important}') === 'focus-outline,transition-all,tiny-font,z-index,important');
+  check('разметка: img без alt, клик на div, только placeholder, запрет масштаба', ids('a.html', '<meta name="viewport" content="user-scalable=no">\n<img src="x">\n<div onclick="go()">x</div>\n<input placeholder="Имя">') === 'img-alt,click-div,placeholder-label,user-scalable');
+  check('чистый UI — без находок', ids('ok.tsx', '<img src="x" alt=""/><button onClick={go}>Ок</button><label>Имя <input id="n" placeholder="Иван"/></label>') === '');
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-uicheck-'));
+  fs.writeFileSync(path.join(proj, 'page.html'), '<img src="a.png">');
+  fs.writeFileSync(path.join(proj, 'notes.md'), '<img src="a.png">');
+  const uiRunner = createHookRunner({ hooks: normalizeHooks(config), projectDir: proj });
+  check('хук только на write_file/edit_file', uiRunner.has('PostToolUse', 'write_file') && uiRunner.has('PostToolUse', 'edit_file') && !uiRunner.has('PostToolUse', 'read_file'));
+  const hit = await uiRunner.run('PostToolUse', { tool_name: 'write_file', tool_input: { path: 'page.html' }, tool_response: 'ok' });
+  check('находки — агенту (additionalContext), не блок', hit.context.length === 1 && /page.html:1 — <img> без alt/.test(hit.context[0]) && hit.decision !== 'block', JSON.stringify(hit));
+  const skip = await uiRunner.run('PostToolUse', { tool_name: 'write_file', tool_input: { path: 'notes.md' }, tool_response: 'ok' });
+  check('не UI-файл — молчит', skip.context.length === 0);
+  fs.rmSync(proj, { recursive: true, force: true });
+}
+
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

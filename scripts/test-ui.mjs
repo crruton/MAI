@@ -359,7 +359,17 @@ ipcMain.handle('settings:save', (_e, patch) => {
   savedSettings.push(patch);
   return { projectDir: root, activeModel: 'test-model', permissionMode: 'manual', providers: { 'test-model': { name: 'Test', apiKeySet: true, models: [] } }, models: [], ...patch };
 });
-ipcMain.handle('auth:status', () => ({ authenticated: false, role: 'admin', mode: 'local' }));
+// Корпоративный режим (раздел [55], F21): флаг включает «только вход».
+let corporate = false;
+let corporateLoggedIn = false;
+const loginCalls = [];
+ipcMain.handle('auth:status', () => (corporate ? { required: true, loggedIn: corporateLoggedIn, role: corporateLoggedIn ? 'admin' : 'none', mode: 'keycloak', issuer: 'https://sso.example/realms/mai' } : { authenticated: false, role: 'admin', mode: 'local' }));
+ipcMain.handle('auth:login', () => {
+  loginCalls.push(Date.now());
+  if (loginCalls.length === 1) return { ok: false, error: 'Keycloak не подтвердил вход за отведённое время' };
+  corporateLoggedIn = true;
+  return { ok: true, loggedIn: true, role: 'admin', user: { name: 'Иван' } };
+});
 ipcMain.handle('models:list', () => []);
 // Сессия с ответом агента: нужна для проверки меню «Скачать» у сообщения.
 const TEST_SESSION = {
@@ -515,6 +525,100 @@ const clipboardCalls = [];
 ipcMain.handle('app:clipboard', (_e, text) => {
   clipboardCalls.push(text);
   return true;
+});
+// Агент схем: предложение и «Применить» (раздел [48], F10).
+const diagramApplies = [];
+ipcMain.handle('boards:views', () => ({ views: Object.fromEntries(['c1', 'c2', 'c3', 'c4', 'sequence', 'er', 'deployment', 'openapi'].map((k) => [k, { title: k.toUpperCase(), mermaid: 'graph TD; A-->B', puml: '' }])), drift: {} }));
+ipcMain.handle('boards:diagramChat', () => ({ ok: true, reply: 'Добавил Redis между API и Postgres', changed: true, proposal: { containers: [{ id: 'redis' }] }, baseHash: 'h1', diff: { added: 1, removed: 0, truncated: false, lines: [{ type: '@', text: '@@ строка 3 @@' }, { type: '+', text: '  { "id": "redis" }' }] } }));
+ipcMain.handle('boards:diagramApply', (_e, payload) => {
+  diagramApplies.push(payload);
+  return { ok: true, views: { views: {}, drift: {} } };
+});
+// Автосинхронизация хранилища (раздел [49], F12).
+const syncNowCalls = [];
+ipcMain.handle('artifacts:list', () => []);
+ipcMain.handle('artifacts:stats', () => ({ total: 0, byKind: {} }));
+ipcMain.handle('infra:status', () => ({ postgres: { ok: true, version: 'PostgreSQL 16' }, vault: { ok: false, error: 'Адрес не задан' }, seaweed: { ok: false, error: 'Адрес не задан' }, config: {} }));
+ipcMain.handle('infra:syncStatus', () => ({ enabled: true, state: 'retry', changes: 2, attempts: 1, nextAt: new Date(Date.now() + 30000).toISOString(), lastOkAt: '', lastError: 'Postgres: connection refused', lastReport: null }));
+ipcMain.handle('infra:syncNow', (_e, payload) => {
+  syncNowCalls.push(payload);
+  return { enabled: true, state: 'ok', changes: 0, attempts: 0, nextAt: '', lastOkAt: new Date().toISOString(), lastError: '', lastReport: {} };
+});
+// Repowise: состояние MCP и перезапуск (раздел [50], F13).
+let rwRestarts = 1;
+ipcMain.handle('repowise:status', () => ({ installed: true, version: 'repowise 1.2', indexed: true, indexPath: '/p/.repowise', mcp: { name: 'repowise', status: 'ready', restarts: rwRestarts, lastRestartAt: '2026-11-23T10:00:00.000Z', lastTimeout: '2026-11-23T10:00:00.000Z · таймаут ask', error: '' } }));
+ipcMain.handle('repowise:restartMcp', () => {
+  rwRestarts += 1;
+  return { ok: true };
+});
+// Multica → tasks.md (раздел [51], F14).
+const multicaPulls = [];
+ipcMain.handle('multica:status', () => ({ available: true, version: 'multica 0.4', config: {} }));
+ipcMain.handle('multica:issues', () => ({ ok: true, issues: [] }));
+ipcMain.handle('multica:pullStatuses', (_e, projectDir) => {
+  multicaPulls.push(projectDir);
+  return { ok: true, marked: ['auth: Вход (MAI-1)'], already: [], missing: [], cancelled: ['auth:roles (MAI-3)'], message: 'Multica → OpenSpec: отмечено 1, уже отмечено 0, отменено в Multica 1' };
+});
+// Калибратор (раздел [52], F15).
+let calibrateRuns = 0;
+ipcMain.handle('artifacts:get', () => ({ id: 'calibration:architecture', current: 1, meta: { report: { summary: 'Прошлый отчёт', findings: [{ type: 'gap', severity: 'high', title: 'Нет SSO', detail: '', refs: ['PRD'], suggestion: '' }] }, at: '2026-11-22T10:00:00Z' } }));
+ipcMain.handle('boards:calibrate', () => {
+  calibrateRuns += 1;
+  if (calibrateRuns === 1) return { ok: false, error: 'Калибратор не ответил за 180 с', log: ['Контекст собран: 1200 симв.'] };
+  return { ok: true, at: '2026-11-23T10:00:00Z', report: { summary: 'Две находки', findings: [{ type: 'gap', severity: 'high', title: 'Нет SSO', detail: 'PRD требует SSO', refs: ['PRD', 'C2'], suggestion: 'Keycloak' }, { type: 'risk', severity: 'low', title: 'Один экземпляр БД', detail: '', refs: [], suggestion: '' }] }, diff: { added: [{ type: 'risk', title: 'Один экземпляр БД' }], resolved: [{ type: 'question', title: 'Кто админ' }], kept: [{ type: 'gap', title: 'Нет SSO' }] }, sameBaseline: false, artifact: { id: 'calibration:architecture', current: 2 }, log: ['Контекст собран', 'Находок: 2'] };
+});
+// Голос: ошибка на кнопке и повтор (раздел [54], F18).
+let voiceUp = false;
+const voiceSends = [];
+ipcMain.handle('voice:status', () => (voiceUp ? { ok: true, engine: 'mas' } : { ok: false, engine: 'mas', error: 'MAS не запущен. Откройте приложение MAS' }));
+ipcMain.handle('voice:transcribe', (_e, payload) => {
+  voiceSends.push(payload.wav.byteLength);
+  if (voiceSends.length === 1) throw new Error('MAS: HTTP 500');
+  return { text: 'надиктованный текст', engine: 'mas', elapsedMs: 900 };
+});
+// Signoff (раздел [56], N1).
+const signoffCalls = [];
+ipcMain.handle('signoff:run', (_e, payload) => {
+  signoffCalls.push(payload);
+  return payload.fail
+    ? { ok: true, state: 'failure', context: 'signoff/lint', sha: 'abcdef1234', repo: 'acme/demo', log: ['HEAD abcdef1 (origin/dev)', 'Статус signoff/lint = failure'] }
+    : { ok: false, sha: 'abcdef1234', testsFailed: true, output: 'FAIL test-x.mjs', error: 'Тесты не прошли (код 1) — signoff не поставлен', log: ['HEAD abcdef1 (origin/dev)', 'Тесты: npm test'] };
+});
+// Границы данных (раздел [57], N2).
+ipcMain.handle('privacy:report', () => ({ strictLocal: false, counts: { fail: 1, warn: 1, info: 1 }, findings: [{ level: 'fail', area: 'Модели', title: 'Модель чата — облако: OpenAI', detail: 'Запросы уходят на api.openai.com', fix: 'Выберите локальную модель' }, { level: 'warn', area: 'Веб', title: 'Веб-инструменты включены', detail: '…' }, { level: 'info', area: 'MCP', title: 'Локальные MCP-серверы: 1', detail: 'repowise' }], checklist: [{ label: 'модели — локальные', ok: false, detail: 'чата: openai/gpt-5' }, { label: 'телеметрия выключена или локальная', ok: true }] }));
+// Локальные модели (раздел [58], N4).
+const localAdds = [];
+ipcMain.handle('providers:list', () => ({ mai: { name: 'MAI', baseURL: 'https://api-ai.mai.ru/v1', apiKeySet: true, models: [] } }));
+ipcMain.handle('localModels:detect', () => [
+  { id: 'ollama', name: 'Ollama', baseURL: 'http://127.0.0.1:11434/v1', port: 11434, hint: 'ollama serve', models: ['qwen3:8b', 'llama3.2'], empty: false, added: false },
+  { id: 'lmstudio', name: 'LM Studio', baseURL: 'http://127.0.0.1:1234/v1', port: 1234, hint: 'Start Server', models: [], empty: true, added: false },
+]);
+ipcMain.handle('localModels:add', (_e, payload) => {
+  localAdds.push(payload);
+  return { ok: true, id: 'ollama', models: 2 };
+});
+// Обновления (раздел [59], N6).
+const updateApplies = [];
+const updateReport = { at: '2026-11-23T10:00:00Z', npmChecked: true, counts: { high: 1, medium: 1, low: 0, info: 0 }, errors: [], items: [
+  { source: 'npm', kind: 'security', name: 'tar', risk: 'high', note: 'Arbitrary file overwrite — есть исправление (npm audit fix)' },
+  { source: 'npm', kind: 'update', name: 'openai', current: '6.49.0', latest: '6.50.0', bump: 'minor', risk: 'medium', note: '' },
+] };
+ipcMain.handle('updates:last', () => null);
+ipcMain.handle('updates:scan', () => ({ ok: true, report: updateReport }));
+ipcMain.handle('updates:apply', (_e, payload) => {
+  updateApplies.push(payload);
+  return { ok: true, branch: 'mai/update-deps-202611231000', dir: '/wt/deps', installOk: true, testsRun: true, testsOk: true, command: 'npm test', output: 'Итог: 10 OK' };
+});
+// Чистильщик (раздел [60], N7).
+const cleanupCalls = [];
+ipcMain.handle('cleanup:plan', () => ({ stable: true, version: '0.3.0', since: '2026-11-15T10:00:00Z', bytes: 3 * 1024 * 1024, items: [
+  { id: 'навык:/d/skills/.previous/impeccable-4.8.1', kind: 'навык', path: '/d/skills/.previous/impeccable-4.8.1', bytes: 2 * 1024 * 1024, ageDays: 20, reason: 'старая копия навыка', removable: true },
+  { id: 'временное:/tmp/mai-previews', kind: 'временное', path: '/tmp/mai-previews', bytes: 1024 * 1024, ageDays: 3, reason: 'временная папка MAI', removable: true },
+  { id: 'worktree:/d/worktrees/r/wt', kind: 'рабочая копия', path: '/d/worktrees/r/wt', bytes: 10, ageDays: 30, reason: 'удалите через /worktree', removable: false },
+] }));
+ipcMain.handle('cleanup:apply', (_e, payload) => {
+  cleanupCalls.push(payload.ids);
+  return { ok: true, removed: payload.ids, skipped: [], bytes: 2 * 1024 * 1024, freed: '2,0 МБ' };
 });
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
@@ -690,7 +794,7 @@ app.whenReady().then(async () => {
       const buttons = [...body.querySelectorAll('button')].map((b) => b.innerText.trim());
       return {
         open: true,
-        hasGroup: raw.includes('MAS — распознавание речи'),
+        hasGroup: raw.includes('Голос — распознавание речи') && raw.includes('Движок'),
         hasHint: text.includes('кнопка микрофона'),
         hasToken: /api-token/.test(text),
         hasUrl: inputs.includes('http://127.0.0.1:8765'),
@@ -1937,6 +2041,20 @@ app.whenReady().then(async () => {
     const labels = await ui(`['settings-btn', 'attach', 'send', 'stop'].every((id) => document.getElementById(id)?.getAttribute('aria-label'))`);
     check('кнопки-значки подписаны для читалок экрана', labels === true);
 
+    console.log('\n[47] «Запомнить?» после прогона (F4, ADR 0084)');
+    const curSession = await ui(`document.querySelector('.session.active')?.textContent ? 'test-session' : ''`);
+    win.webContents.send('chat:event', { type: 'memory:suggest', sessionId: 'test-session', text: 'Тесты запускай через npm test -- --watch=false' });
+    await wait(300);
+    const memBar = await ui(`document.querySelector('.memory-suggest')?.textContent || ''`);
+    check('плашка «Запомнить?» с уроком и тремя кнопками', /Запомнить: «Тесты запускай через npm test/.test(memBar) && /В проект/.test(memBar) && /Глобально/.test(memBar) && /Нет/.test(memBar), `${curSession} ${memBar}`);
+    const before = memoryAppends.length;
+    await ui(`document.querySelector('.memory-suggest-project').click()`);
+    await wait(300);
+    check('«В проект» — в память проекта, плашка уходит', memoryAppends.length === before + 1 && memoryAppends.at(-1).scope === 'project' && /npm test/.test(memoryAppends.at(-1).text) && (await ui(`!document.querySelector('.memory-suggest')`)), JSON.stringify(memoryAppends.at(-1)));
+    win.webContents.send('chat:event', { type: 'memory:suggest', sessionId: 'другой-чат', text: 'x' });
+    await wait(200);
+    check('урок чужого чата не показывается', await ui(`!document.querySelector('.memory-suggest')`));
+
     console.log('\n[46] Git: /pr, /security-review, /worktree (ADR 0076)');
     const sec = await slash('/security-review 7');
     check('/security-review 7: gh pr diff, только чтение, путь атаки и уверенность', /gh pr diff 7/.test(sec?.text) && /файлы не меняй/.test(sec?.text) && /путь атаки/.test(sec?.text) && /уверенность/.test(sec?.text), sec?.text?.slice(0, 200));
@@ -1950,6 +2068,186 @@ app.whenReady().then(async () => {
     await wait(600);
     check('«Создать и открыть» — новая копия, чат в ней', wtCalls.some((c) => c.type === 'create' && c.name === 'new task'), JSON.stringify(wtCalls));
     await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; })()`);
+
+    console.log('\n[48] Агент схем: diff и «Применить» (F10, ADR 0086)');
+    const arch = new BrowserWindow({ show: false, width: 1300, height: 900, webPreferences: { preload: path.join(root, 'electron', 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    await arch.loadFile(path.join(root, 'renderer', 'board.html'), { query: { board: 'architecture' } });
+    await wait(1500);
+    const archUi = (code) => arch.webContents.executeJavaScript(code);
+    await archUi(`(() => { const i = document.querySelector('#diagram-agent-input'); i.value = 'добавь Redis'; document.querySelector('[data-act=diagram-agent-send]').click(); })()`);
+    await wait(600);
+    const prop = await archUi(`(() => { const p = document.querySelector('.diagram-proposal'); return p ? { text: p.textContent, add: Boolean(p.querySelector('.diff-add')), apply: Boolean(p.querySelector('[data-act=diagram-apply]')) } : null; })()`);
+    check('ответ агента — предложение с diff и кнопками, модель не тронута', prop && /\+1 −0/.test(prop.text) && prop.add && prop.apply && diagramApplies.length === 0, JSON.stringify(prop));
+    await archUi(`document.querySelector('[data-act=diagram-apply]').click()`);
+    await wait(500);
+    const archAfter = await archUi(`document.querySelector('.diagram-proposal')?.textContent || ''`);
+    check('«Применить» — запись с отпечатком базы, статус «применено»', diagramApplies.length === 1 && diagramApplies[0].baseHash === 'h1' && /redis/.test(JSON.stringify(diagramApplies[0].proposal)) && /применено/.test(archAfter) && !(await archUi(`Boolean(document.querySelector('[data-act=diagram-apply]'))`)), JSON.stringify(diagramApplies));
+    arch.destroy();
+
+    console.log('\n[49] Автосинхронизация хранилища (F12, ADR 0087)');
+    const store = new BrowserWindow({ show: false, width: 1300, height: 900, webPreferences: { preload: path.join(root, 'electron', 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    await store.loadFile(path.join(root, 'renderer', 'board.html'), { query: { board: 'storage' } });
+    await wait(1200);
+    const storeUi = (code) => store.webContents.executeJavaScript(code);
+    await storeUi(`document.querySelector('[data-act=storage-tab][data-tab=infra]')?.click()`);
+    await wait(600);
+    const manual = await storeUi(`document.querySelector('.auto-sync-status')?.textContent || ''`);
+    check('по умолчанию выключено — «вручную»', /вручную/.test(manual) && !(await storeUi(`document.querySelector('#infra-auto-sync').checked`)), manual);
+    const syncSavedFrom = savedSettings.length;
+    await storeUi(`document.querySelector('#infra-auto-sync').click()`);
+    await wait(900);
+    check('флажок сохраняет infra.autoSync', savedSettings.slice(syncSavedFrom).some((p) => p.infra?.autoSync === true), JSON.stringify(savedSettings.slice(syncSavedFrom)));
+    const line = await storeUi(`document.querySelector('.auto-sync-status')?.textContent || ''`);
+    check('состояние очереди: повтор, правок, ошибка', /ошибка, повтор/.test(line) && /правок в очереди: 2/.test(line) && /connection refused/.test(line), line);
+    await storeUi(`document.querySelector('[data-act=infra-sync-now]').click()`);
+    await wait(500);
+    const synced = await storeUi(`document.querySelector('.auto-sync-status')?.textContent || ''`);
+    check('«Синхронизировать сейчас» — прогон и «синхронизировано»', syncNowCalls.length === 1 && /синхронизировано/.test(synced), synced);
+
+    console.log('\n[50] Repowise: MCP-сервер и перезапуск (F13, ADR 0088)');
+    await storeUi(`document.querySelector('[data-act=storage-tab][data-tab=repowise]')?.click()`);
+    await wait(700);
+    const rwCard = await storeUi(`document.querySelector('.repowise-mcp')?.textContent.replace(/\\s+/g, ' ') || ''`);
+    check('карточка MCP: отвечает, перезапусков и причина', /отвечает/.test(rwCard) && /перезапусков: 1/.test(rwCard) && /таймаут ask/.test(rwCard), rwCard);
+    await storeUi(`document.querySelector('[data-act=repowise-restart]').click()`);
+    await wait(700);
+    const rwCard2 = await storeUi(`document.querySelector('.repowise-mcp')?.textContent || ''`);
+    check('«Перезапустить» — вызов и обновлённый счётчик', rwRestarts === 2 && /перезапусков: 2/.test(rwCard2), rwCard2);
+    store.destroy();
+
+    console.log('\n[51] Multica: статусы обратно в tasks.md (F14, ADR 0089)');
+    await ui(`document.querySelector('[data-panel=multica]').click()`);
+    await wait(700);
+    const pullBtn = await ui(`Boolean(document.querySelector('.modal-backdrop .multica-pull'))`);
+    check('в панели Multica — «Статусы → tasks.md»', pullBtn);
+    await ui(`document.querySelector('.modal-backdrop .multica-pull').click()`);
+    await wait(500);
+    const pullToasts = await ui(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ')`);
+    check('вызов с папкой проекта и отчёт: отмечено, отменено', multicaPulls.length === 1 && multicaPulls[0] && /отмечено 1/.test(pullToasts) && /Отменены в Multica/.test(pullToasts), `${JSON.stringify(multicaPulls)} ${pullToasts}`);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[52] Калибратор архитектуры и PRD (F15, ADR 0090)');
+    const cal = new BrowserWindow({ show: false, width: 1300, height: 900, webPreferences: { preload: path.join(root, 'electron', 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    await cal.loadFile(path.join(root, 'renderer', 'board.html'), { query: { board: 'architecture' } });
+    await wait(1200);
+    const calUi = (code) => cal.webContents.executeJavaScript(code);
+    await calUi(`document.querySelector('[data-act=arch-tab][data-tab=calibration]').click()`);
+    await wait(500);
+    const calPrev = await calUi(`document.querySelector('.calibration')?.textContent || ''`);
+    check('вкладка «Калибровка» — прошлый отчёт из артефакта', /Прошлый отчёт/.test(calPrev) && /Нет SSO/.test(calPrev), calPrev.slice(0, 200));
+    await calUi(`document.querySelector('[data-act=calibrate]').click()`);
+    await wait(600);
+    const calErr = await calUi(`(() => { const e = document.querySelector('.calibration-error'); return e ? { text: e.textContent, retry: Boolean(e.querySelector('[data-act=calibrate]')), log: document.querySelector('.calibration-log')?.open } : null; })()`);
+    check('ошибка — сообщение, «Повторить» и открытый журнал, отчёт на месте', calErr && /180 с/.test(calErr.text) && calErr.retry && calErr.log && /Нет SSO/.test(await calUi(`document.querySelector('.calibration').textContent`)), JSON.stringify(calErr));
+    await calUi(`document.querySelector('.calibration-error [data-act=calibrate]').click()`);
+    await wait(600);
+    const calOk = await calUi(`(() => ({ rows: document.querySelectorAll('.calibration-row').length, diff: document.querySelector('.calibration-diff')?.textContent || '', fresh: [...document.querySelectorAll('.calibration-row')].filter((r) => /новое/.test(r.textContent)).length, tab: document.querySelector('[data-tab=calibration]').textContent, gone: document.querySelector('.calibration').textContent.includes('Ушли: Кто админ') }))()`);
+    check('повтор — таблица находок, сравнение и «новое»', calOk.rows === 2 && /новых 1/.test(calOk.diff) && /ушло 1/.test(calOk.diff) && calOk.fresh === 1 && /Калибровка · 2/.test(calOk.tab) && calOk.gone, JSON.stringify(calOk));
+    cal.destroy();
+
+    console.log('\n[53] «Проект в отдельной папке» вместо «песочницы» (F16, ADR 0091)');
+    const names = await ui(`({ btn: document.querySelector('#new-project-btn').title, docker: document.querySelector('[data-panel=sandbox]').textContent.trim() })`);
+    console.log('\n[54] Голос: ошибка на кнопке и повтор записи (F18, ADR 0092)');
+    await ui(`document.querySelector('#mic').click()`);
+    await wait(400);
+    const micDown = await ui(`({ cls: document.querySelector('#mic').className, title: document.querySelector('#mic').title, retry: Boolean(document.querySelector('#mic-retry')) })`);
+    check('MAS не запущен — ошибка на кнопке с причиной, без «↻»', /error/.test(micDown.cls) && /MAS не запущен/.test(micDown.title) && !micDown.retry, JSON.stringify(micDown));
+    voiceUp = true;
+    // Синтетический микрофон: тон из генератора вместо устройства.
+    await ui(`navigator.mediaDevices.getUserMedia = async () => { const c = new AudioContext(); const o = c.createOscillator(); const d = c.createMediaStreamDestination(); o.connect(d); o.start(); return d.stream; }; true`);
+    await ui(`document.querySelector('#mic').click()`);
+    await wait(1500);
+    const recording = await ui(`document.querySelector('#mic').classList.contains('recording')`);
+    await ui(`document.querySelector('#mic').click()`);
+    await wait(800);
+    const micFail = await ui(`({ cls: document.querySelector('#mic').className, title: document.querySelector('#mic').title, retry: Boolean(document.querySelector('#mic-retry')) })`);
+    check('запись есть, распознавание упало — ошибка и «↻»', recording && voiceSends.length === 1 && voiceSends[0] > 44 && /error/.test(micFail.cls) && /HTTP 500/.test(micFail.title) && micFail.retry, JSON.stringify({ recording, voiceSends, micFail }));
+    await ui(`document.querySelector('#input').value = ''`);
+    await ui(`document.querySelector('#mic-retry').click()`);
+    await wait(600);
+    const micOk = await ui(`({ cls: document.querySelector('#mic').className, input: document.querySelector('#input').value, retry: Boolean(document.querySelector('#mic-retry')) })`);
+    check('«↻» — та же запись, текст в поле, состояние сброшено', voiceSends.length === 2 && voiceSends[1] === voiceSends[0] && micOk.input === 'надиктованный текст' && !/error/.test(micOk.cls) && !micOk.retry, JSON.stringify({ voiceSends, micOk }));
+    await ui(`document.querySelector('#input').value = ''`);
+
+    console.log('\n[55] Корпоративный режим: экран «только вход» (F21, ADR 0093)');
+    corporate = true;
+    const corp = new BrowserWindow({ show: false, width: 1100, height: 800, webPreferences: { preload: path.join(root, 'electron', 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    await corp.loadFile(path.join(root, 'renderer', 'index.html'));
+    await wait(1500);
+    const corpUi = (code) => corp.webContents.executeJavaScript(code);
+    const login0 = await corpUi(`({ screen: Boolean(document.querySelector('.login-only')), text: document.querySelector('.login-only')?.textContent || '', chats: document.querySelectorAll('.session-item').length })`);
+    check('без входа — только экран входа с адресом организации', login0.screen && /Вход через Keycloak обязателен/.test(login0.text) && /sso.example/.test(login0.text) && login0.chats === 0, JSON.stringify(login0));
+    await corpUi(`document.querySelector('.login-only-button').click()`);
+    await wait(500);
+    const login1 = await corpUi(`({ status: document.querySelector('.login-only-status').textContent, button: document.querySelector('.login-only-button').textContent, disabled: document.querySelector('.login-only-button').disabled })`);
+    check('вход не удался — причина и «Повторить вход»', /не подтвердил вход/.test(login1.status) && login1.button === 'Повторить вход' && !login1.disabled, JSON.stringify(login1));
+    await corpUi(`document.querySelector('.login-only-button').click()`);
+    await wait(2500);
+    const login2 = await corpUi(`({ screen: Boolean(document.querySelector('.login-only')), input: Boolean(document.querySelector('#input')) })`);
+    check('после входа — перезагрузка и обычное окно', loginCalls.length === 2 && !login2.screen && login2.input, JSON.stringify({ loginCalls: loginCalls.length, login2 }));
+    corp.destroy();
+    corporate = false;
+
+    console.log('\n[56] /signoff — тесты и статус коммита (N1, ADR 0097)');
+    const slashCmd = (text) => ui(`(() => { const i = document.querySelector('#input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await slashCmd('/signoff');
+    await wait(700);
+    const so1 = await ui(`({ title: document.querySelector('.modal-backdrop .modal h2, .modal-backdrop .modal-title')?.textContent || document.querySelector('.modal-backdrop')?.textContent.slice(0, 60), verdict: document.querySelector('.signoff-verdict')?.textContent || '', log: document.querySelector('.signoff-log')?.textContent || '' })`);
+    check('тесты упали — ✗ с причиной и вывод тестов', signoffCalls[0]?.fail === false && signoffCalls[0].context === '' && /✗ Тесты не прошли/.test(so1.verdict) && /FAIL test-x.mjs/.test(so1.log), JSON.stringify(so1));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await slashCmd('/signoff fail lint');
+    await wait(700);
+    const so2 = await ui(`document.querySelector('.signoff-verdict')?.textContent || ''`);
+    check('/signoff fail lint — failure на acme/demo', signoffCalls[1]?.fail === true && signoffCalls[1].context === 'lint' && /✓ signoff\/lint = failure на acme\/demo@abcdef1/.test(so2), `${JSON.stringify(signoffCalls[1])} ${so2}`);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`document.querySelector('#input').value = ''`);
+
+    console.log('\n[57] /privacy — куда уходят данные (N2, ADR 0098)');
+    await slashCmd('/privacy');
+    await wait(600);
+    const priv = await ui(`({ verdict: document.querySelector('.privacy-verdict')?.textContent || '', items: [...document.querySelectorAll('.privacy-finding')].map((f) => f.className + '|' + f.textContent), list: [...document.querySelectorAll('.privacy-checklist li')].map((l) => l.textContent) })`);
+    check('итог, находки по уровням и чек-лист', /Наружу: 1/.test(priv.verdict) && priv.items.length === 3 && /level-fail.*наружу.*OpenAI.*Выберите локальную/.test(priv.items[0]) && priv.list[0].startsWith('✗') && priv.list[1].startsWith('✓'), JSON.stringify(priv));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`document.querySelector('#input').value = ''`);
+
+    console.log('\n[58] Локальные модели в один клик (N4, ADR 0100)');
+    await ui(`document.querySelector('[data-panel=providers]').click()`);
+    await wait(800);
+    const loc = await ui(`({ items: [...document.querySelectorAll('.local-model')].map((i) => i.textContent), add: document.querySelectorAll('.local-add').length, hint: document.querySelector('.local-models-hint')?.textContent || '' })`);
+    check('найдены Ollama (2 модели, «Добавить») и LM Studio без моделей', loc.items.length === 2 && /Ollama.*2 моделей.*qwen3:8b/.test(loc.items[0]) && /нет моделей/.test(loc.items[1]) && loc.add === 1 && /текстовый протокол/.test(loc.hint), JSON.stringify(loc));
+    await ui(`document.querySelector('.local-add').click()`);
+    await wait(600);
+    check('«Добавить» — провайдер ollama', localAdds.length === 1 && localAdds[0].id === 'ollama', JSON.stringify(localAdds));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[59] /updates — обновления по риску и ветка с тестами (N6, ADR 0102)');
+    await slashCmd('/updates');
+    await wait(600);
+    const up0 = await ui(`document.querySelector('.updates-head')?.textContent || ''`);
+    check('отчёта нет — подсказка «Проверить сейчас»', /Проверить сейчас/.test(up0), up0);
+    await ui(`document.querySelector('.updates-scan').click()`);
+    await wait(500);
+    const up1 = await ui(`({ items: [...document.querySelectorAll('.updates-item')].map((i) => i.textContent), picks: document.querySelectorAll('.updates-pick').length, disabled: document.querySelector('.updates-apply').disabled })`);
+    check('уязвимость высокого риска первой; выбрать можно только обновление npm', up1.items.length === 2 && /высокий.*уязвимость: tar/.test(up1.items[0]) && /openai 6.49.0 → 6.50.0/.test(up1.items[1]) && up1.picks === 1 && up1.disabled, JSON.stringify(up1));
+    await ui(`(() => { const c = document.querySelector('.updates-pick'); c.checked = true; c.dispatchEvent(new Event('change')); document.querySelector('.updates-apply').click(); })()`);
+    await wait(600);
+    const up2 = await ui(`document.querySelector('.updates-result')?.textContent || ''`);
+    check('«Обновить на ветке» — openai@6.50.0, тесты прошли, проект не тронут', updateApplies[0]?.packages?.[0]?.name === 'openai' && updateApplies[0].packages[0].version === '6.50.0' && /✓ Стабильно: ветка mai\/update-deps/.test(up2) && /\/worktree/.test(up2), `${JSON.stringify(updateApplies)} ${up2}`);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`document.querySelector('#input').value = ''`);
+
+    console.log('\n[60] /cleanup — освободить место (N7, ADR 0103)');
+    await slashCmd('/cleanup');
+    await wait(600);
+    const cl = await ui(`({ status: document.querySelector('.cleanup-status')?.textContent || '', picks: document.querySelectorAll('.cleanup-pick').length, readonly: document.querySelectorAll('.cleanup-item.readonly').length, total: document.querySelector('.cleanup-total')?.textContent || '' })`);
+    check('стабильная версия, удаляемое отмечено, worktree — только показан', /стабильно/.test(cl.status) && cl.picks === 2 && cl.readonly === 1 && /освободится 3,0 МБ/.test(cl.total), JSON.stringify(cl));
+    await ui(`(() => { const c = document.querySelectorAll('.cleanup-pick')[1]; c.checked = false; c.dispatchEvent(new Event('change')); document.querySelector('.cleanup-apply').click(); })()`);
+    await wait(600);
+    check('удаляется только отмеченное', cleanupCalls.length === 1 && cleanupCalls[0].length === 1 && /impeccable-4.8.1/.test(cleanupCalls[0][0]), JSON.stringify(cleanupCalls));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`document.querySelector('#input').value = ''`);
+
+    check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

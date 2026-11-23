@@ -83,3 +83,79 @@ export function listChanges(projectDir) {
 export function taskMarker(changeName, taskId) {
   return `<!-- openspec:${changeName}:${taskId} -->`;
 }
+
+/** Маркер из описания задачи Multica → { change, taskId } или null. */
+export function parseTaskMarker(text) {
+  const match = /<!--\s*openspec:([^:\s]+):([^\s]+?)\s*-->/.exec(String(text || ''));
+  return match ? { change: match[1], taskId: match[2] } : null;
+}
+
+const DONE = /^(done|completed|complete|closed|resolved)$/i;
+const CANCELLED = /^(cancel+ed|canceled|wontfix|duplicate)$/i;
+
+/**
+ * Статусы задач Multica → обновления tasks.md (F14, ADR 0089).
+ * Только задачи с маркером OpenSpec. «Готово» → [x]; отменённые и прочие
+ * статусы галочку не ставят (о них — в отчёте).
+ */
+export function statusUpdatesFromIssues(issues = []) {
+  const updates = [];
+  const cancelled = [];
+  for (const issue of issues || []) {
+    const marker = parseTaskMarker(issue?.description);
+    if (!marker) continue;
+    const status = String(issue.status || '').trim();
+    if (DONE.test(status)) updates.push({ ...marker, done: true, issue: issue.key || issue.id || '' });
+    else if (CANCELLED.test(status)) cancelled.push({ ...marker, issue: issue.key || issue.id || '' });
+  }
+  return { updates, cancelled };
+}
+
+/**
+ * Применить галочки к tasks.md: задача ищется по id (как в listChanges), а не
+ * по номеру строки — строки могли сдвинуться. Запись — через временный файл,
+ * переводы строк сохраняются. Возвращает { marked, already, missing }.
+ */
+export function applyTaskStatuses(projectDir, updates = [], { dryRun = false } = {}) {
+  const report = { marked: [], already: [], missing: [] };
+  const byChange = new Map();
+  for (const u of updates) {
+    if (!byChange.has(u.change)) byChange.set(u.change, []);
+    byChange.get(u.change).push(u);
+  }
+  const changes = new Map(listChanges(projectDir).map((c) => [c.name, c]));
+  for (const [name, list] of byChange) {
+    const change = changes.get(name);
+    if (!change) {
+      for (const u of list) report.missing.push(`${name}:${u.taskId}`);
+      continue;
+    }
+    const file = path.join(change.dir, 'tasks.md');
+    const raw = fs.readFileSync(file, 'utf8');
+    const eol = raw.includes('\r\n') ? '\r\n' : '\n';
+    const lines = raw.split(/\r?\n/);
+    let dirty = false;
+    for (const u of list) {
+      const task = change.tasks.find((t) => t.id === u.taskId);
+      if (!task) {
+        report.missing.push(`${name}:${u.taskId}`);
+        continue;
+      }
+      const label = `${name}: ${task.text}${u.issue ? ` (${u.issue})` : ''}`;
+      if (task.done === Boolean(u.done)) {
+        report.already.push(label);
+        continue;
+      }
+      const index = task.line - 1;
+      lines[index] = lines[index].replace(/\[( |x|X)\]/, u.done ? '[x]' : '[ ]');
+      report.marked.push(label);
+      dirty = true;
+    }
+    if (dirty && !dryRun) {
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, lines.join(eol), 'utf8');
+      fs.renameSync(tmp, file);
+    }
+  }
+  return report;
+}

@@ -25,6 +25,8 @@ const DEFAULTS = {
   autoDiagnostics: false,
   // Инструкции других агентов (CC4.6): CLAUDE.md, GEMINI.md, правила Cursor и Copilot.
   compatInstructions: true,
+  // «Запомнить?» после прогона с правками (F4): модель предлагает урок для памяти.
+  suggestMemory: true,
   // Уведомления (CW5.4): на рабочем столе и в мессенджер через webhook.
   notifications: { enabled: true, desktop: ['done', 'approval', 'question', 'error', 'background', 'scheduled'], channels: [] },
   // Отложенные инструменты (CC1.12): больше стольких MCP/плагинов — схемы по запросу (0 — никогда).
@@ -42,6 +44,8 @@ const DEFAULTS = {
   providers: {},
   runtimes: {},
   infra: {
+    // Автосинхронизация артефактов с Postgres/SeaweedFS (F12): выключена по умолчанию.
+    autoSync: false,
     enabled: false,
     postgresUrl: 'postgres://mai:mai@127.0.0.1:5433/mai',
     vaultAddr: 'http://127.0.0.1:8200',
@@ -67,6 +71,16 @@ const DEFAULTS = {
     command: 'multica',
   },
   // Локальный MAS: распознавание речи для кнопки микрофона.
+  // Чистильщик (N7): дни стабильной работы версии и возраст файлов.
+  cleaner: { stableDays: 3, previousDays: 14, outputDays: 7 },
+  // Сканер обновлений (N6): раз в intervalHours после запуска.
+  updateScan: { enabled: true, intervalHours: 24, releasesRepo: 'crruton/MAI' },
+  // Фильтр секретов в запросах к модели (N3): mask | warn | block | off.
+  secretFilter: 'mask',
+  // Оболочка команд агента (F26): auto — cmd.exe на Windows, $SHELL (bash/zsh) или sh.
+  shell: 'auto',
+  // Голосовой ввод (F18): движок mas (локально) или provider (audio/transcriptions).
+  voice: { engine: 'mas', model: '', language: 'ru' },
   mas: {
     enabled: true,
     url: 'http://127.0.0.1:8765',

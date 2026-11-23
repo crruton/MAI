@@ -1,19 +1,11 @@
+import { killTree as killProcessTree } from './proc.js';
 import { spawn } from 'node:child_process';
 import { createOutputDecoder, withUtf8Console } from './encoding.js';
 
 const MAX_LOG = 200_000;
 
-function killTree(child) {
-  try {
-    if (process.platform === 'win32' && child.pid) {
-      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
-    } else {
-      child.kill('SIGTERM');
-    }
-  } catch {
-    /* уже завершился */
-  }
-}
+/** Остановка вместе с потомками (F26): общая реализация в proc.js. */
+const killTree = (child) => killProcessTree(child);
 
 /**
  * Запускает стадию деплоя как обычную shell-команду.
@@ -31,6 +23,8 @@ export function runStage({ projectDir, command, onData, onExit }) {
     cwd: projectDir,
     shell: true,
     windowsHide: true,
+    // macOS/Linux: своя группа процессов — «Стоп» останавливает и потомков (F26).
+    detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', TERM: 'dumb' },
   });

@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { removeTree } from './remove-tree.js';
 
 export const MANIFEST = 'mai-package.json';
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
@@ -103,11 +104,18 @@ export function packageDirs(packages, kind) {
     .map((p) => ({ source: `package:${p.name}`, dir: path.join(p.dir, kind) }));
 }
 
+/** `${MAI_PACKAGE_DIR}` в командах хуков → папка пакета в кавычках (N5): скрипт хука лежит в пакете. */
+export function expandPackageDir(config, dir) {
+  const quoted = `"${dir}"`;
+  const walk = (v) => (typeof v === 'string' ? v.replace(/"?\$\{MAI_PACKAGE_DIR\}([^"\s]*)"?/g, (_, rest) => `"${path.join(dir, rest.replace(/^[\\/]/, ''))}"`).replace(/\$MAI_PACKAGE_DIR\b/g, quoted) : Array.isArray(v) ? v.map(walk) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v);
+  return walk(config);
+}
+
 /** Хуки включённых пакетов: [{ source, config }]. */
 export function packageHooks(packages) {
   return (packages || [])
     .filter((p) => p.enabled && p.parts?.hooks)
-    .map((p) => ({ source: `package:${p.name}`, config: readJson(path.join(p.dir, 'hooks.json')) || {} }));
+    .map((p) => ({ source: `package:${p.name}`, config: expandPackageDir(readJson(path.join(p.dir, 'hooks.json')) || {}, p.dir) }));
 }
 
 /** MCP-серверы включённых пакетов: имя сервера → конфигурация, `cwd` по умолчанию — папка пакета. */
@@ -165,13 +173,13 @@ export function installPackage({ from, dataDir, replace = false, git = 'git', re
     const target = path.join(dataDir, 'packages', pkg.name);
     if (fs.existsSync(target)) {
       if (!replace) throw new Error(`Пакет «${pkg.name}» уже установлен`);
-      fs.rmSync(target, { recursive: true, force: true });
+      removeTree(target);
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     copyPackage(dir, target);
     return readPackage(target, 'global');
   } finally {
-    if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+    if (tempDir) removeTree(tempDir);
   }
 }
 
@@ -179,6 +187,6 @@ export function uninstallPackage({ name, dataDir }) {
   if (!NAME_RE.test(String(name || ''))) throw new Error('Неверное имя пакета');
   const target = path.join(dataDir, 'packages', name);
   if (!fs.existsSync(path.join(target, MANIFEST))) throw new Error(`Пакет «${name}» не установлен глобально`);
-  fs.rmSync(target, { recursive: true, force: true });
+  removeTree(target);
   return true;
 }

@@ -1,0 +1,6 @@
+{
+  "name": "impeccable-check",
+  "version": "1.0.0",
+  "description": "После правок UI-файлов проверяет частые ошибки интерфейса (по мотивам impeccable) и сообщает агенту находки",
+  "author": "MAI Code"
+}

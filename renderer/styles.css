@@ -871,3 +871,36 @@ button { cursor: pointer; }
 /* Каналы уведомлений (CW5.4) */
 .notify-channels { display: grid; gap: 8px; }
 .notify-channel { border: 1px solid var(--border); border-radius: 8px; padding: 8px; display: grid; gap: 6px; }
+
+/* «Запомнить?» (F4) */
+.memory-suggest { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 auto 8px; max-width: 880px; width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elev); font-size: 13px; }
+.memory-suggest-text { flex: 1; min-width: 200px; }
+
+/* Голосовой ввод: ошибка на кнопке и повтор (F18) */
+.mic.error { color: var(--red, #e5484d); border-color: var(--red, #e5484d); }
+.mic-retry { font-size: 14px; }
+
+/* Экран «только вход» — корпоративный режим (F21) */
+.login-only { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; background: var(--bg); }
+.login-only-card { width: min(420px, calc(100vw - 32px)); display: grid; gap: 10px; padding: 28px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-elev); text-align: center; }
+.login-only-card h1 { margin: 0; font-size: 22px; }
+.login-only-card p { margin: 0; }
+
+/* Границы данных (N2) */
+.privacy-findings { display: grid; gap: 8px; margin: 8px 0 12px; }
+.privacy-finding { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.privacy-finding.level-fail { border-color: var(--red, #e5484d); }
+.privacy-title { font-weight: 500; }
+.privacy-checklist { margin: 6px 0 0; padding-left: 0; list-style: none; display: grid; gap: 4px; }
+.privacy-checklist li.no { color: var(--text-muted); }
+
+/* Обновления (N6) */
+.updates-list { display: grid; gap: 6px; margin: 8px 0; max-height: 50vh; overflow: auto; }
+.updates-item { display: flex; gap: 8px; align-items: flex-start; }
+.updates-item.risk-high { border-left: 3px solid var(--red, #e5484d); }
+.updates-result { max-height: 30vh; overflow: auto; }
+
+/* Чистильщик (N7) */
+.cleanup-list { display: grid; gap: 6px; max-height: 50vh; overflow: auto; margin: 8px 0; }
+.cleanup-item { display: flex; gap: 8px; align-items: flex-start; }
+.cleanup-item.readonly { opacity: 0.75; }

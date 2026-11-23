@@ -12,7 +12,7 @@ import {
   supportsTemperature,
 } from './responses.js';
 import { fsTools } from './tools/fs.js';
-import { shellTools, backgroundTools } from './tools/shell.js';
+import { shellTools, backgroundTools, setShellPreference, currentShellLabel } from './tools/shell.js';
 import { skillTools } from './tools/skills.js';
 import { memoryTools } from './tools/memory.js';
 import { repowiseTools } from './tools/repowise.js';
@@ -21,6 +21,8 @@ import { browserTools } from './tools/browser.js';
 import { notebookTools } from './tools/notebook.js';
 import { diagnosticsTools } from './tools/diagnostics.js';
 import { pdfTools } from './tools/pdf.js';
+import { ocrTools } from './tools/ocr.js';
+import { ocrImage } from './ocr.js';
 import { runDiagnostics, formatDiagnostics } from './diagnostics.js';
 import { splitTools, deferredPrompt, searchTools, TOOL_SEARCH_SCHEMA } from './tool-search.js';
 import { webTools } from './tools/web.js';
@@ -37,6 +39,7 @@ import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
 import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DELAYS } from './retry.js';
 import { modelCapabilities, requestOptions, withCacheControl } from './capabilities.js';
 import { NO_TRACER } from './tracer.js';
+import { createSecretFilter, maskMessages, filterNotice } from './secret-filter.js';
 import { projectPrompt, connectorAllowed } from './projects.js';
 import { effectiveSandbox } from './shell-sandbox.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
@@ -85,11 +88,15 @@ const TASK_PROMPT = `Ты — MAI, помощник для рабочих зад
 /** Инструменты, скрытые в режиме «Задача»: про код и репозиторий. */
 export const CODE_ONLY_TOOLS = new Set(['diagnostics', 'repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search']);
 
-export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true, extraDirs = [], kind = 'code', compatInstructions = true }) {
+const OS_NAMES = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' };
+
+export function systemPrompt({ projectDir, skills, mcpStatus, mode, trusted = true, extraDirs = [], kind = 'code', compatInstructions = true, shell = '' }) {
   const agents = readAgents(projectDir);
   const memory = readMemory(projectDir);
   const task = kind === 'task';
   const parts = [task ? TASK_PROMPT : BASE_PROMPT, `\n${task ? 'Основная рабочая папка' : 'Рабочая папка проекта'}: ${projectDir}`];
+  // ОС и оболочка run_shell (F26): команды — в синтаксисе этой оболочки.
+  parts.push(`Система: ${OS_NAMES[process.platform] || process.platform}; оболочка run_shell: ${shell || currentShellLabel()}.`);
   const roots = describeRoots(normalizeRoots(projectDir, extraDirs));
   if (roots) parts.push(roots);
   parts.push(`\n${modePrompt(mode)}`);
@@ -205,6 +212,8 @@ function clientOptions(prov, { maxRetries = 0 } = {}) {
 
 /** Один ответ модели без потока: chat.completions, при отказе — Responses API. */
 async function completeOnce(client, model, prompt, signal) {
+  // Побочные запросы (компакция, заголовок, «Запомнить?») секреты не видят никогда (N3).
+  prompt = createSecretFilter({ mode: 'mask' }).mask(String(prompt || ''));
   try {
     const res = await client.chat.completions.create(
       { model, messages: [{ role: 'user', content: prompt }], ...(supportsTemperature(model) ? { temperature: 0 } : {}) },
@@ -264,6 +273,34 @@ export async function suggestTitle({ provider, model, request, answer = '', sign
     'Придумай короткий заголовок (2–6 слов) для этого чата — о чём задача. Только заголовок, без кавычек и точки, на языке запроса.\n\n' +
     `Запрос: ${String(request || '').slice(0, 1500)}\n\nНачало ответа: ${String(answer || '').slice(0, 800)}`;
   return cleanTitle(await completeOnce(client, model, prompt, signal));
+}
+
+/** Ответ модели → строка урока или '' («НЕТ», пусто, слишком длинно). */
+export function cleanLesson(raw) {
+  const line = String(raw || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) || '';
+  const text = line
+    .replace(/^(урок|вывод|правило)\s*:\s*/i, '')
+    .replace(/^[-*•«"'\s]+/, '')
+    .replace(/[»"']+(?=[.!]?\s*$)/, '')
+    .replace(/[\s"']+$/, '')
+    .trim();
+  // \b в JS не работает с кириллицей — граница слова вручную.
+  if (!text || /^(нет|no|none)(?![a-zа-яё])/i.test(text) || /^—$/.test(text) || text.length > 240) return '';
+  return text;
+}
+
+/**
+ * «Запомнить?» (F4, ADR 0084): после работы с правками — есть ли устойчивый
+ * урок для памяти проекта. Одна строка или ''.
+ */
+export async function suggestLesson({ provider, model, request, actions = '', answer = '', signal, clientFactory = null }) {
+  const client = (clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider, { maxRetries: 1 }));
+  const prompt =
+    'Ты помогаешь вести память проекта (memory.md): короткие проверенные уроки, которые пригодятся в следующих задачах — правило проекта, рабочая команда, ' +
+    'неочевидное решение, ловушка. Не записывай то, что видно из кода, и детали одной задачи.\n' +
+    'Если в работе ниже есть такой урок — ответь одной строкой до 200 символов в повелительном наклонении. Если нет — ответь «НЕТ».\n\n' +
+    `Задача: ${String(request || '').slice(0, 1500)}\n\nДействия агента:\n${String(actions || '').slice(0, 2500)}\n\nИтог: ${String(answer || '').slice(0, 1200)}`;
+  return cleanLesson(await completeOnce(client, model, prompt, signal));
 }
 
 /** Разбор контекста для /context: системный промпт и инструменты как у агента. */
@@ -455,6 +492,9 @@ async function runAgentInner({
   // Изображения из вложений — только моделям, которые их принимают (бэклог F1).
   let useImages = caps.vision;
   let imageNoticeShown = false;
+  // Фильтр секретов в запросах (N3, ADR 0099): по умолчанию маскирует.
+  const secretFilter = createSecretFilter({ mode: settings.secretFilter || 'mask' });
+  let secretNotice = '';
   // usage в потоке chat.completions приходит только с stream_options (A3.8).
   // Шлюз, который этот параметр не знает, отвечает 400 — тогда выключаем.
   let streamUsage = true;
@@ -482,7 +522,7 @@ async function runAgentInner({
     getTaint: () => taint,
   };
 
-  const builtin = [...fsTools, ...notebookTools, ...diagnosticsTools, ...documentTools, ...pdfTools, ...shellTools, ...backgroundTools, ...(settings.webTools === false ? [] : webTools), ...(settings.browser ? browserTools : []), ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
+  const builtin = [...fsTools, ...notebookTools, ...diagnosticsTools, ...documentTools, ...pdfTools, ...ocrTools, ...shellTools, ...backgroundTools, ...(settings.webTools === false ? [] : webTools), ...(settings.browser ? browserTools : []), ...skillTools, ...memoryTools, ...repoTools, ...interactiveTools, ...todoTools].map((t) =>
     toolEntry(t.schema, { source: 'builtin', run: t.run, precheck: t.precheck, preview: t.preview, assess: t.assess }),
   );
   const builtinNames = new Set(builtin.map((t) => t.name));
@@ -777,6 +817,8 @@ async function runAgentInner({
       : null;
     // tools — что видит модель; allTools — что можно выполнить (вызов неподгруженного тоже сработает).
     const tools = searchEntry ? [...exposed, searchEntry] : exposed;
+    // Оболочка команд агента (F26, ADR 0096) — из настроек на каждый прогон.
+    setShellPreference(settings.shell);
     const system =
       systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs, kind, compatInstructions: settings.compatInstructions !== false }) +
       projectPrompt(project) +
@@ -830,8 +872,16 @@ async function runAgentInner({
         }
       }
       // Текстовый протокол: вызовы и результаты — текстом, инструменты — в системном промпте.
-      if (textTools) return [{ role: 'system', content: `${system}\n\n${textToolsPrompt(tools.map((t) => t.schema))}` }, ...toTextProtocol(api)];
-      return [{ role: 'system', content: system }, ...api];
+      const request = textTools ? [{ role: 'system', content: `${system}\n\n${textToolsPrompt(tools.map((t) => t.schema))}` }, ...toTextProtocol(api)] : [{ role: 'system', content: system }, ...api];
+      // Секреты — знаками [СКРЫТО:…] до отправки; уведомление — когда появились новые.
+      const masked = maskMessages(request, secretFilter);
+      const notice = filterNotice(secretFilter.found(), secretFilter.mode);
+      if (notice && notice !== secretNotice) {
+        secretNotice = notice;
+        if (secretFilter.mode === 'block') throw Object.assign(new Error(notice), { secretBlocked: true });
+        emit({ type: 'notice', text: notice });
+      }
+      return masked;
     };
 
     let content = '';
@@ -1177,6 +1227,8 @@ async function runAgentInner({
       renderPdf: settings.renderPdf,
       renderPng: settings.renderPng,
       browser: settings.browser || null,
+      // OCR (F19): тот же движок, что у кнопки вложения; настройки — из приложения.
+      ocr: settings.ocr?.enabled === false ? null : (filePath, opts = {}) => ocrImage({ filePath, ...opts, settings }),
       previewDir: settings.previewDir,
       // Защищённые ветки (CC11.6): по умолчанию main и master.
       protectedBranches: Array.isArray(settings.protectedBranches) ? settings.protectedBranches : undefined,
@@ -1188,7 +1240,8 @@ async function runAgentInner({
       skillDirs,
     };
     const execCall = async (call) => {
-      const args = parseArgs(call.function.arguments);
+      // Знаки [СКРЫТО:…] в аргументах — обратно в значения (N3): файл не испортится.
+      const args = parseArgs(secretFilter.unmask(call.function.arguments));
       let outcome;
       if (signal.aborted) {
         // Ответ на каждый tool_call обязателен, иначе следующий запрос получит 400.

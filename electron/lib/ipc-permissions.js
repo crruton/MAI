@@ -30,6 +30,9 @@ export const IPC_PERMISSIONS = {
   'mas:status': ANY,
   'mas:config': ANY,
   'mas:transcribe': ANY,
+  // Голосовой ввод с выбором движка (F18).
+  'voice:status': ANY,
+  'voice:transcribe': ANY,
   'ocr:status': ANY,
   'ocr:recognize': ANY,
 
@@ -53,6 +56,13 @@ export const IPC_PERMISSIONS = {
   'runtimes:save': ADMIN,
   'runtimes:probe': ANY,
   'runtimes:run': ADMIN,
+  // Экспорт и импорт рантаймов (F7).
+  'runtimes:export': ANY,
+  'runtimes:import': ADMIN,
+  // Агент схем: применение предложения (F10).
+  'boards:diagramApply': ADMIN,
+  // Калибратор архитектуры и PRD (F15).
+  'boards:calibrate': ADMIN,
   'runtimes:runMany': ADMIN,
   'runtimes:stop': ANY,
 
@@ -160,6 +170,22 @@ export const IPC_PERMISSIONS = {
   'multica:auth': ADMIN,
   'multica:issues': ANY,
   'multica:syncDocs': ADMIN,
+  // Статусы Multica → tasks.md (F14).
+  'multica:pullStatuses': ADMIN,
+  // Signoff: тесты и статус коммита в GitHub (N1).
+  'signoff:run': ADMIN,
+  // Отчёт «куда уходят данные» (N2): только чтение.
+  'privacy:report': ANY,
+  // Локальные модели (N4).
+  'localModels:detect': ANY,
+  'localModels:add': ADMIN,
+  // Сканер обновлений (N6): скан и отчёт — чтение; обновление на ветке — admin.
+  'updates:last': ANY,
+  'updates:scan': ANY,
+  'updates:apply': ADMIN,
+  // Чистильщик (N7): план — чтение, удаление — admin.
+  'cleanup:plan': ANY,
+  'cleanup:apply': ADMIN,
 
   // Docker-песочницы
   'sandbox:status': ANY,
@@ -253,6 +279,9 @@ export const IPC_PERMISSIONS = {
 
   // инфраструктура: секреты и загрузка файлов
   'infra:status': ANY,
+  // Автосинхронизация хранилища (F12).
+  'infra:syncStatus': ANY,
+  'infra:syncNow': ADMIN,
   'infra:sync': ADMIN,
   'infra:pushSecrets': ADMIN,
   'infra:pullSecrets': ADMIN,
@@ -272,6 +301,8 @@ export const IPC_PERMISSIONS = {
   'repowise:risk': ANY,
   'repowise:distill': ADMIN,
   'repowise:connectMcp': ADMIN,
+  // Перезапуск MCP-сервера repowise (F13).
+  'repowise:restartMcp': ADMIN,
   'repowise:serve': ADMIN,
   'repowise:stopServe': ADMIN,
 
@@ -293,19 +324,18 @@ export function permissionOf(channel) {
  * @param ipcMain   объект Electron
  * @param requireAdmin функция, которая бросает ошибку, если роль не admin
  * @param onUnknown вызывается для канала без записи в матрице
+ * @param sessionGate (channel) => '' | текст отказа — корпоративный режим без входа (F21)
  */
-export function guardIpc(ipcMain, requireAdmin, { onUnknown, onInvalid } = {}) {
+export function guardIpc(ipcMain, requireAdmin, { onUnknown, onInvalid, sessionGate = null } = {}) {
   const original = ipcMain.handle.bind(ipcMain);
   ipcMain.handle = (channel, handler) => {
     if (!Object.hasOwn(IPC_PERMISSIONS, channel)) onUnknown?.(channel);
     const permission = permissionOf(channel);
     return original(channel, (event, ...args) => {
-      // Схема данных (Q7, ADR 0060): окно может прислать что угодно — проверяем до обработчика.
-      const invalid = validateIpc(channel, args);
-      if (invalid) {
-        onInvalid?.(channel, invalid);
-        return { ok: false, invalid: true, error: `Неверные данные для ${channel}: ${invalid}` };
-      }
+      // Корпоративный режим (F21, ADR 0093): без входа — только каналы экрана входа.
+      const gate = sessionGate?.(channel);
+      if (gate) return { ok: false, forbidden: true, needsLogin: true, error: gate };
+      // Право зависит только от канала, поэтому проверяется до разбора данных.
       if (permission === ADMIN) {
         try {
           requireAdmin();
@@ -314,6 +344,12 @@ export function guardIpc(ipcMain, requireAdmin, { onUnknown, onInvalid } = {}) {
           // и не остаётся в состоянии «выполняется».
           return { ok: false, forbidden: true, error: err?.message || 'Недостаточно прав' };
         }
+      }
+      // Схема данных (Q7, ADR 0060): окно может прислать что угодно — проверяем до обработчика.
+      const invalid = validateIpc(channel, args);
+      if (invalid) {
+        onInvalid?.(channel, invalid);
+        return { ok: false, invalid: true, error: `Неверные данные для ${channel}: ${invalid}` };
       }
       return handler(event, ...args);
     });

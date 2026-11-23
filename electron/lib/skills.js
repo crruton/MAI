@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { dataDir } from './config.js';
+import { removeTree } from './remove-tree.js';
 
 function parseFrontmatter(raw) {
   const text = String(raw || '').replace(/^\uFEFF/, '');
@@ -105,16 +106,50 @@ function copyTree(from, to) {
   }
 }
 
-export function installBundledSkills(sourceDir) {
+/** version из frontmatter SKILL.md или ''. */
+export function skillVersion(dir) {
+  try {
+    return /^version:\s*["']?([\w.+-]+)/m.exec(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8'))?.[1] || '';
+  } catch {
+    return '';
+  }
+}
+
+/** -1, 0, 1 по числам версии; '' — меньше любой. */
+export function compareSkillVersions(a, b) {
+  const pa = String(a || '0').split(/[-+]/)[0].split('.').map(Number);
+  const pb = String(b || '0').split(/[-+]/)[0].split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+/**
+ * Встроенные навыки → папка данных. Новый — копируется. Уже установленный
+ * обновляется, только если во встроенном version новее (N5, ADR 0101); прежняя
+ * копия (возможно, с вашими правками) уходит в skills/.previous/<имя>-<версия>.
+ * Возвращает число установленных и обновлённых.
+ */
+export function installBundledSkills(sourceDir, { target = path.join(dataDir(), 'skills') } = {}) {
   if (!sourceDir || !fs.existsSync(sourceDir)) return 0;
-  const target = path.join(dataDir(), 'skills');
   fs.mkdirSync(target, { recursive: true });
   let installed = 0;
   for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
+    const from = path.join(sourceDir, entry.name);
     const to = path.join(target, entry.name);
-    if (fs.existsSync(to)) continue;
-    copyTree(path.join(sourceDir, entry.name), to);
+    if (fs.existsSync(to)) {
+      const have = skillVersion(to);
+      const bundled = skillVersion(from);
+      if (!bundled || compareSkillVersions(bundled, have) <= 0) continue;
+      const backup = path.join(target, '.previous', `${entry.name}-${have || 'без-версии'}`);
+      removeTree(backup);
+      fs.mkdirSync(path.dirname(backup), { recursive: true });
+      fs.renameSync(to, backup);
+    }
+    copyTree(from, to);
     installed += 1;
   }
   return installed;
@@ -140,7 +175,7 @@ export function createSkill(projectDir, { name, description, body, scope = 'proj
 
 export function deleteSkill(file) {
   const dir = path.dirname(file);
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTree(dir);
   return true;
 }
 

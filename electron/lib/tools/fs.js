@@ -157,7 +157,7 @@ export const fsTools = [
       // Картинка (CC1.3): модель со зрением получит её следующим сообщением.
       if (IMAGE_EXT.has(ext)) {
         if (stat.size > IMAGE_LIMITS.perImageBytes) return `Изображение слишком большое для модели: ${file} (${stat.size} байт, предел ${IMAGE_LIMITS.perImageBytes})`;
-        if (typeof ctx.vision === 'function' && !ctx.vision()) return `Текущая модель не принимает изображения: ${file}. Текст на картинке можно распознать OCR или выбрать модель со зрением.`;
+        if (typeof ctx.vision === 'function' && !ctx.vision()) return `Текущая модель не принимает изображения: ${file}. Текст на картинке распознаёт инструмент ocr, или выберите модель со зрением.`;
         return `Изображение ${file} (${stat.size} байт) — показано модели следующим сообщением.`;
       }
       // Ноутбук Jupyter (CC1.10): по ячейкам, правка — notebook_edit.
@@ -175,7 +175,7 @@ export const fsTools = [
       if (ext === '.pdf') {
         if (stat.size > 50 * 1024 * 1024) throw new Error(`PDF слишком большой: ${stat.size} байт`);
         const text = extractPdf(fs.readFileSync(file));
-        if (!text.trim()) return `PDF ${file}: текст не извлечён — похоже на скан. Распознать можно OCR.`;
+        if (!text.trim()) return `PDF ${file}: текст не извлечён — похоже на скан. Распознай инструментом ocr.`;
         const lines = text.split(/\r?\n/);
         const start = Math.max(0, (args.offset || 1) - 1);
         const end = args.limit ? start + args.limit : lines.length;

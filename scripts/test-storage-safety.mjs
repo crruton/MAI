@@ -7,7 +7,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadBoards, saveBoards, saveBoardSection } from '../electron/lib/boards.js';
-import { writeArtifact, deleteArtifact, listArtifacts, gcBlobs, withIndexLock, artifactsRoot } from '../electron/lib/artifacts.js';
+import { applyDiagram, modelHash } from '../electron/lib/diagram-agent.js';
+import { onArtifactWrite, writeArtifact, deleteArtifact, listArtifacts, gcBlobs, withIndexLock, artifactsRoot } from '../electron/lib/artifacts.js';
 
 let pass = 0;
 let fail = 0;
@@ -76,6 +77,77 @@ const worker = () =>
 const [r1, r2] = await Promise.all([worker(), worker()]);
 check('оба процесса без ошибок', r1.code === 0 && r2.code === 0, r1.err + r2.err);
 check('ни одно обновление не потеряно (200)', JSON.parse(fs.readFileSync(counter, 'utf8')).n === 200, fs.readFileSync(counter, 'utf8'));
+
+console.log('[4] агент схем: изменения только по «Применить» (F10, ADR 0086)');
+{
+  const data = loadBoards(project);
+  const before = JSON.parse(JSON.stringify(data.architecture?.model || {}));
+  const base = modelHash(before);
+  const sectionKey = Object.keys(before).find((k) => typeof before[k] === 'object') || 'containers';
+  const proposal = { ...before, [sectionKey]: Array.isArray(before[sectionKey]) ? [...before[sectionKey], { id: 'redis', name: 'Redis' }] : { ...(before[sectionKey] || {}), redis: { name: 'Redis' } } };
+  const res = applyDiagram({ projectDir: project, proposal, baseHash: base });
+  check('применение с верным отпечатком — модель записана, схемы пересобраны', res.ok && JSON.stringify(loadBoards(project).architecture.model[sectionKey]).includes('Redis') && res.views?.views, JSON.stringify(Object.keys(res)));
+  let err = '';
+  try {
+    applyDiagram({ projectDir: project, proposal: before, baseHash: base });
+  } catch (e) {
+    err = e.message;
+  }
+  check('модель изменилась после предложения — отказ', /Модель изменилась/.test(err), err);
+  err = '';
+  try {
+    applyDiagram({ projectDir: project, proposal: { nope: 1 }, baseHash: modelHash(loadBoards(project).architecture.model) });
+  } catch (e) {
+    err = e.message;
+  }
+  check('пустая модель не применяется', /ни одного раздела/.test(err), err);
+}
+
+console.log('[5] запись артефакта → автосинхронизация (F12, ADR 0087)');
+{
+  const seen = [];
+  const off = onArtifactWrite((projectDir, a) => seen.push(`${projectDir === project}:${a.id}`));
+  writeArtifact(project, { kind: 'note', name: 'Синк', content: 'v1' });
+  writeArtifact(project, { kind: 'note', name: 'Синк', content: 'v1' });
+  writeArtifact(project, { kind: 'note', name: 'Синк', content: 'v2' });
+  check('уведомление на новые версии, не на повтор', seen.length === 2 && seen.every((x) => x.startsWith('true:note:')), seen.join());
+  off();
+  writeArtifact(project, { kind: 'note', name: 'Синк', content: 'v3' });
+  check('отписка работает', seen.length === 2);
+  const off2 = onArtifactWrite(() => {
+    throw new Error('слушатель упал');
+  });
+  let ok = true;
+  try {
+    writeArtifact(project, { kind: 'note', name: 'Синк', content: 'v4' });
+  } catch {
+    ok = false;
+  }
+  off2();
+  check('упавший слушатель не ломает запись', ok);
+}
+
+console.log('[6] встроенные навыки: обновление по версии (N5, ADR 0101)');
+{
+  const { installBundledSkills, skillVersion, compareSkillVersions } = await import('../electron/lib/skills.js');
+  check('версии сравниваются по числам', compareSkillVersions('4.10.0', '4.8.1') === 1 && compareSkillVersions('', '1.0') === -1 && compareSkillVersions('1.0', '1.0.0') === 0);
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-bundled-'));
+  const dst = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-skills-'));
+  const skill = (dir, name, version, body) => {
+    fs.mkdirSync(path.join(dir, name), { recursive: true });
+    fs.writeFileSync(path.join(dir, name, 'SKILL.md'), `---\nname: ${name}\n${version ? `version: ${version}\n` : ''}---\n${body}\n`);
+  };
+  skill(src, 'impeccable', '4.10.0', 'новая');
+  skill(src, 'handoff', '', 'встроенный');
+  skill(dst, 'impeccable', '4.8.1', 'старая с моей правкой');
+  skill(dst, 'handoff', '', 'мой');
+  check('обновлён один навык (новее), handoff без версии — не тронут', installBundledSkills(src, { target: dst }) === 1 && skillVersion(path.join(dst, 'impeccable')) === '4.10.0' && /мой/.test(fs.readFileSync(path.join(dst, 'handoff', 'SKILL.md'), 'utf8')));
+  check('прежняя копия — в .previous/impeccable-4.8.1', /моей правкой/.test(fs.readFileSync(path.join(dst, '.previous', 'impeccable-4.8.1', 'SKILL.md'), 'utf8')));
+  check('повторно — ничего', installBundledSkills(src, { target: dst }) === 0);
+  check('настоящий встроенный impeccable — 4.10.0, без путей .claude/', skillVersion(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'impeccable')) === '4.10.0' && !fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'impeccable', 'SKILL.md'), 'utf8').includes('.claude/skills/impeccable'));
+  fs.rmSync(src, { recursive: true, force: true });
+  fs.rmSync(dst, { recursive: true, force: true });
+}
 
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);

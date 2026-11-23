@@ -1,3 +1,4 @@
+import { createSecretFilter, maskMessages } from './secret-filter.js';
 /**
  * Ревизор: вторая модель проверяет финальный ответ агента.
  *
@@ -67,8 +68,8 @@ export async function reviewAnswer({ client, model, task, answer, signal, temper
     },
   ];
   const response = await client.chat.completions.create(
-    // temperature — только если модель её принимает (ADR 0058).
-    { model, messages, ...(extra || { temperature }), max_tokens: 900 },
+    // temperature — только если модель её принимает (ADR 0058); секреты — знаками (N3).
+    { model, messages: maskMessages(messages, createSecretFilter({ mode: 'mask' })), ...(extra || { temperature }), max_tokens: 900 },
     { signal },
   );
   const raw = response.choices?.[0]?.message?.content || '';

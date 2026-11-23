@@ -484,3 +484,18 @@ table.grid td .mono { font-size: 11.5px; }
 .agent-msg.user { background: var(--accent-soft); }
 .agent-role { margin-bottom: 4px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); }
 .agent-text { white-space: pre-wrap; font-size: 13px; line-height: 1.45; }
+
+/* Предложение агента схем (F10) */
+.diagram-proposal { margin-top: 8px; display: grid; gap: 6px; }
+.diagram-proposal .diff-box { max-height: 260px; overflow: auto; font-family: var(--mono); font-size: 11.5px; border: 1px solid var(--border); border-radius: 8px; padding: 4px 0; }
+.diagram-proposal .diff-line { white-space: pre; padding: 0 8px; }
+.diagram-proposal .diff-add { background: var(--green-soft); }
+.diagram-proposal .diff-del { background: var(--red-soft); }
+.diagram-proposal .diff-hunk { color: var(--text-faint); }
+
+/* Калибровка архитектуры (F15) */
+.calibration-summary { margin: 0 0 8px; }
+.calibration-diff { margin: 0 0 8px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.calibration-table .sub { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+.calibration-error { margin: 0 0 10px; display: flex; gap: 8px; align-items: center; }
+.calibration-log { margin-top: 10px; }

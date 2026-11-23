@@ -1,0 +1,348 @@
+<title>MAI Code — новое главное окно</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Прототип N9: главное окно — боковая панель чатов, шапка с «Кто выполняет» и двумя меню, чип хода в строке ввода. */
+:root {
+  --bg: #0f1117; --bg-elev: #161922; --bg-elev-2: #1c2030; --border: #262b3b; --border-soft: #1f2433;
+  --text: #e8eaf2; --text-dim: #9aa1b5; --text-faint: #858ca0; --accent: #7c5cff; --accent-2: #9b85ff;
+  --accent-soft: rgba(124, 92, 255, 0.14); --green: #34d399; --red: #f87171; --amber: #fbbf24; --hover: #1d2230;
+  --note: #2a2340; --note-fg: #d9ccff;
+  --font: 'Inter', 'Segoe UI', system-ui, sans-serif; --mono: 'JetBrains Mono', Consolas, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f6f7fb; --bg-elev: #ffffff; --bg-elev-2: #eef0f6; --border: #d9dce6; --border-soft: #e6e8ef;
+    --text: #1b1f2c; --text-dim: #4b5266; --text-faint: #5f6678; --accent: #5b3ee0; --accent-2: #4a2ed6;
+    --accent-soft: rgba(91, 62, 224, 0.1); --green: #0f8a5f; --red: #c62828; --amber: #a16207; --hover: #e9ebf2;
+    --note: #efe9ff; --note-fg: #3d2a9e; color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f6f7fb; --bg-elev: #ffffff; --bg-elev-2: #eef0f6; --border: #d9dce6; --border-soft: #e6e8ef;
+  --text: #1b1f2c; --text-dim: #4b5266; --text-faint: #5f6678; --accent: #5b3ee0; --accent-2: #4a2ed6;
+  --accent-soft: rgba(91, 62, 224, 0.1); --green: #0f8a5f; --red: #c62828; --amber: #a16207; --hover: #e9ebf2;
+  --note: #efe9ff; --note-fg: #3d2a9e; color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; margin: 0; }
+.page { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 20px 40px; max-width: 1280px; margin: 0 auto; display: grid; gap: 16px; }
+h1 { font-size: 20px; margin: 0; text-wrap: balance; }
+.lead { color: var(--text-dim); margin: 4px 0 0; max-width: 72ch; line-height: 1.5; }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn { background: transparent; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.ghost { border-color: transparent; }
+
+/* Окно приложения */
+.app { display: grid; grid-template-columns: 240px minmax(0, 1fr); height: 620px; border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--bg); position: relative; }
+.side { background: var(--bg-elev); border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; padding: 12px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.logo { width: 26px; height: 26px; border-radius: 8px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; }
+.search { width: 100%; background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; color: var(--text); }
+.chats { display: grid; gap: 2px; overflow: auto; flex: 1; }
+.chat { text-align: left; background: none; border: 0; border-radius: 8px; padding: 7px 8px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat.active { background: var(--accent-soft); color: var(--text); }
+.chat:hover { background: var(--hover); }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); padding: 4px 8px 0; }
+.project { display: flex; align-items: center; gap: 8px; width: 100%; background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; text-align: left; }
+.project .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex: none; }
+
+.main { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; }
+.top { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.runner { display: flex; align-items: center; gap: 8px; background: var(--bg-elev-2); border: 1px solid var(--border); border-radius: 10px; padding: 6px 10px; }
+.runner small { color: var(--text-faint); }
+.grow { flex: 1; }
+.gear { position: relative; }
+.badge-dot { position: absolute; top: 3px; right: 3px; width: 8px; height: 8px; border-radius: 50%; background: var(--red); border: 2px solid var(--bg); }
+
+.messages { padding: 18px; overflow: auto; display: grid; align-content: start; gap: 12px; }
+.msg { max-width: 68ch; line-height: 1.5; }
+.msg.user { justify-self: end; background: var(--accent-soft); padding: 8px 12px; border-radius: 12px; }
+.tool { font-family: var(--mono); font-size: 12px; color: var(--text-dim); background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: 8px; padding: 6px 10px; }
+
+.composer-wrap { padding: 10px 14px 12px; display: grid; gap: 6px; }
+.composer { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 14px; padding: 10px 10px 8px 14px; display: grid; gap: 8px; }
+.composer textarea { background: none; border: 0; resize: none; color: var(--text); font: inherit; min-height: 40px; outline: none; }
+.row { display: flex; align-items: center; gap: 6px; }
+.icon { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border); background: transparent; display: grid; place-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; background: var(--bg-elev-2); color: var(--text-dim); }
+.chip b { color: var(--text); font-weight: 500; }
+.send { width: 34px; height: 34px; border-radius: 10px; border: 0; background: var(--accent); color: #fff; }
+.status { font-size: 12px; color: var(--text-faint); display: flex; gap: 10px; flex-wrap: wrap; padding: 0 4px; }
+.status button { background: none; border: 0; padding: 0; color: var(--text-dim); text-decoration: underline dotted; }
+
+/* Меню и окна */
+.pop { position: absolute; z-index: 20; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px; padding: 6px; min-width: 240px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35); display: grid; gap: 2px; }
+.pop .item { display: flex; gap: 10px; align-items: baseline; text-align: left; background: none; border: 0; border-radius: 8px; padding: 7px 10px; }
+.pop .item:hover, .pop .item.sel { background: var(--hover); }
+.pop .item small { color: var(--text-faint); margin-left: auto; font-family: var(--mono); font-size: 11px; }
+.pop .sep { height: 1px; background: var(--border-soft); margin: 4px 0; }
+.pop .group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); padding: 6px 10px 2px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: none; padding: 5px 10px; color: var(--text-dim); }
+.seg button.on { background: var(--accent-soft); color: var(--text); }
+.field { display: grid; gap: 4px; padding: 6px 10px; }
+.field span { font-size: 12px; color: var(--text-faint); }
+
+.overlay { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); display: grid; place-items: start center; padding-top: 60px; z-index: 30; }
+.palette { width: min(560px, calc(100% - 32px)); background: var(--bg-elev); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.palette input { width: 100%; background: none; border: 0; border-bottom: 1px solid var(--border); padding: 12px 14px; color: var(--text); font: inherit; font-size: 15px; outline: none; }
+.palette .list { max-height: 320px; overflow: auto; padding: 6px; display: grid; gap: 2px; }
+.settings { width: min(760px, calc(100% - 32px)); height: 460px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 14px; display: grid; grid-template-columns: 200px minmax(0, 1fr); overflow: hidden; }
+.tabs { border-right: 1px solid var(--border); padding: 10px; display: grid; align-content: start; gap: 2px; }
+.tab { text-align: left; background: none; border: 0; border-radius: 8px; padding: 7px 10px; color: var(--text-dim); display: flex; justify-content: space-between; }
+.tab.on { background: var(--accent-soft); color: var(--text); }
+.pane { padding: 16px 18px; overflow: auto; display: grid; align-content: start; gap: 10px; }
+.pane h3 { margin: 0; font-size: 15px; }
+.card { border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px 12px; display: grid; gap: 4px; }
+.pill { display: inline-block; font-size: 11px; border-radius: 999px; padding: 1px 8px; border: 1px solid currentColor; }
+.pill.red { color: var(--red); } .pill.amber { color: var(--amber); } .pill.green { color: var(--green); }
+.muted { color: var(--text-faint); }
+
+/* Что изменилось */
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.note { background: var(--note); color: var(--note-fg); border-radius: 10px; padding: 10px 12px; line-height: 1.45; }
+.note b { display: block; margin-bottom: 2px; }
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .side { display: none; }
+  .settings { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .tabs { border-right: 0; border-bottom: 1px solid var(--border); grid-auto-flow: column; overflow-x: auto; }
+}
+@media (prefers-reduced-motion: no-preference) { .pop, .palette, .settings { animation: up 0.12s ease-out; } @keyframes up { from { transform: translateY(4px); opacity: 0.6; } } }
+</style>
+
+<div class="page">
+  <div>
+    <h1>MAI Code — новое главное окно (прототип N9)</h1>
+    <p class="lead">Кликабельный макет по решениям гриллинга. Нажмите «Кто выполняет», «Проект», «Подключения», ⚙, чип в строке ввода или Ctrl+K. Код приложения ещё не менялся — сначала согласуем.</p>
+  </div>
+
+  <div class="app" id="app">
+    <aside class="side">
+      <div class="brand"><span class="logo">M</span> MAI Code</div>
+      <button class="btn primary" type="button">＋ Новый чат</button>
+      <input class="search" id="chat-search" placeholder="Поиск по чатам…" aria-label="Поиск по чатам">
+      <div class="label">Чаты · этот проект</div>
+      <div class="chats">
+        <button class="chat active" type="button">Сканер обновлений: тесты на ветке</button>
+        <button class="chat" type="button">Почему не стартует macOS в CI</button>
+        <button class="chat" type="button">Отчёт о границах данных</button>
+        <button class="chat" type="button">Калибровка архитектуры</button>
+        <button class="chat" type="button">Ollama как провайдер</button>
+      </div>
+      <button class="project" type="button" data-menu="project-menu" aria-haspopup="menu"><span>📁</span><span class="name">MAI · dev</span><span class="dot" title="Папка доверена"></span><span>▾</span></button>
+    </aside>
+
+    <section class="main">
+      <header class="top">
+        <button class="runner" type="button" data-menu="runner-menu" aria-haspopup="menu"><small>Кто выполняет</small> <b>MAI · deepseek-v4.1</b> ▾</button>
+        <span class="grow"></span>
+        <button class="btn ghost" type="button" data-menu="proj-nav" aria-haspopup="menu">Проект ▾</button>
+        <button class="btn ghost" type="button" data-menu="conn-nav" aria-haspopup="menu">Подключения ▾</button>
+        <button class="btn ghost" type="button" id="open-palette" title="Ctrl+K">Ctrl+K</button>
+        <button class="btn ghost gear" type="button" id="open-settings" aria-label="Настройки (есть обновление высокого риска)">⚙<span class="badge-dot"></span></button>
+      </header>
+
+      <div class="messages">
+        <div class="msg user">Проверь обновления зависимостей и поставь безопасные на отдельной ветке</div>
+        <div class="tool">run_shell · npm outdated --json — 2 обновления, оба мажорные</div>
+        <div class="msg">Electron 38 → 45 и openai 6 → 7 — мажорные версии, высокий риск. Предлагаю обновить на ветке <code>mai/update-deps</code> и прогнать тесты, проект не трогаю.</div>
+      </div>
+
+      <footer class="composer-wrap">
+        <div class="composer">
+          <textarea id="input" rows="2" placeholder="Опишите задачу…  / — команды, @ — файлы" aria-label="Сообщение"></textarea>
+          <div class="row">
+            <button class="icon" type="button" title="Прикрепить файлы">+</button>
+            <button class="icon" type="button" title="Голосовой ввод">🎤</button>
+            <button class="chip" type="button" data-menu="turn-menu" aria-haspopup="dialog"><b id="chip-kind">Код</b> · <span id="chip-mode">Правки</span> · <span id="chip-effort">средняя</span> ▾</button>
+            <span class="grow"></span>
+            <button class="send" type="button" title="Отправить">➤</button>
+          </div>
+        </div>
+        <div class="status"><span>MAI · deepseek-v4.1</span><button type="button">контекст 34%</button><button type="button">3 файла изменено</button><span>Enter — отправить</span></div>
+      </footer>
+    </section>
+
+    <!-- Меню -->
+    <div class="pop" id="runner-menu" role="menu" hidden>
+      <div class="group">Модели</div>
+      <button class="item sel" type="button">MAI · deepseek-v4.1 <small>облако</small></button>
+      <button class="item" type="button">MAI · qwen3.8-27b <small>облако</small></button>
+      <div class="group">Локальные</div>
+      <button class="item" type="button">Ollama · qwen3:8b <small>этот ПК</small></button>
+      <div class="group">Внешние агенты</div>
+      <button class="item" type="button">Claude Code <small>рантайм</small></button>
+      <button class="item" type="button">OpenCode <small>рантайм</small></button>
+      <div class="sep"></div>
+      <button class="item" type="button">Провайдеры и ключи…</button>
+      <button class="item" type="button">Найти локальные модели</button>
+    </div>
+    <div class="pop" id="proj-nav" role="menu" hidden>
+      <button class="item" type="button">Доски <small>окно</small></button>
+      <button class="item" type="button">Данные (хранилище) <small>окно</small></button>
+      <div class="sep"></div>
+      <button class="item" type="button">Инструкции (AGENTS.md)</button>
+      <button class="item" type="button">Память <small>/memory</small></button>
+      <button class="item" type="button">Навыки</button>
+      <button class="item" type="button">Multica</button>
+    </div>
+    <div class="pop" id="conn-nav" role="menu" hidden>
+      <button class="item" type="button">Коннекторы <small>/connectors</small></button>
+      <button class="item" type="button">MCP-серверы</button>
+      <button class="item" type="button">Пакеты и плагины <small>/packages</small></button>
+      <button class="item" type="button">Рантаймы</button>
+      <button class="item" type="button">Docker</button>
+    </div>
+    <div class="pop" id="project-menu" role="menu" hidden>
+      <button class="item" type="button">Сменить папку…</button>
+      <button class="item" type="button">Проекты <small>/projects</small></button>
+      <button class="item" type="button">＋ Новый проект в отдельной папке</button>
+      <div class="sep"></div>
+      <button class="item" type="button">Доверие к папке: доверена</button>
+    </div>
+    <div class="pop" id="turn-menu" role="dialog" aria-label="Настройки хода" hidden>
+      <div class="field"><span>Вид работы</span><div class="seg" data-target="chip-kind"><button class="on" type="button">Код</button><button type="button">Задача</button></div></div>
+      <div class="field"><span>Разрешения</span><div class="seg" data-target="chip-mode"><button type="button">Спрашивать</button><button class="on" type="button">Правки</button><button type="button">План</button><button type="button">Авто</button></div></div>
+      <div class="field"><span>Глубина рассуждений</span><div class="seg" data-target="chip-effort"><button type="button">быстро</button><button class="on" type="button">средняя</button><button type="button">глубоко</button></div></div>
+    </div>
+
+    <!-- Палитра -->
+    <div class="overlay" id="palette" hidden>
+      <div class="palette" role="dialog" aria-label="Команды и окна">
+        <input id="palette-input" placeholder="Команда, окно или настройка…" aria-label="Поиск команд">
+        <div class="list" id="palette-list"></div>
+      </div>
+    </div>
+
+    <!-- Настройки -->
+    <div class="overlay" id="settings" hidden>
+      <div class="settings" role="dialog" aria-label="Настройки">
+        <nav class="tabs" id="tabs">
+          <button class="tab" type="button" data-pane="models">Модели и ключи</button>
+          <button class="tab" type="button" data-pane="perm">Разрешения</button>
+          <button class="tab" type="button" data-pane="agent">Агент и команды</button>
+          <button class="tab" type="button" data-pane="voice">Голос и OCR</button>
+          <button class="tab" type="button" data-pane="notify">Уведомления</button>
+          <button class="tab" type="button" data-pane="privacy">Данные и приватность</button>
+          <button class="tab on" type="button" data-pane="care">Обслуживание <span class="pill red">1</span></button>
+          <button class="tab" type="button" data-pane="access">Доступ</button>
+        </nav>
+        <div class="pane" id="pane"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="note"><b>Строка ввода</b>Остались «+», микрофон, поле и ➤. Код/Задача, режим и глубина — в одном чипе. Контекст и изменённые файлы — строкой под вводом.</div>
+    <div class="note"><b>Шапка</b>11 кнопок → «Кто выполняет», «Проект», «Подключения», ⚙ и Ctrl+K. Модель, локальные модели и внешние рантаймы — в одном списке.</div>
+    <div class="note"><b>Настройки</b>Вкладками. «Данные и приватность» и «Обслуживание» — свои вкладки; точка на ⚙, когда есть обновление высокого риска или место для очистки.</div>
+    <div class="note"><b>Боковая панель</b>Только чаты и одна кнопка проекта внизу: смена папки, проекты, новый проект, доверие. «Скачать чат» — в меню «⋯» самого чата.</div>
+    <div class="note"><b>Доски</b>Остаются отдельными окнами, вход — «Проект ▾». Слэш-команды не меняются: /updates, /privacy и т. д. работают как раньше.</div>
+  </div>
+</div>
+
+<script>
+const app = document.getElementById('app');
+const pops = [...document.querySelectorAll('.pop')];
+const closePops = () => pops.forEach((p) => (p.hidden = true));
+document.querySelectorAll('[data-menu]').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const pop = document.getElementById(btn.dataset.menu);
+    const open = pop.hidden;
+    closePops();
+    if (!open) return;
+    const a = app.getBoundingClientRect();
+    const b = btn.getBoundingClientRect();
+    pop.hidden = false;
+    const above = b.top - a.top > a.height / 2;
+    pop.style.top = above ? 'auto' : `${b.bottom - a.top + 6}px`;
+    pop.style.bottom = above ? `${a.bottom - b.top + 6}px` : 'auto';
+    const left = Math.min(b.left - a.left, a.width - pop.offsetWidth - 8);
+    pop.style.left = `${Math.max(8, left)}px`;
+  });
+});
+document.addEventListener('click', (e) => { if (!e.target.closest('.pop')) closePops(); });
+document.querySelectorAll('.seg').forEach((seg) => {
+  seg.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    seg.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    document.getElementById(seg.dataset.target).textContent = b.textContent;
+  });
+});
+
+// Палитра Ctrl+K
+const COMMANDS = [
+  ['Куда уходят данные', '/privacy', 'Настройки › Данные и приватность'],
+  ['Обновления', '/updates', 'Настройки › Обслуживание'],
+  ['Освободить место', '/cleanup', 'Настройки › Обслуживание'],
+  ['Signoff: тесты → статус коммита', '/signoff', 'команда'],
+  ['Доски', '', 'Проект › Доски'],
+  ['Данные (хранилище)', '', 'Проект › Данные'],
+  ['Память проекта', '/memory', 'Проект'],
+  ['Навыки', '', 'Проект'],
+  ['Коннекторы', '/connectors', 'Подключения'],
+  ['MCP-серверы', '', 'Подключения'],
+  ['Docker', '', 'Подключения'],
+  ['Найти локальные модели', '', 'Кто выполняет'],
+  ['Провайдеры и ключи', '', 'Настройки › Модели и ключи'],
+  ['Режим разрешений', '/mode', 'чип хода'],
+  ['Рабочая копия (worktree)', '/worktree', 'команда'],
+  ['Плановые задачи', '/schedule', 'команда'],
+];
+const palette = document.getElementById('palette');
+const pin = document.getElementById('palette-input');
+const plist = document.getElementById('palette-list');
+const renderPalette = () => {
+  const q = pin.value.trim().toLowerCase();
+  const hits = COMMANDS.filter((c) => !q || c.join(' ').toLowerCase().includes(q));
+  plist.replaceChildren(...hits.map((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `item${i === 0 ? ' sel' : ''}`;
+    b.textContent = c[0];
+    const s = document.createElement('small');
+    s.textContent = c[1] || c[2];
+    b.append(s);
+    b.title = c[2];
+    return b;
+  }));
+  if (!hits.length) plist.textContent = 'Ничего не найдено';
+};
+const openPalette = () => { closePops(); palette.hidden = false; pin.value = ''; renderPalette(); pin.focus(); };
+document.getElementById('open-palette').addEventListener('click', openPalette);
+pin.addEventListener('input', renderPalette);
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); }
+  if (e.key === 'Escape') { palette.hidden = true; settings.hidden = true; closePops(); }
+});
+palette.addEventListener('click', (e) => { if (e.target === palette) palette.hidden = true; });
+
+// Настройки
+const settings = document.getElementById('settings');
+const pane = document.getElementById('pane');
+const PANES = {
+  models: '<h3>Модели и ключи</h3><div class="card"><b>MAI</b><span class="muted">api-ai.mai.ru · ключ есть · 4 модели</span></div><div class="card"><b>Ollama (локально)</b><span class="muted">127.0.0.1:11434 · найден автоматически</span></div><div class="card"><b>Запасная модель</b><span class="muted">MAI · qwen3.8-27b</span></div>',
+  perm: '<h3>Разрешения</h3><div class="card"><b>Режим по умолчанию</b><span class="muted">Правки — чтение и правки без вопросов, команды спрашивают</span></div><div class="card"><b>Правила</b><span class="muted">allow / ask / deny по уровням — /permissions</span></div>',
+  agent: '<h3>Агент и команды</h3><div class="card"><b>Оболочка run_shell</b><span class="muted">авто — cmd.exe</span></div><div class="card"><b>Песочница</b><span class="muted">Docker только в чатах «Задача»</span></div>',
+  voice: '<h3>Голос и OCR</h3><div class="card"><b>Распознавание речи</b><span class="muted">MAS — локально</span></div><div class="card"><b>OCR</b><span class="muted">авто</span></div>',
+  notify: '<h3>Уведомления</h3><div class="card"><b>На этом компьютере</b><span class="muted">готово, вопрос, ошибка, фон, плановые</span></div><div class="card"><b>Мессенджеры</b><span class="muted">Telegram, MAX, WhatsApp, Rocket.Chat, Slack…</span></div>',
+  privacy: '<h3>Данные и приватность</h3><div class="card"><b>Куда уходят данные <span class="pill amber">может уйти: 3</span></b><span class="muted">Модель чата — облако MAI; веб-инструменты включены; телеметрия выкл.</span><button class="btn" type="button">Открыть отчёт (/privacy)</button></div><div class="card"><b>Секреты в запросах к модели</b><span class="muted">маскировать — модель видит [СКРЫТО:…]</span></div>',
+  care: '<h3>Обслуживание</h3><div class="card"><b>Обновления <span class="pill red">высокий риск: 1</span></b><span class="muted">tar — уязвимость; Electron 38 → 45, openai 6 → 7 (мажорные). Проверено сегодня.</span><button class="btn" type="button">Обновить на ветке и прогнать тесты</button></div><div class="card"><b>Место <span class="pill green">версия стабильна</span></b><span class="muted">Можно освободить 186 МБ: старые копии навыков, временные файлы, кеши.</span><button class="btn" type="button">Освободить место (/cleanup)</button></div>',
+  access: '<h3>Доступ</h3><div class="card"><b>Режим</b><span class="muted">Локальный admin · корпоративный вход выключен</span></div>',
+};
+const showPane = (id) => {
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('on', t.dataset.pane === id));
+  pane.innerHTML = PANES[id];
+};
+document.getElementById('tabs').addEventListener('click', (e) => { const t = e.target.closest('.tab'); if (t) showPane(t.dataset.pane); });
+document.getElementById('open-settings').addEventListener('click', () => { closePops(); settings.hidden = false; showPane('care'); });
+settings.addEventListener('click', (e) => { if (e.target === settings) settings.hidden = true; });
+</script>

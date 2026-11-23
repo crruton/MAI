@@ -2,6 +2,7 @@
  * Типы субагентов (бэклог CC8.1–CC8.3, ADR 0036).
  *
  * Встроенные: explore (только чтение), plan (только чтение, итог — план),
+ * calibrator (только чтение, отчёт о расхождениях PRD и архитектуры, F15),
  * general (все инструменты родителя, кроме диалоговых). Свои — Markdown-файлы
  * `.mai-code/agents/<имя>.md` (проект, только доверенная папка) и
  * `<данные>/agents/<имя>.md`; frontmatter: description, tools (через запятую).
@@ -11,6 +12,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { CALIBRATOR_PROMPT } from './calibrator.js';
 
 const READ_TOOLS = ['read_file', 'read_document', 'preview_document', 'diagnostics', 'list_files', 'glob', 'grep', 'load_skill', 'memory_read', 'repowise_ask', 'repowise_context', 'repowise_risk', 'repowise_search'];
 
@@ -34,6 +36,15 @@ export const BUILTIN_AGENTS = [
     prompt:
       'Ты — субагент-планировщик. Изучи код и верни план: шаги, конкретные файлы и функции, риски, как проверить. ' +
       'Файлы не меняешь и команды не запускаешь.',
+    source: 'builtin',
+  },
+  {
+    name: 'calibrator',
+    description: 'Калибратор: сверить PRD, архитектуру (C1–C3), ADR и OpenSpec — противоречия, пробелы, риски, вопросы. Только чтение.',
+    tools: READ_TOOLS,
+    prompt:
+      `${CALIBRATOR_PROMPT} Прочитай docs/PRD.md, docs/ARCHITECTURE.md, ADR и openspec/changes сам. Верни отчёт Markdown: ` +
+      '«Итог», затем разделы «Противоречия», «Пробелы», «Риски», «Вопросы» — у каждой находки серьёзность (high/medium/low), источник и что сделать.',
     source: 'builtin',
   },
   {

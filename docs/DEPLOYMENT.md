@@ -43,6 +43,22 @@ npm.cmd run pack:tar       # tar.gz с исходниками (нужен npm и
 
 - Сборка под macOS возможна только на macOS (подпись и notarization не настроены).
 - Установщик не подписан сертификатом: Windows SmartScreen покажет предупреждение.
+  Если положить сертификат в секреты (`CSC_LINK`, `CSC_KEY_PASSWORD`), electron-builder
+  подпишет EXE сам.
+
+### Проверка на чистой машине
+
+Каждый push в CI собирает NSIS и portable на `windows-latest`, тихо ставит,
+запускает `MAI Code.exe --self-check` с PATH без Node.js и удаляет
+(`scripts/check-installer.ps1`, ADR 0095). То же — вручную на любой машине:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\mai-code\MAI Code.exe" --self-check=$env:TEMP\mai-check.json
+Get-Content $env:TEMP\mai-check.json
+```
+
+Отчёт перечисляет проверки (ресурсы, модули, папка данных, cmd.exe, DPAPI,
+системные сертификаты); код выхода 0 — всё в порядке.
 - Автообновления нет: новая версия — новый архив.
 - `pack:tar` и `pack:offline` требуют системный `tar` (есть в Windows 10+, Linux, macOS).
 
@@ -101,9 +117,26 @@ http://localhost:8080/realms/mai-code
 и Client ID `mai-code-desktop`, затем «Войти через Keycloak». Приложение откроет
 браузер, дождётся подтверждения и сохранит токены через `safeStorage` (DPAPI на Windows).
 
+### Корпоративный режим: вход обязателен
+
+Чтобы без входа приложение не работало вовсе, администратор кладёт в
+`%ProgramData%\mai-code\managed-settings.json` (macOS —
+`/Library/Application Support/mai-code/`, Linux — `/etc/mai-code/`):
+
+```json
+{ "auth": { "required": true, "issuer": "https://sso.example.com/realms/mai-code", "clientId": "mai-code-desktop" } }
+```
+
+Тогда окно показывает только экран входа, локальной роли нет, адрес Keycloak из
+окна не меняется, «Выйти» возвращает на экран входа. Access token продлевается по
+`refresh_token` раз в минуту, роль пересчитывается из нового токена; отозванная в
+Keycloak сессия закрывается и в приложении (ADR 0093). Клиенту нужен
+`refresh_token` (стандартный flow) и разумный `SSO Session Idle`.
+
 ### Что действительно защищено
 
-- В режиме Keycloak роль берётся из `realm_access.roles` / `resource_access`.
+- В режиме Keycloak роль берётся из `realm_access.roles` / `resource_access` и
+  пересчитывается при каждом продлении токена.
 - В локальном режиме роли `admin`/`guest` — это разграничение интерфейса.
   Владелец машины может отредактировать `%APPDATA%\mai-code\auth.json`.
 - Ограничения применяются в main-процессе для опасных IPC: настройки провайдеров,
@@ -182,7 +215,7 @@ npm.cmd run multica:sync
   по импорту в OpenScion;
 - глобальные навыки, `AGENTS.md` и профили моделей остаются общими.
 
-Панель «Песочницы» запускает Docker-контейнер с папкой проекта в `/workspace`:
+Панель «Docker» запускает Docker-контейнер с папкой проекта в `/workspace`:
 read-only корневая ФС, сброс capabilities, лимиты CPU/RAM, публикация портов.
 Подробности: `docs/SANDBOXES.md`.
 
