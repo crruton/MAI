@@ -328,6 +328,14 @@ ADR 0087. `artifacts.js` — `onArtifactWrite` (слушатели новых в
 IPC `infra:syncStatus` (ANY) и `infra:syncNow` (ADMIN). В board.js —
 `autoSyncLine`, опрос `pollSyncStatus` раз в 3 с на вкладке «Инфраструктура».
 
+### Перезапуск зависшего MCP
+
+ADR 0088. `mcp.js` — `entry.config`, `callTimeoutMs`; таймаут вызова у stdio →
+`restart(name, reason)` и один повтор для `readOnlyHint`/`retryOnTimeout`;
+`checkHealth` — ping; `status()` — `restarts`, `lastRestartAt`, `lastTimeout`.
+`repowise.mcpConfig` — 60 с и повтор. IPC `repowise:status` (ping, `mcp`) и
+`repowise:restartMcp` (ADMIN). В board.js — `repowiseMcpCard`.
+
 ### Рантаймы: версия и перенос
 
 ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,

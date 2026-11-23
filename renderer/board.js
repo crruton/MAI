@@ -673,6 +673,7 @@ function onClick(event) {
     'repowise-doctor': () => repowiseAction('doctor'),
     'repowise-mcp': () => repowiseAction('mcp'),
     'repowise-serve': () => repowiseAction('serve'),
+    'repowise-restart': () => repowiseAction('restart'),
     'repowise-ask': () => repowiseQuery('ask'),
     'repowise-search': () => repowiseQuery('search'),
   };
@@ -2456,6 +2457,29 @@ async function remoteSearch() {
 
 /* ---------- repowise ---------- */
 
+const MCP_STATES = { ready: ['green', 'отвечает'], connecting: ['amber', 'подключается'], error: ['red', 'ошибка'], disconnected: ['amber', 'не запущен'], needs_auth: ['amber', 'нужен вход'] };
+
+/** Карточка MCP-сервера `serve --no-ui` (F13): состояние, перезапуски, кнопка. */
+function repowiseMcpCard(mcp) {
+  if (!mcp) {
+    return `<div class="status-card repowise-mcp">
+      <div class="name">MCP-сервер <span class="badge amber">не подключён</span></div>
+      <div class="detail">нажмите «Подключить MCP»</div>
+    </div>`;
+  }
+  const [color, label] = MCP_STATES[mcp.status] || ['red', mcp.status];
+  const time = (iso) => (iso ? new Date(String(iso).split(' · ')[0]).toLocaleString() : '');
+  const lines = [];
+  if (mcp.error) lines.push(esc(mcp.error));
+  lines.push(mcp.restarts ? `перезапусков: ${mcp.restarts}, последний — ${esc(time(mcp.lastRestartAt))}` : 'перезапусков не было');
+  if (mcp.lastTimeout) lines.push(`причина: ${esc(String(mcp.lastTimeout).split(' · ')[1] || '')}`);
+  return `<div class="status-card repowise-mcp">
+    <div class="name">MCP-сервер <span class="badge ${color}">${esc(label)}</span>
+      <button class="btn small ghost" data-act="repowise-restart">Перезапустить</button></div>
+    <div class="detail">${lines.join('<br>')}</div>
+  </div>`;
+}
+
 function storageRepowise() {
   const status = state.repowiseStatus;
   return `
@@ -2471,6 +2495,7 @@ function storageRepowise() {
             <div class="name">Индекс ${status?.indexed ? '<span class="badge green">есть</span>' : '<span class="badge amber">нет</span>'}</div>
             <div class="detail mono">${esc(status?.indexPath || '')}</div>
           </div>
+          ${repowiseMcpCard(status?.mcp)}
         </div>
         <div class="head-actions" style="margin-top:12px">
           <button class="btn primary" data-act="repowise-install">Установить</button>
@@ -2484,7 +2509,8 @@ function storageRepowise() {
         </div>
         <p class="muted" style="margin:12px 0 0">
           Repowise индексирует код, git-историю и тесты локально. Агент спрашивает индекс вместо чтения файлов — это
-          сокращает расход токенов. MCP-сервер запускается командой <span class="mono">repowise serve --no-ui</span> в папке проекта.
+          сокращает расход токенов. MCP-сервер запускается командой <span class="mono">repowise serve --no-ui</span> в папке проекта;
+          если он не ответил за 60 с, MAI перезапускает его и повторяет запрос.
         </p>
       </div>
 
@@ -2531,6 +2557,13 @@ async function repowiseAction(action) {
       toast(res.ok ? 'MCP repowise подключён' : `MCP: ${res.error || 'не удалось подключить'}`, res.ok ? 'ok' : 'err');
       state.repowiseOutput = JSON.stringify(res, null, 2);
       render();
+      return;
+    }
+    if (action === 'restart') {
+      toast('Перезапускаю MCP-сервер repowise…');
+      const res = await api.repowise.restartMcp();
+      toast(res.ok ? 'MCP repowise перезапущен' : `MCP: ${res.error || 'не удалось перезапустить'}`, res.ok ? 'ok' : 'err');
+      await loadRepowise();
       return;
     }
     if (action === 'serve') {

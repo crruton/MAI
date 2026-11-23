@@ -103,3 +103,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0085](0085-runtimes-versiya-i-perenos.md) | Рантаймы: версия CLI и перенос пресетов | accepted | 2026-11-23 |
 | [0086](0086-agent-shem-predlozhenie.md) | Агент схем: предложение с diff и «Применить» | accepted | 2026-11-23 |
 | [0087](0087-avtosinhronizaciya-hranilishcha.md) | Автосинхронизация хранилища с Postgres и SeaweedFS | accepted | 2026-11-23 |
+| [0088](0088-perezapusk-zavisshego-mcp.md) | Перезапуск зависшего MCP-сервера Repowise | accepted | 2026-11-23 |

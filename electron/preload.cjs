@@ -301,6 +301,7 @@ contextBridge.exposeInMainWorld('mai', {
     risk: (payload) => invoke('repowise:risk', payload),
     distill: (payload) => invoke('repowise:distill', payload),
     connectMcp: (payload) => invoke('repowise:connectMcp', payload),
+    restartMcp: () => invoke('repowise:restartMcp'),
     serve: (payload) => invoke('repowise:serve', payload),
     stopServe: (payload) => invoke('repowise:stopServe', payload),
   },

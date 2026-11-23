@@ -3570,7 +3570,30 @@ const repowiseResult = async (fn) => {
   }
 };
 
-ipcMain.handle('repowise:status', (_e, payload) => repowise.status(projectOf(payload)));
+ipcMain.handle('repowise:status', async (_e, payload) => {
+  const base = await repowise.status(projectOf(payload));
+  // Состояние MCP-сервера `serve --no-ui` (F13): проверка ping, перезапуски.
+  const settings = loadSettings();
+  const saved = settings.mcpServers?.repowise;
+  const configured = Boolean(saved);
+  // Конфиг, сохранённый до F13, — без таймаута и перезапуска: дополняем.
+  if (saved && saved.callTimeoutMs === undefined) {
+    const { callTimeoutMs, restartOnTimeout, retryOnTimeout } = repowise.mcpConfig(saved.cwd || projectOf(payload));
+    const upgraded = { ...saved, callTimeoutMs, restartOnTimeout, retryOnTimeout };
+    saveSettings({ mcpServers: { ...settings.mcpServers, repowise: upgraded } });
+    const live = mcp.servers.get('repowise');
+    if (live) live.config = upgraded;
+  }
+  if (configured && mcp.servers.has('repowise')) await mcp.checkHealth('repowise').catch(() => {});
+  return { ...base, mcp: configured ? mcp.status().find((s) => s.name === 'repowise') || { name: 'repowise', status: 'disconnected', restarts: 0 } : null };
+});
+ipcMain.handle('repowise:restartMcp', async () => {
+  requireAdmin();
+  const config = loadSettings().mcpServers?.repowise;
+  if (!config) return { ok: false, error: 'MCP repowise не подключён — нажмите «Подключить MCP»' };
+  const res = mcp.servers.has('repowise') ? await mcp.restart('repowise') : await mcp.connect('repowise', config);
+  return { ...res, mcp: mcp.status().find((s) => s.name === 'repowise') || null };
+});
 ipcMain.handle('repowise:install', () => repowiseResult(() => repowise.install()));
 ipcMain.handle('repowise:init', (_e, payload) =>
   repowiseResult(() => repowise.init(projectOf(payload), { editorSetup: Boolean(payload?.editorSetup) })),

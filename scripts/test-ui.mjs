@@ -534,6 +534,13 @@ ipcMain.handle('infra:syncNow', (_e, payload) => {
   syncNowCalls.push(payload);
   return { enabled: true, state: 'ok', changes: 0, attempts: 0, nextAt: '', lastOkAt: new Date().toISOString(), lastError: '', lastReport: {} };
 });
+// Repowise: состояние MCP и перезапуск (раздел [50], F13).
+let rwRestarts = 1;
+ipcMain.handle('repowise:status', () => ({ installed: true, version: 'repowise 1.2', indexed: true, indexPath: '/p/.repowise', mcp: { name: 'repowise', status: 'ready', restarts: rwRestarts, lastRestartAt: '2026-11-23T10:00:00.000Z', lastTimeout: '2026-11-23T10:00:00.000Z · таймаут ask', error: '' } }));
+ipcMain.handle('repowise:restartMcp', () => {
+  rwRestarts += 1;
+  return { ok: true };
+});
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
   projectDir: root,
@@ -2017,6 +2024,16 @@ app.whenReady().then(async () => {
     await wait(500);
     const synced = await storeUi(`document.querySelector('.auto-sync-status')?.textContent || ''`);
     check('«Синхронизировать сейчас» — прогон и «синхронизировано»', syncNowCalls.length === 1 && /синхронизировано/.test(synced), synced);
+
+    console.log('\n[50] Repowise: MCP-сервер и перезапуск (F13, ADR 0088)');
+    await storeUi(`document.querySelector('[data-act=storage-tab][data-tab=repowise]')?.click()`);
+    await wait(700);
+    const rwCard = await storeUi(`document.querySelector('.repowise-mcp')?.textContent.replace(/\\s+/g, ' ') || ''`);
+    check('карточка MCP: отвечает, перезапусков и причина', /отвечает/.test(rwCard) && /перезапусков: 1/.test(rwCard) && /таймаут ask/.test(rwCard), rwCard);
+    await storeUi(`document.querySelector('[data-act=repowise-restart]').click()`);
+    await wait(700);
+    const rwCard2 = await storeUi(`document.querySelector('.repowise-mcp')?.textContent || ''`);
+    check('«Перезапустить» — вызов и обновлённый счётчик', rwRestarts === 2 && /перезапусков: 2/.test(rwCard2), rwCard2);
     store.destroy();
   } catch (err) {
     fail += 1;

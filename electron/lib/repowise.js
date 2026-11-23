@@ -152,6 +152,11 @@ export function mcpConfig(projectDir) {
     args: ['serve', '--no-ui'],
     cwd: projectDir,
     disabled: false,
+    // F13 (ADR 0088): `serve --no-ui` иногда зависает — запрос ждёт 60 с, затем
+    // процесс перезапускается и запрос повторяется (инструменты индекса только читают).
+    callTimeoutMs: 60_000,
+    restartOnTimeout: true,
+    retryOnTimeout: true,
   };
 }
 

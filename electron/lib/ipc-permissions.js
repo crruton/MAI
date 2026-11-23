@@ -280,6 +280,8 @@ export const IPC_PERMISSIONS = {
   'repowise:risk': ANY,
   'repowise:distill': ADMIN,
   'repowise:connectMcp': ADMIN,
+  // Перезапуск MCP-сервера repowise (F13).
+  'repowise:restartMcp': ADMIN,
   'repowise:serve': ADMIN,
   'repowise:stopServe': ADMIN,
 
