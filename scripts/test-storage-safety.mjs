@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadBoards, saveBoards, saveBoardSection } from '../electron/lib/boards.js';
 import { applyDiagram, modelHash } from '../electron/lib/diagram-agent.js';
-import { writeArtifact, deleteArtifact, listArtifacts, gcBlobs, withIndexLock, artifactsRoot } from '../electron/lib/artifacts.js';
+import { onArtifactWrite, writeArtifact, deleteArtifact, listArtifacts, gcBlobs, withIndexLock, artifactsRoot } from '../electron/lib/artifacts.js';
 
 let pass = 0;
 let fail = 0;
@@ -101,6 +101,30 @@ console.log('[4] агент схем: изменения только по «П�
     err = e.message;
   }
   check('пустая модель не применяется', /ни одного раздела/.test(err), err);
+}
+
+console.log('[5] запись артефакта → автосинхронизация (F12, ADR 0087)');
+{
+  const seen = [];
+  const off = onArtifactWrite((projectDir, a) => seen.push(`${projectDir === project}:${a.id}`));
+  writeArtifact(project, { kind: 'note', name: 'Синк', content: 'v1' });
+  writeArtifact(project, { kind: 'note', name: 'Синк', content: 'v1' });
+  writeArtifact(project, { kind: 'note', name: 'Синк', content: 'v2' });
+  check('уведомление на новые версии, не на повтор', seen.length === 2 && seen.every((x) => x.startsWith('true:note:')), seen.join());
+  off();
+  writeArtifact(project, { kind: 'note', name: 'Синк', content: 'v3' });
+  check('отписка работает', seen.length === 2);
+  const off2 = onArtifactWrite(() => {
+    throw new Error('слушатель упал');
+  });
+  let ok = true;
+  try {
+    writeArtifact(project, { kind: 'note', name: 'Синк', content: 'v4' });
+  } catch {
+    ok = false;
+  }
+  off2();
+  check('упавший слушатель не ломает запись', ok);
 }
 
 fs.rmSync(project, { recursive: true, force: true });

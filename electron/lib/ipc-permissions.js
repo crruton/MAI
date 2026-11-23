@@ -258,6 +258,9 @@ export const IPC_PERMISSIONS = {
 
   // инфраструктура: секреты и загрузка файлов
   'infra:status': ANY,
+  // Автосинхронизация хранилища (F12).
+  'infra:syncStatus': ANY,
+  'infra:syncNow': ADMIN,
   'infra:sync': ADMIN,
   'infra:pushSecrets': ADMIN,
   'infra:pullSecrets': ADMIN,

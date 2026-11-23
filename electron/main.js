@@ -44,7 +44,9 @@ import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemo
 import { McpManager } from './lib/mcp.js';
 import { loadPlugins, pluginDirs } from './lib/plugins.js';
 import { disposePluginHosts, retirePluginHosts } from './lib/plugin-host.js';
+import { createSyncQueue } from './lib/sync-queue.js';
 import {
+  onArtifactWrite,
   listArtifacts,
   readArtifact,
   writeArtifact,
@@ -3526,6 +3528,25 @@ const infraResult = async (fn) => {
 };
 
 ipcMain.handle('infra:status', () => infra.probe());
+
+// Автосинхронизация хранилища (F12, ADR 0087): правки артефактов → фоновая очередь.
+const autoSyncEnabled = () => {
+  const cfg = loadSettings().infra || {};
+  return Boolean(cfg.autoSync && (cfg.postgresUrl || cfg.seaweedUrl));
+};
+const syncQueue = createSyncQueue({
+  run: (projectDir) => infra.autoSync(projectDir, { embed: loadSettings().infra?.autoSyncEmbed !== false }),
+  debounceMs: Number(process.env.MAI_SYNC_DEBOUNCE_MS || 5000),
+});
+onArtifactWrite((projectDir, artifact) => {
+  if (autoSyncEnabled()) syncQueue.schedule(projectDir, artifact?.id || '');
+});
+app.on('before-quit', () => syncQueue.stop());
+ipcMain.handle('infra:syncStatus', (_e, payload) => ({ enabled: autoSyncEnabled(), ...syncQueue.status(projectOf(payload)) }));
+ipcMain.handle('infra:syncNow', async (_e, payload) => {
+  requireAdmin();
+  return { enabled: autoSyncEnabled(), ...(await syncQueue.flush(projectOf(payload))) };
+});
 ipcMain.handle('infra:sync', (_e, payload) =>
   infraResult(() => infra.syncAll(projectOf(payload), { embed: payload?.embed !== false })),
 );

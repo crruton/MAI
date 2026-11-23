@@ -353,6 +353,7 @@ function bindChrome() {
     if (focus.startsWith('tab:')) {
       state.storageTab = focus.slice('tab:'.length);
       if (state.storageTab === 'infra' && !state.infraStatus) loadInfra();
+      if (state.storageTab === 'infra') pollSyncStatus();
       if (state.storageTab === 'repowise' && !state.repowiseStatus) loadRepowise();
       render();
     } else if (focus.startsWith('artifact:')) {
@@ -639,6 +640,7 @@ function onClick(event) {
     'storage-tab': () => {
       state.storageTab = target.dataset.tab;
       if (state.storageTab === 'infra' && !state.infraStatus) loadInfra();
+      if (state.storageTab === 'infra') pollSyncStatus();
       if (state.storageTab === 'repowise' && !state.repowiseStatus) loadRepowise();
       render();
     },
@@ -658,6 +660,8 @@ function onClick(event) {
     'infra-save': () => saveInfra(),
     'infra-probe': () => loadInfra(),
     'infra-sync': () => syncInfra(),
+    'infra-sync-now': () => syncNow(),
+    'infra-auto-sync': () => toggleAutoSync(target.checked),
     'infra-push': () => pushSecrets(),
     'infra-pull': () => pullSecrets(),
     'infra-search': () => remoteSearch(),
@@ -2280,7 +2284,9 @@ function storageInfra() {
             <button class="btn ghost" data-act="infra-push">Ключи → Vault</button>
             <button class="btn ghost" data-act="infra-pull">Ключи ← Vault</button>
           </div>
-          ${result ? `<pre class="output" style="margin-top:10px">${esc(JSON.stringify(result, null, 2))}</pre>` : '<p class="muted" style="margin:10px 0 0">Синхронизация выполняется вручную.</p>'}
+          <label class="hint-text auto-sync-toggle"><input type="checkbox" id="infra-auto-sync" data-act="infra-auto-sync" ${cfg.autoSync ? 'checked' : ''} /> Автосинхронизация: правки артефактов уходят в Postgres и SeaweedFS в фоне (ключи Vault — только вручную)</label>
+          ${autoSyncLine()}
+          ${result ? `<pre class="output" style="margin-top:10px">${esc(JSON.stringify(result, null, 2))}</pre>` : ''}
         </div>
 
         <div class="card">
@@ -2307,6 +2313,67 @@ function storageInfra() {
         </div>
       </div>
     </div>`;
+}
+
+const SYNC_STATES = { idle: 'ждёт правок', pending: 'изменения в очереди', running: 'синхронизация…', ok: 'синхронизировано', retry: 'ошибка, повтор', error: 'ошибка' };
+
+/** Строка состояния автосинхронизации (F12). */
+function autoSyncLine() {
+  const s = state.syncStatus;
+  if (!state.settings?.infra?.autoSync) return '<p class="muted auto-sync-status" style="margin:6px 0 0">Синхронизация выполняется вручную.</p>';
+  if (!s) return '<p class="muted auto-sync-status" style="margin:6px 0 0">Состояние загружается…</p>';
+  if (!s.enabled) return '<p class="muted auto-sync-status" style="margin:6px 0 0">Включено, но не задан ни Postgres, ни SeaweedFS.</p>';
+  const badge = s.state === 'ok' ? 'green' : s.state === 'error' || s.state === 'retry' ? 'red' : '';
+  const time = (iso) => (iso ? new Date(iso).toLocaleTimeString() : '');
+  const parts = [`<span class="badge ${badge}">${esc(SYNC_STATES[s.state] || s.state)}</span>`];
+  if (s.changes) parts.push(`правок в очереди: ${s.changes}`);
+  if (s.nextAt) parts.push(`следующая попытка в ${esc(time(s.nextAt))}`);
+  if (s.lastOkAt) parts.push(`последняя успешная — ${esc(time(s.lastOkAt))}`);
+  if (s.lastError && s.state !== 'ok') parts.push(`<span class="err-text">${esc(s.lastError)}</span>`);
+  return `<div class="auto-sync-status" style="margin:6px 0 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center">${parts.join(' · ')}
+    <button class="btn small ghost" data-act="infra-sync-now">Синхронизировать сейчас</button></div>`;
+}
+
+let syncPoll = null;
+/** Опрос состояния очереди, пока открыта вкладка «Инфраструктура». */
+async function pollSyncStatus() {
+  clearTimeout(syncPoll);
+  if (BOARD !== 'storage' || state.storageTab !== 'infra') return;
+  try {
+    const next = await api.infra.syncStatus({ projectDir: state.projectDir });
+    const changed = JSON.stringify(next) !== JSON.stringify(state.syncStatus);
+    state.syncStatus = next;
+    if (changed) {
+      const box = document.querySelector('.auto-sync-status');
+      if (box) box.outerHTML = autoSyncLine();
+      else render();
+    }
+  } catch {
+    /* окно закрывается */
+  }
+  syncPoll = setTimeout(pollSyncStatus, 3000);
+}
+
+async function toggleAutoSync(on) {
+  try {
+    state.settings = await api.settings.save({ infra: { autoSync: on } });
+    toast(on ? 'Автосинхронизация включена' : 'Автосинхронизация выключена', 'ok');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+  state.syncStatus = null;
+  render();
+  pollSyncStatus();
+}
+
+async function syncNow() {
+  try {
+    state.syncStatus = await api.infra.syncNow({ projectDir: state.projectDir });
+    toast(state.syncStatus.state === 'ok' ? 'Синхронизировано' : `Не удалось: ${state.syncStatus.lastError || 'ошибка'}`, state.syncStatus.state === 'ok' ? 'ok' : 'err');
+  } catch (err) {
+    toast(err.message, 'err');
+  }
+  render();
 }
 
 async function saveInfra() {

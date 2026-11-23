@@ -524,6 +524,16 @@ ipcMain.handle('boards:diagramApply', (_e, payload) => {
   diagramApplies.push(payload);
   return { ok: true, views: { views: {}, drift: {} } };
 });
+// Автосинхронизация хранилища (раздел [49], F12).
+const syncNowCalls = [];
+ipcMain.handle('artifacts:list', () => []);
+ipcMain.handle('artifacts:stats', () => ({ total: 0, byKind: {} }));
+ipcMain.handle('infra:status', () => ({ postgres: { ok: true, version: 'PostgreSQL 16' }, vault: { ok: false, error: 'Адрес не задан' }, seaweed: { ok: false, error: 'Адрес не задан' }, config: {} }));
+ipcMain.handle('infra:syncStatus', () => ({ enabled: true, state: 'retry', changes: 2, attempts: 1, nextAt: new Date(Date.now() + 30000).toISOString(), lastOkAt: '', lastError: 'Postgres: connection refused', lastReport: null }));
+ipcMain.handle('infra:syncNow', (_e, payload) => {
+  syncNowCalls.push(payload);
+  return { enabled: true, state: 'ok', changes: 0, attempts: 0, nextAt: '', lastOkAt: new Date().toISOString(), lastError: '', lastReport: {} };
+});
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
   projectDir: root,
@@ -1987,6 +1997,27 @@ app.whenReady().then(async () => {
     const archAfter = await archUi(`document.querySelector('.diagram-proposal')?.textContent || ''`);
     check('«Применить» — запись с отпечатком базы, статус «применено»', diagramApplies.length === 1 && diagramApplies[0].baseHash === 'h1' && /redis/.test(JSON.stringify(diagramApplies[0].proposal)) && /применено/.test(archAfter) && !(await archUi(`Boolean(document.querySelector('[data-act=diagram-apply]'))`)), JSON.stringify(diagramApplies));
     arch.destroy();
+
+    console.log('\n[49] Автосинхронизация хранилища (F12, ADR 0087)');
+    const store = new BrowserWindow({ show: false, width: 1300, height: 900, webPreferences: { preload: path.join(root, 'electron', 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    await store.loadFile(path.join(root, 'renderer', 'board.html'), { query: { board: 'storage' } });
+    await wait(1200);
+    const storeUi = (code) => store.webContents.executeJavaScript(code);
+    await storeUi(`document.querySelector('[data-act=storage-tab][data-tab=infra]')?.click()`);
+    await wait(600);
+    const manual = await storeUi(`document.querySelector('.auto-sync-status')?.textContent || ''`);
+    check('по умолчанию выключено — «вручную»', /вручную/.test(manual) && !(await storeUi(`document.querySelector('#infra-auto-sync').checked`)), manual);
+    const syncSavedFrom = savedSettings.length;
+    await storeUi(`document.querySelector('#infra-auto-sync').click()`);
+    await wait(900);
+    check('флажок сохраняет infra.autoSync', savedSettings.slice(syncSavedFrom).some((p) => p.infra?.autoSync === true), JSON.stringify(savedSettings.slice(syncSavedFrom)));
+    const line = await storeUi(`document.querySelector('.auto-sync-status')?.textContent || ''`);
+    check('состояние очереди: повтор, правок, ошибка', /ошибка, повтор/.test(line) && /правок в очереди: 2/.test(line) && /connection refused/.test(line), line);
+    await storeUi(`document.querySelector('[data-act=infra-sync-now]').click()`);
+    await wait(500);
+    const synced = await storeUi(`document.querySelector('.auto-sync-status')?.textContent || ''`);
+    check('«Синхронизировать сейчас» — прогон и «синхронизировано»', syncNowCalls.length === 1 && /синхронизировано/.test(synced), synced);
+    store.destroy();
   } catch (err) {
     fail += 1;
     console.log(`  FAIL исключение: ${err?.message || err}`);

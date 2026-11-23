@@ -44,6 +44,8 @@ const DEFAULTS = {
   providers: {},
   runtimes: {},
   infra: {
+    // Автосинхронизация артефактов с Postgres/SeaweedFS (F12): выключена по умолчанию.
+    autoSync: false,
     enabled: false,
     postgresUrl: 'postgres://mai:mai@127.0.0.1:5433/mai',
     vaultAddr: 'http://127.0.0.1:8200',

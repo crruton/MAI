@@ -280,6 +280,8 @@ contextBridge.exposeInMainWorld('mai', {
   },
   infra: {
     status: () => invoke('infra:status'),
+    syncStatus: (payload) => invoke('infra:syncStatus', payload),
+    syncNow: (payload) => invoke('infra:syncNow', payload),
     sync: (payload) => invoke('infra:sync', payload),
     pushSecrets: () => invoke('infra:pushSecrets'),
     pullSecrets: () => invoke('infra:pullSecrets'),

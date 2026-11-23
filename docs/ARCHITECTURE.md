@@ -319,6 +319,15 @@ ADR 0086. `diagram-agent.js` — `editDiagram` возвращает `proposal`, 
 отпечаток и модель и пишет `boards.json`. В board.js — `proposalBlock`,
 действия `diagram-apply`/`diagram-reject`.
 
+### Автосинхронизация хранилища
+
+ADR 0087. `artifacts.js` — `onArtifactWrite` (слушатели новых версий);
+`sync-queue.js` — `createSyncQueue` (debounce, один прогон на проект, повторы
+30 с / 2 мин / 10 мин, `flush`, `stop`); `infra.autoSync` — Postgres и SeaweedFS
+без Vault. В main.js очередь подписана на запись артефактов при `infra.autoSync`;
+IPC `infra:syncStatus` (ANY) и `infra:syncNow` (ADMIN). В board.js —
+`autoSyncLine`, опрос `pollSyncStatus` раз в 3 с на вкладке «Инфраструктура».
+
 ### Рантаймы: версия и перенос
 
 ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,

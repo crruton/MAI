@@ -181,8 +181,26 @@ export function readArtifact(projectDir, id) {
   return { ...summary(entry, index), content, meta: entry.meta || {} };
 }
 
+const writeListeners = new Set();
+
+/** Подписка на запись артефактов (F12: автосинхронизация). Возвращает отписку. */
+export function onArtifactWrite(fn) {
+  writeListeners.add(fn);
+  return () => writeListeners.delete(fn);
+}
+
 export function writeArtifact(projectDir, options) {
-  return withIndexLock(projectDir, () => writeArtifactUnlocked(projectDir, options));
+  const result = withIndexLock(projectDir, () => writeArtifactUnlocked(projectDir, options));
+  if (result?.changed !== false) {
+    for (const fn of writeListeners) {
+      try {
+        fn(projectDir, result);
+      } catch {
+        /* слушатель не должен ломать запись */
+      }
+    }
+  }
+  return result;
 }
 
 function writeArtifactUnlocked(projectDir, { id, kind = 'note', name, title, content = '', meta = {}, note = '' }) {
