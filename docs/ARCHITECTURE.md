@@ -487,6 +487,10 @@ ADR 0049. `electron/lib/documents.js`: `buildDocx`, `buildXlsx` (`sheetsToXlsx` 
 `create_document` (write, precheck формата, preview текста), `read_document`
 (read; есть в наборе субагентов explore/plan).
 
+PDF-правка (ADR 0083): `tools/pdf.js` на pdf-lib — `parsePages`, `fillForm`
+(кириллица → значение + `NeedAppearances`), инструменты `pdf_merge`,
+`pdf_fields`, `pdf_form`; `tools/pdf-names.js` — имя итога для политики.
+
 PDF (ADR 0067): `export/html.js` — `markdownToHtml` (A4, CSP); `pdf-render.js` —
 `renderPdf(BrowserWindow, html)`: скрытое окно без JS и сети, `printToPDF`.
 В инструмент попадает как `ctx.renderPdf` из `agentSettings` main.

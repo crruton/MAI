@@ -7,6 +7,7 @@
  * Модуль не зависит от Electron: его проверяют обычным node.
  */
 import path from 'node:path';
+import { defaultFilledName } from './tools/pdf-names.js';
 import { checkCommand } from './guardrails.js';
 import { normalizeMode } from './permissions.js';
 import { resolveIn, subjectIn } from './workroots.js';
@@ -34,6 +35,9 @@ const BUILTIN = {
   notebook_edit: 'write',
   diagnostics: 'read',
   tool_search: 'read',
+  pdf_merge: 'write',
+  pdf_form: 'write',
+  pdf_fields: 'read',
   browser_open: 'network',
   browser_read: 'read',
   browser_screenshot: 'read',
@@ -362,6 +366,8 @@ export function relativeSubject(projectDir, target) {
 export function subjectOf({ tool, cls, args = {}, projectDir, command, roots = null, browserHost = '' }) {
   if (cls === 'exec') return String(command ?? args.command ?? '');
   if (cls === 'write' || cls === 'read' || cls === 'delete') {
+    // PDF (CW2.4): предмет правила — итоговый файл.
+    if (tool === 'pdf_merge' || tool === 'pdf_form') args = { ...args, path: args.output || (tool === 'pdf_form' && args.path ? defaultFilledName(args) : '') };
     if (!args.path) return null;
     // Дополнительные папки чата (ADR 0045): предмет — `@имя/путь`.
     if (roots?.length > 1) {
@@ -405,6 +411,10 @@ export function summarize({ tool, cls, args = {}, subject }) {
       return `Изменить файл ${subject}`;
     case 'delete_file':
       return `Удалить ${subject} (в корзину)`;
+    case 'pdf_merge':
+      return `Собрать PDF ${subject}: ${(args.inputs || []).map((i) => `${i.path}${i.pages ? ` (стр. ${i.pages})` : ''}`).join(' + ')}`;
+    case 'pdf_form':
+      return `Заполнить форму ${args.path} → ${subject}: ${Object.keys(args.values || {}).length} полей`;
     case 'notebook_edit':
       return `Ноутбук ${subject}: ${args.edit_mode === 'delete' ? 'удалить' : args.edit_mode === 'insert' ? 'вставить' : 'изменить'} ячейку ${args.cell_id || (Number.isInteger(args.cell) ? args.cell : args.edit_mode === 'insert' ? 'в конец' : '')}`;
     case 'web_fetch':
@@ -445,6 +455,7 @@ export function suggestRules({ tool, cls, subject }) {
     const spec = dir === '.' || dir === '' ? '**' : `${dir}/**`;
     if (tool === 'create_document') return [`create_document(${spec})`];
     if (tool === 'notebook_edit') return [`notebook_edit(${spec})`];
+    if (tool === 'pdf_merge' || tool === 'pdf_form') return [`${tool}(${spec})`];
     return [`write_file(${spec})`, `edit_file(${spec})`];
   }
   if (cls === 'memory') return [`memory_append(${subject || 'project'})`];
