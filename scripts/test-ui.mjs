@@ -1871,6 +1871,7 @@ app.whenReady().then(async () => {
     const themeOptions = await ui(`(() => { const t = document.querySelector('.theme-select'); const v = [...t.options].map((o) => o.value).join(); t.value = 'system'; [...document.querySelectorAll('.modal button')].find((b) => b.textContent === 'Сохранить').click(); return v; })()`);
     await wait(400);
     check('настройка «Тема» сохраняется', themeOptions === 'dark,light,system' && savedSettings.at(-1)?.theme === 'system', `${themeOptions} ${savedSettings.at(-1)?.theme}`);
+    check('поле «Модель для Плана» сохраняется', savedSettings.at(-1)?.planModel === '', JSON.stringify(savedSettings.at(-1)?.planModel));
 
     console.log('\n[45] Статусная строка, !команда, доступность (ADR 0074)');
     await wait(300);

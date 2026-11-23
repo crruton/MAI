@@ -238,6 +238,18 @@ function browserFor(settings) {
   return agentBrowser;
 }
 
+/** Модель для «Плана» (CC13.5): своя, если задана и отличается от основной. */
+function plannerFor(settings, activeKey) {
+  const key = String(settings.planModel || '').trim();
+  if (!key || key === activeKey) return null;
+  try {
+    const r = resolveModel(settings, key);
+    return r.provider?.apiKey ? { provider: r.provider, model: r.modelId, label: key } : null;
+  } catch {
+    return null;
+  }
+}
+
 function agentSettings(settings) {
   const shellSandbox = normalizeShellSandbox(settings.shellSandbox);
   return {
@@ -1562,6 +1574,8 @@ ipcMain.handle('chat:start', async (event, payload) => {
         tracer: agentTracer(),
         // Запасная модель при сбое основной (ADR 0057).
         fallback: fallbackFor(settings, activeKey),
+        // Модель для «Плана» (CC13.5, ADR 0078).
+        planner: plannerFor(settings, activeKey),
         // Глубина рассуждений из поля ввода (CC7.11).
         effort: ['low', 'medium', 'high'].includes(payload.effort) ? payload.effort : '',
         // Чекпоинты правок для отката (CC6.1).

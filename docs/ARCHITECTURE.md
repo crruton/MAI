@@ -399,6 +399,13 @@ ADR 0059. `pushViolation(command, { protectedBranches, branchOf })` в
 
 ### Возможности модели
 
+ADR 0078: `text-tools.js` — `textToolsPrompt`, `parseTextToolCalls`,
+`toTextProtocol`, `isToolsUnsupported`; в `runAgent` флаг `textTools`
+(`!caps.tools`, отказ шлюза → тот же шаг заново), `buildRequest` переводит
+историю в протокол, `takeTextCalls` достаёт вызовы. `planner` (main:
+`plannerFor(settings.planModel)`) подменяет client/model/caps на итерациях в
+«Плане».
+
 ADR 0058. `modelCapabilities(model, provider)` в `capabilities.js` — флаги
 `tools`, `vision`, `reasoning`, `effort`, `temperature`, `transport`, `context`;
 `requestOptions(caps, { temperature, effort })` — поля запроса. В `runAgent`:

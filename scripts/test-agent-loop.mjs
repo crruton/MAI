@@ -1006,7 +1006,11 @@ console.log('\n[24] Возможности модели и глубина рас
   const bodies3 = [];
   const events = [];
   await runAgent(base({ provider: { baseURL: 'http://fake', apiKey: 'k', name: 'fake', models: [{ id: 'plain', tools: false }] }, model: 'plain', messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), emit: (e) => events.push(e), clientFactory: fakeClient([{ text: 'ок' }], bodies3), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
-  check('модель без инструментов — запрос без tools и уведомление', bodies3[0].tools === undefined && events.some((e) => /не вызывает инструменты/.test(e.text || '')));
+  check('модель без инструментов — запрос без tools, уведомление о текстовом протоколе', bodies3[0].tools === undefined && events.some((e) => /текстовый протокол/.test(e.text || '')));
+  const bodies4 = [];
+  const events4 = [];
+  await runAgent(base({ settings: { maxIterations: 6, permissions: {}, textToolProtocol: false }, provider: { baseURL: 'http://fake', apiKey: 'k', name: 'fake', models: [{ id: 'plain', tools: false }] }, model: 'plain', messages: [{ role: 'user', content: 'x' }], mcp: fakeMcp(), emit: (e) => events4.push(e), clientFactory: fakeClient([{ text: 'ок' }], bodies4), policy: { getMode: () => 'manual', getRules: () => ({}) } }));
+  check('протокол выключен — только текст, без описания инструментов', bodies4[0].tools === undefined && !/текстовый протокол/.test(bodies4[0].messages[0].content) && events4.some((e) => /не вызывает инструменты/.test(e.text || '')));
 }
 
 
@@ -1306,6 +1310,86 @@ console.log('\n[28] Проект: инструкции в промпте и то
   check('у родителя есть agent_result', parentTools.includes('agent_result'), parentTools.join(','));
   await started[0].promise;
   check('итог фонового субагента собран', started[0].status === 'готово' && /конфиг в app.json/.test(started[0].result), started[0].result);
+}
+
+{
+  console.log('\n[32] Модель без tool calling: текстовый протокол (CC13.4, ADR 0078)');
+  fs.writeFileSync(path.join(project, 'txt.txt'), 'содержимое для текстового протокола', 'utf8');
+  const bodies = [];
+  const history = await runAgent(
+    base({
+      provider: { baseURL: 'http://fake', apiKey: 'k', name: 'fake', models: [{ id: 'fake-model', tools: false }] },
+      messages: [{ role: 'user', content: 'прочитай txt.txt' }],
+      mcp: fakeMcp(),
+      approve: async () => true,
+      clientFactory: fakeClient([{ text: 'Сейчас прочитаю.\n<tool_call>{"name": "read_file", "arguments": {"path": "txt.txt"}}</tool_call>' }, { text: 'В файле — содержимое.' }], bodies),
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  check('инструменты не уходят полем tools, протокол — в системном промпте', !bodies[0].tools && /текстовый протокол/.test(bodies[0].messages[0].content) && /### read_file/.test(bodies[0].messages[0].content));
+  const call = history.find((m) => m.role === 'assistant' && m.tool_calls?.length);
+  check('вызов из текста стал обычным tool_call, текст без блока', call?.tool_calls[0].function.name === 'read_file' && call.content === 'Сейчас прочитаю.', JSON.stringify(call));
+  check('инструмент выполнен', history.some((m) => m.role === 'tool' && /содержимое для текстового протокола/.test(m.content)));
+  const second = bodies[1]?.messages || [];
+  check('второй запрос: вызов блоком у ассистента, результат — сообщением пользователя', second.some((m) => m.role === 'assistant' && /<tool_call>\{"name":"read_file"/.test(m.content || '')) && second.some((m) => m.role === 'user' && /<tool_result name="read_file"/.test(m.content || '')) && !second.some((m) => m.role === 'tool'), JSON.stringify(second.slice(-2)).slice(0, 400));
+
+  // Шлюз отвечает «tools not supported» — дальше текстом, тот же шаг.
+  const seen = [];
+  const notices = [];
+  let n = 0;
+  const rejecting = () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          seen.push(JSON.parse(JSON.stringify(body)));
+          if (body.tools) throw Object.assign(new Error('400 this model does not support tools'), { status: 400 });
+          n += 1;
+          return stream(n === 1 ? { text: '<tool_call>{"name":"read_file","arguments":{"path":"txt.txt"}}</tool_call>' } : { text: 'готово' });
+        },
+      },
+    },
+  });
+  const h2 = await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'прочитай' }],
+      mcp: fakeMcp(),
+      emit: (e) => e.type === 'notice' && notices.push(e.text),
+      approve: async () => true,
+      clientFactory: rejecting,
+      policy: { getMode: () => 'manual', getRules: () => ({}) },
+    }),
+  );
+  check('отказ шлюза → текстовый протокол с уведомлением', seen[0].tools && !seen[1].tools && notices.some((t) => /текстовый протокол/.test(t)), JSON.stringify(notices));
+  check('и вызов прошёл', h2.some((m) => m.role === 'tool' && /содержимое/.test(m.content)));
+}
+
+{
+  console.log('\n[33] Модель для «Плана» (CC13.5, ADR 0078)');
+  const bodies = [];
+  const notices = [];
+  let modeNow = 'plan';
+  await runAgent(
+    base({
+      messages: [{ role: 'user', content: 'спланируй и сделай' }],
+      mcp: fakeMcp(),
+      emit: (e) => e.type === 'notice' && notices.push(e.text),
+      planner: { provider: { baseURL: 'http://fake-plan', apiKey: 'k2', name: 'plan' }, model: 'strong-planner', label: 'plan/strong-planner' },
+      approve: async () => true,
+      clientFactory: fakeClient(
+        [
+          { calls: [{ name: 'read_file', args: { path: 'txt.txt' } }] },
+          { calls: [{ name: 'read_file', args: { path: 'txt.txt' } }] },
+          { text: 'готово' },
+        ],
+        bodies,
+      ),
+      // После первого шага план «утверждён»: режим меняется.
+      policy: { getMode: () => { const m = modeNow; modeNow = 'acceptEdits'; return m; }, getRules: () => ({}) },
+    }),
+  );
+  check('в «Плане» запрос уходит модели планирования', bodies[0]?.model === 'strong-planner', bodies[0]?.model);
+  check('после плана — основная модель', bodies.slice(1).every((b) => b.model === 'fake-model') && bodies.length >= 2, bodies.map((b) => b.model).join(','));
+  check('переключения видны уведомлениями', notices.some((t) => /План составляет plan\/strong-planner/.test(t)) && notices.some((t) => /выполняет fake-model/.test(t)), JSON.stringify(notices));
 }
 
 fs.rmSync(project, { recursive: true, force: true });

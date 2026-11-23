@@ -1,6 +1,7 @@
 import path from 'node:path';
 import OpenAI from 'openai';
 import { cleanTitle } from './titles.js';
+import { isToolsUnsupported, textToolsPrompt, parseTextToolCalls, toTextProtocol } from './text-tools.js';
 import { providerUserAgent } from './config.js';
 import {
   splitSystem,
@@ -409,6 +410,8 @@ async function runAgentInner({
   project = null,
   // Фоновые субагенты (CC8.6, ADR 0075): реестр от main — start(task), get(id), list().
   background = null,
+  // Комбинированный режим (CC13.5, ADR 0078): { provider, model, label } — модель для «Плана».
+  planner = null,
 }) {
   let usingFallback = false;
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
@@ -429,6 +432,13 @@ async function runAgentInner({
   let useResponses = caps.transport === 'responses';
   let effortSupported = true;
   let toolsNoticeShown = false;
+  // Модель без tool calling (CC13.4, ADR 0078): инструменты — текстовым протоколом.
+  // Выключается settings.textToolProtocol = false — тогда агент только отвечает текстом.
+  const textToolsAllowed = settings.textToolProtocol !== false;
+  let textTools = !caps.tools && textToolsAllowed;
+  // Комбинированный режим (CC13.5): основная модель, пока «План» думает другой.
+  let onPlanner = false;
+  let baseRoute = null;
   // Изображения из вложений — только моделям, которые их принимают (бэклог F1).
   let useImages = caps.vision;
   let imageNoticeShown = false;
@@ -718,6 +728,26 @@ async function runAgentInner({
     if (signal.aborted) break;
     if (iteration > 0) takeQueued();
     const mode = currentMode();
+    // Комбинированный режим (CC13.5): в «Плане» думает модель планирования, после выхода из плана —
+    // снова основная. Запасная модель важнее: после неё планировщик не включается.
+    const wantPlanner = Boolean(planner?.provider && planner.model) && mode === 'plan' && !usingFallback;
+    if (wantPlanner !== onPlanner) {
+      if (wantPlanner) {
+        baseRoute = { client, model, provider, caps };
+        client = makeClient(clientOptions(planner.provider));
+        model = planner.model;
+        provider = planner.provider;
+        caps = modelCapabilities(model, provider);
+        emit({ type: 'notice', text: `План составляет ${planner.label || model}` });
+      } else {
+        ({ client, model, provider, caps } = baseRoute);
+        emit({ type: 'notice', text: `План утверждён — выполняет ${model}` });
+      }
+      onPlanner = wantPlanner;
+      textTools = !caps.tools && textToolsAllowed;
+      useResponses = caps.transport === 'responses';
+      useImages = caps.vision;
+    }
     const tools = buildTools(mode);
     const system =
       systemPrompt({ projectDir, skills, mcpStatus: mcp.status(), mode, trusted, extraDirs, kind }) +
@@ -770,6 +800,8 @@ async function runAgentInner({
           emit({ type: 'notice', text: `Изображений не передано: ${attached.skipped} (тип, размер или лимит запроса).` });
         }
       }
+      // Текстовый протокол: вызовы и результаты — текстом, инструменты — в системном промпте.
+      if (textTools) return [{ role: 'system', content: `${system}\n\n${textToolsPrompt(tools.map((t) => t.schema))}` }, ...toTextProtocol(api)];
       return [{ role: 'system', content: system }, ...api];
     };
 
@@ -796,7 +828,7 @@ async function runAgentInner({
           model,
           instructions,
           input: toInput(rest.map(toApiMessage)),
-          tools: caps.tools ? toResponseTools(tools) : [],
+          tools: caps.tools && !textTools ? toResponseTools(tools) : [],
           temperature: caps.temperature ? settings.temperature ?? 0.3 : null,
           effort: effortSupported && caps.effort.includes(effort) ? effort : '',
           signal: guard.signal,
@@ -814,12 +846,12 @@ async function runAgentInner({
         try {
           if (!caps.tools && !toolsNoticeShown) {
             toolsNoticeShown = true;
-            emit({ type: 'notice', level: 'warn', text: `${model} не вызывает инструменты — агент только отвечает текстом` });
+            emit({ type: 'notice', level: 'warn', text: textTools ? `${model} не поддерживает вызов инструментов — инструменты через текстовый протокол` : `${model} не вызывает инструменты — агент только отвечает текстом` });
           }
           const body = {
             model,
             messages: requestMessages,
-            ...(caps.tools ? { tools: tools.map((t) => t.schema) } : {}),
+            ...(caps.tools && !textTools ? { tools: tools.map((t) => t.schema) } : {}),
             ...requestOptions(caps, { temperature: settings.temperature ?? 0.3, effort: effortSupported ? effort : '' }),
             stream: true,
           };
@@ -886,16 +918,35 @@ async function runAgentInner({
       validCalls = [];
       turnUsage = null;
     };
+    // Текстовый протокол (CC13.4): вызовы — из блоков <tool_call> в ответе.
+    const takeTextCalls = () => {
+      if (!textTools || validCalls.length || !content.includes('<tool_call>')) return;
+      const parsed = parseTextToolCalls(content);
+      content = parsed.text;
+      validCalls = parsed.calls;
+      if (parsed.errors.length) emit({ type: 'notice', level: 'warn', text: `Не разобран вызов инструмента: ${parsed.errors[0]}` });
+    };
     const attempt = async () => {
       try {
         await runTurn(buildRequest(useImages));
+        takeTextCalls();
       } catch (err) {
+        // Шлюз отверг инструменты (CC13.4): дальше — текстовый протокол, этот же шаг заново.
+        if (!signal.aborted && !textTools && textToolsAllowed && isToolsUnsupported(err)) {
+          caps = { ...caps, tools: false };
+          textTools = true;
+          toolsNoticeShown = true;
+          resetTurn();
+          emit({ type: 'notice', level: 'warn', text: `${model} не поддерживает вызов инструментов — перехожу на текстовый протокол` });
+          return attempt();
+        }
         // Шлюз не принял изображение — повторяем шаг без картинок, один раз на прогон.
         if (signal.aborted || !useImages || !isImageRejected(err)) throw err;
         useImages = false;
         resetTurn();
         emit({ type: 'notice', text: `${model} не принял изображение — продолжаю без картинок (путь к файлу и OCR в тексте запроса).` });
         await runTurn(buildRequest(false));
+        takeTextCalls();
       }
     };
     // Спан шага (F22): запрос к модели с повторами.
@@ -926,6 +977,7 @@ async function runAgentInner({
             model = fallback.model;
             provider = fallback.provider;
             caps = modelCapabilities(model, provider);
+            textTools = !caps.tools && textToolsAllowed;
             useResponses = caps.transport === 'responses';
             useImages = caps.vision;
             resetTurn();

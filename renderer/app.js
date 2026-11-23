@@ -4167,6 +4167,8 @@ async function openSettings() {
   const gitAttribution = el('textarea', { class: 'git-attribution', rows: '2', placeholder: 'Подпись в коммитах агента, например: Co-Authored-By: MAI Code <ai@example.com>' });
   gitAttribution.value = settings.gitAttribution || '';
   const fallbackModel = el('input', { class: 'fallback-model', placeholder: 'провайдер/модель, например openai/gpt-5-mini', value: settings.fallbackModel || '' });
+  // Модель для «Плана» (CC13.5): сильная думает, основная выполняет.
+  const planModel = el('input', { class: 'plan-model', placeholder: 'провайдер/модель; пусто — та же, что у чата', value: settings.planModel || '' });
   const outside = el('input', { type: 'checkbox' });
   outside.checked = Boolean(settings.allowOutsideProject);
   // Браузер агента (CW4.1, CW4.2, ADR 0069): включение и сайты без вопросов / под запретом.
@@ -4323,6 +4325,7 @@ async function openSettings() {
         field('Температура', temperature),
         field('Максимум шагов агента', maxIterations),
         field('Запасная модель', fallbackModel),
+        field('Модель для «Плана»', planModel),
         field('Тема', theme),
         field('Защищённые ветки (пуш запрещён)', protectedBranches),
         field('Подпись в коммитах (/commit)', gitAttribution),
@@ -4440,6 +4443,7 @@ async function openSettings() {
             temperature: Number(temperature.value),
             maxIterations: Number(maxIterations.value),
             fallbackModel: fallbackModel.value.trim(),
+            planModel: planModel.value.trim(),
             protectedBranches: protectedBranches.value.split(',').map((b) => b.trim()).filter(Boolean),
             gitAttribution: gitAttribution.value.trim(),
             allowOutsideProject: outside.checked,
