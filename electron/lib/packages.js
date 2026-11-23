@@ -103,11 +103,18 @@ export function packageDirs(packages, kind) {
     .map((p) => ({ source: `package:${p.name}`, dir: path.join(p.dir, kind) }));
 }
 
+/** `${MAI_PACKAGE_DIR}` в командах хуков → папка пакета в кавычках (N5): скрипт хука лежит в пакете. */
+export function expandPackageDir(config, dir) {
+  const quoted = `"${dir}"`;
+  const walk = (v) => (typeof v === 'string' ? v.replace(/"?\$\{MAI_PACKAGE_DIR\}([^"\s]*)"?/g, (_, rest) => `"${path.join(dir, rest.replace(/^[\\/]/, ''))}"`).replace(/\$MAI_PACKAGE_DIR\b/g, quoted) : Array.isArray(v) ? v.map(walk) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : v);
+  return walk(config);
+}
+
 /** Хуки включённых пакетов: [{ source, config }]. */
 export function packageHooks(packages) {
   return (packages || [])
     .filter((p) => p.enabled && p.parts?.hooks)
-    .map((p) => ({ source: `package:${p.name}`, config: readJson(path.join(p.dir, 'hooks.json')) || {} }));
+    .map((p) => ({ source: `package:${p.name}`, config: expandPackageDir(readJson(path.join(p.dir, 'hooks.json')) || {}, p.dir) }));
 }
 
 /** MCP-серверы включённых пакетов: имя сервера → конфигурация, `cwd` по умолчанию — папка пакета. */

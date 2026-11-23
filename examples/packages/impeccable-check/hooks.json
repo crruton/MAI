@@ -1,0 +1,8 @@
+{
+  "PostToolUse": [
+    {
+      "matcher": "write_file|edit_file",
+      "hooks": [{ "type": "command", "command": "node ${MAI_PACKAGE_DIR}/hooks/ui-check.mjs", "timeout": 15 }]
+    }
+  ]
+}

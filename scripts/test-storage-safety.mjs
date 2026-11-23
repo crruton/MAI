@@ -127,6 +127,28 @@ console.log('[5] запись артефакта → автосинхрониз�
   check('упавший слушатель не ломает запись', ok);
 }
 
+console.log('[6] встроенные навыки: обновление по версии (N5, ADR 0101)');
+{
+  const { installBundledSkills, skillVersion, compareSkillVersions } = await import('../electron/lib/skills.js');
+  check('версии сравниваются по числам', compareSkillVersions('4.10.0', '4.8.1') === 1 && compareSkillVersions('', '1.0') === -1 && compareSkillVersions('1.0', '1.0.0') === 0);
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-bundled-'));
+  const dst = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-skills-'));
+  const skill = (dir, name, version, body) => {
+    fs.mkdirSync(path.join(dir, name), { recursive: true });
+    fs.writeFileSync(path.join(dir, name, 'SKILL.md'), `---\nname: ${name}\n${version ? `version: ${version}\n` : ''}---\n${body}\n`);
+  };
+  skill(src, 'impeccable', '4.10.0', 'новая');
+  skill(src, 'handoff', '', 'встроенный');
+  skill(dst, 'impeccable', '4.8.1', 'старая с моей правкой');
+  skill(dst, 'handoff', '', 'мой');
+  check('обновлён один навык (новее), handoff без версии — не тронут', installBundledSkills(src, { target: dst }) === 1 && skillVersion(path.join(dst, 'impeccable')) === '4.10.0' && /мой/.test(fs.readFileSync(path.join(dst, 'handoff', 'SKILL.md'), 'utf8')));
+  check('прежняя копия — в .previous/impeccable-4.8.1', /моей правкой/.test(fs.readFileSync(path.join(dst, '.previous', 'impeccable-4.8.1', 'SKILL.md'), 'utf8')));
+  check('повторно — ничего', installBundledSkills(src, { target: dst }) === 0);
+  check('настоящий встроенный impeccable — 4.10.0, без путей .claude/', skillVersion(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'impeccable')) === '4.10.0' && !fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'skills', 'impeccable', 'SKILL.md'), 'utf8').includes('.claude/skills/impeccable'));
+  fs.rmSync(src, { recursive: true, force: true });
+  fs.rmSync(dst, { recursive: true, force: true });
+}
+
 fs.rmSync(project, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 // Под Electron (boards/artifacts тянут config.js → electron).

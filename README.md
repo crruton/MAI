@@ -383,8 +383,10 @@ PNG собирается в main-процессе через скрытое offs
   (с ограничением размера). Панель «Память» редактирует оба файла.
 - Навыки `handoff`, `dispatch`, `resource-locks`, `harness-refine`,
   `experience-reflect`, `diagram-editor`, `sandbox-isolation` лежат в `skills/` и
-  устанавливаются в `%APPDATA%\mai-code\skills` при первом запуске. Существующие
-  навыки не перезаписываются.
+  устанавливаются в `%APPDATA%\mai-code\skills` при первом запуске, как и `impeccable`
+  4.10.0 (дизайн интерфейсов). Свои навыки не перезаписываются; встроенный
+  обновляется, только если его версия новее, прежняя копия — в `skills/.previous/`
+  (ADR 0101). Пример пакета с хуком проверки UI — `examples/packages/impeccable-check`.
 - Кнопка «＋ Новый проект» создаёт отдельную папку в
   `%APPDATA%\mai-code\sandboxes\<slug>`: свой `.mai-code`, `memory.md`, `docs/`,
   `.gitignore`, загрузки и локальный git-коммит. Шаблоны: пустой, сервис

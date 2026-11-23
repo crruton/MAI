@@ -387,6 +387,13 @@ macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL чер�
 `runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
 «Система: …; оболочка run_shell: …».
 
+### Встроенные навыки и хуки пакетов
+
+ADR 0101. `skills.js` — `skillVersion`, `compareSkillVersions`,
+`installBundledSkills(src, { target })` с обновлением по версии и `.previous/`.
+`packages.js` — `expandPackageDir` для `${MAI_PACKAGE_DIR}` в `packageHooks`.
+Пример пакета — `examples/packages/impeccable-check`.
+
 ### Локальные модели
 
 ADR 0100. `local-models.js` — `LOCAL_SERVERS`, `detectLocalModels`,
