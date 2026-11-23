@@ -71,6 +71,8 @@ const DEFAULTS = {
     command: 'multica',
   },
   // Локальный MAS: распознавание речи для кнопки микрофона.
+  // Сканер обновлений (N6): раз в intervalHours после запуска.
+  updateScan: { enabled: true, intervalHours: 24, releasesRepo: 'crruton/MAI' },
   // Фильтр секретов в запросах к модели (N3): mask | warn | block | off.
   secretFilter: 'mask',
   // Оболочка команд агента (F26): auto — cmd.exe на Windows, $SHELL (bash/zsh) или sh.

@@ -190,6 +190,12 @@ contextBridge.exposeInMainWorld('mai', {
   signoff: { run: (payload) => invoke('signoff:run', payload) },
   // Границы данных (N2).
   privacy: { report: (payload) => invoke('privacy:report', payload) },
+  // Сканер обновлений (N6).
+  updates: {
+    last: () => invoke('updates:last'),
+    scan: (payload) => invoke('updates:scan', payload),
+    apply: (payload) => invoke('updates:apply', payload),
+  },
   multica: {
     status: () => invoke('multica:status'),
     install: () => invoke('multica:install'),

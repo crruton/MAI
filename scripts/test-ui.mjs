@@ -597,6 +597,18 @@ ipcMain.handle('localModels:add', (_e, payload) => {
   localAdds.push(payload);
   return { ok: true, id: 'ollama', models: 2 };
 });
+// Обновления (раздел [59], N6).
+const updateApplies = [];
+const updateReport = { at: '2026-11-23T10:00:00Z', npmChecked: true, counts: { high: 1, medium: 1, low: 0, info: 0 }, errors: [], items: [
+  { source: 'npm', kind: 'security', name: 'tar', risk: 'high', note: 'Arbitrary file overwrite — есть исправление (npm audit fix)' },
+  { source: 'npm', kind: 'update', name: 'openai', current: '6.49.0', latest: '6.50.0', bump: 'minor', risk: 'medium', note: '' },
+] };
+ipcMain.handle('updates:last', () => null);
+ipcMain.handle('updates:scan', () => ({ ok: true, report: updateReport }));
+ipcMain.handle('updates:apply', (_e, payload) => {
+  updateApplies.push(payload);
+  return { ok: true, branch: 'mai/update-deps-202611231000', dir: '/wt/deps', installOk: true, testsRun: true, testsOk: true, command: 'npm test', output: 'Итог: 10 OK' };
+});
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
   projectDir: root,
@@ -2196,6 +2208,22 @@ app.whenReady().then(async () => {
     await wait(600);
     check('«Добавить» — провайдер ollama', localAdds.length === 1 && localAdds[0].id === 'ollama', JSON.stringify(localAdds));
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[59] /updates — обновления по риску и ветка с тестами (N6, ADR 0102)');
+    await slashCmd('/updates');
+    await wait(600);
+    const up0 = await ui(`document.querySelector('.updates-head')?.textContent || ''`);
+    check('отчёта нет — подсказка «Проверить сейчас»', /Проверить сейчас/.test(up0), up0);
+    await ui(`document.querySelector('.updates-scan').click()`);
+    await wait(500);
+    const up1 = await ui(`({ items: [...document.querySelectorAll('.updates-item')].map((i) => i.textContent), picks: document.querySelectorAll('.updates-pick').length, disabled: document.querySelector('.updates-apply').disabled })`);
+    check('уязвимость высокого риска первой; выбрать можно только обновление npm', up1.items.length === 2 && /высокий.*уязвимость: tar/.test(up1.items[0]) && /openai 6.49.0 → 6.50.0/.test(up1.items[1]) && up1.picks === 1 && up1.disabled, JSON.stringify(up1));
+    await ui(`(() => { const c = document.querySelector('.updates-pick'); c.checked = true; c.dispatchEvent(new Event('change')); document.querySelector('.updates-apply').click(); })()`);
+    await wait(600);
+    const up2 = await ui(`document.querySelector('.updates-result')?.textContent || ''`);
+    check('«Обновить на ветке» — openai@6.50.0, тесты прошли, проект не тронут', updateApplies[0]?.packages?.[0]?.name === 'openai' && updateApplies[0].packages[0].version === '6.50.0' && /✓ Стабильно: ветка mai\/update-deps/.test(up2) && /\/worktree/.test(up2), `${JSON.stringify(updateApplies)} ${up2}`);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`document.querySelector('#input').value = ''`);
 
     check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {

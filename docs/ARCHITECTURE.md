@@ -387,6 +387,15 @@ macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL чер�
 `runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
 «Система: …; оболочка run_shell: …».
 
+### Сканер обновлений
+
+ADR 0102. `update-scan.js` — `bumpKind`, `parseOutdated`, `parseAudit`,
+`parseLsProblems`, `skillUpdates`, `toolUpdates`, `scanUpdates`, `scanDue`,
+`installArgs`. В main — `runUpdateScan` (отчёт `update-scan.json`),
+`scheduleUpdateScan` после старта, IPC `updates:last`/`updates:scan` (ANY) и
+`updates:apply` (ADMIN: worktree `mai/update-…`, npm install, тесты). В app.js —
+`openUpdates`.
+
 ### Встроенные навыки и хуки пакетов
 
 ADR 0101. `skills.js` — `skillVersion`, `compareSkillVersions`,

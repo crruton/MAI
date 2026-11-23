@@ -179,6 +179,10 @@ export const IPC_PERMISSIONS = {
   // Локальные модели (N4).
   'localModels:detect': ANY,
   'localModels:add': ADMIN,
+  // Сканер обновлений (N6): скан и отчёт — чтение; обновление на ветке — admin.
+  'updates:last': ANY,
+  'updates:scan': ANY,
+  'updates:apply': ADMIN,
 
   // Docker-песочницы
   'sandbox:status': ANY,

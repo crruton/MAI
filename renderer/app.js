@@ -1866,6 +1866,91 @@ function prPrompt(args = '') {
  * /signoff [fail] [контекст] (N1, ADR 0097): тесты проекта → статус коммита в
  * GitHub. Окно показывает шаги, вывод упавших тестов и итог.
  */
+/**
+ * /updates (N6, ADR 0102): обновления по риску; пакеты npm — обновить на
+ * отдельной ветке с тестами, в проект — только после слияния.
+ */
+async function openUpdates() {
+  const RISK = { high: ['red', 'высокий'], medium: ['amber', 'средний'], low: ['green', 'низкий'], info: ['', 'сведения'] };
+  const KIND = { update: 'обновление', security: 'уязвимость', conflict: 'конфликт' };
+  const head = el('p', { class: 'hint-text updates-head', text: 'Загружаю последний отчёт…' });
+  const box = el('div', { class: 'updates-list' });
+  const result = el('pre', { class: 'output updates-result', hidden: true });
+  const selected = new Map();
+  const applyBtn = el('button', { class: 'btn primary updates-apply', type: 'button', text: 'Обновить на ветке и прогнать тесты', disabled: true });
+  const render = (report) => {
+    box.replaceChildren();
+    selected.clear();
+    applyBtn.disabled = true;
+    if (!report) {
+      head.textContent = 'Отчёта ещё нет — нажмите «Проверить сейчас».';
+      return;
+    }
+    const c = report.counts || {};
+    head.textContent = `Проверено ${new Date(report.at).toLocaleString()}: высокий риск ${c.high || 0}, средний ${c.medium || 0}, низкий ${c.low || 0}.${report.npmChecked ? '' : ' Зависимости npm не проверялись: нет package.json или папка не доверена.'}${report.errors?.length ? ` Не проверено: ${report.errors.join('; ')}` : ''}`;
+    if (!report.items.length) box.append(el('div', { class: 'empty-note', text: 'Всё актуально.' }));
+    for (const item of report.items) {
+      const [color, label] = RISK[item.risk] || RISK.info;
+      const pick = item.source === 'npm' && item.kind === 'update' && item.current && item.latest;
+      const cb = pick ? el('input', { type: 'checkbox', class: 'updates-pick', 'data-name': item.name }) : null;
+      if (cb) {
+        cb.onchange = () => {
+          if (cb.checked) selected.set(item.name, item.latest);
+          else selected.delete(item.name);
+          applyBtn.disabled = !selected.size;
+        };
+      }
+      box.append(
+        el('div', { class: `list-item updates-item risk-${item.risk}` }, [
+          cb,
+          el('div', { class: 'grow' }, [
+            el('div', { class: 'title' }, [el('span', { class: `badge ${color}`, text: label }), ` ${item.source} · ${KIND[item.kind] || item.kind}: ${item.name}${item.current ? ` ${item.current}` : ''}${item.latest ? ` → ${item.latest}` : ''}`]),
+            item.note ? el('div', { class: 'sub', text: item.note }) : null,
+          ]),
+        ]),
+      );
+    }
+  };
+  const scanBtn = el('button', {
+    class: 'btn updates-scan',
+    type: 'button',
+    text: 'Проверить сейчас',
+    onclick: async () => {
+      scanBtn.disabled = true;
+      head.textContent = 'Проверяю npm, навыки, CLI и релизы MAI Code…';
+      const res = await api.updates.scan({ projectDir: state.projectDir }).catch((err) => ({ ok: false, error: err.message }));
+      scanBtn.disabled = false;
+      if (!res.ok) return toast(`Обновления: ${res.error}`, 'err');
+      render(res.report);
+    },
+  });
+  applyBtn.onclick = async () => {
+    const packages = [...selected].map(([name, version]) => ({ name, version }));
+    applyBtn.disabled = true;
+    result.hidden = false;
+    result.textContent = `Создаю ветку mai/update-…, ставлю ${packages.map((p) => `${p.name}@${p.version}`).join(', ')} и запускаю тесты…`;
+    const res = await api.updates.apply({ projectDir: state.projectDir, packages }).catch((err) => ({ ok: false, error: err.message }));
+    applyBtn.disabled = false;
+    if (res.error && !res.branch) {
+      result.textContent = `✗ ${res.error}`;
+      return;
+    }
+    result.textContent = [
+      res.ok ? `✓ Стабильно: ветка ${res.branch}${res.testsRun ? `, тесты (${res.command}) прошли` : ', тестов в проекте нет — проверьте вручную'}.` : `✗ ${!res.installOk ? 'npm install не прошёл' : 'тесты не прошли'} на ветке ${res.branch} — проект не тронут.`,
+      `Рабочая копия: ${res.dir}. Слить — /worktree, удалить — там же.`,
+      '',
+      res.output || '',
+    ].join('\n');
+  };
+  const modal = openModal({
+    title: 'Обновления',
+    wide: true,
+    body: [el('p', { class: 'hint-text', text: 'Раз в сутки MAI сам проверяет зависимости, уязвимости, конфликты версий, встроенные навыки, CLI и новую версию приложения. Обновление — только на отдельной ветке с тестами.' }), head, box, result],
+    footer: [scanBtn, applyBtn, el('button', { class: 'btn ghost', type: 'button', text: 'Закрыть', onclick: () => modal.close() })],
+  });
+  render(await api.updates.last().catch(() => null));
+}
+
 /** /privacy (N2, ADR 0098): куда уходят данные и чек-лист «строго локально». */
 async function openPrivacy() {
   const report = await api.privacy.report({ projectDir: state.projectDir });
@@ -2092,6 +2177,10 @@ async function runSlash(text) {
     case 'privacy':
       clear();
       await openPrivacy();
+      return;
+    case 'updates':
+      clear();
+      await openUpdates();
       return;
     case 'memory':
       clear();

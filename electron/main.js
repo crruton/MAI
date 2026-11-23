@@ -40,7 +40,8 @@ import { localConnectors } from './lib/local-connectors.js';
 import { createNotifier } from './lib/notify.js';
 import { currentBranch } from './lib/git-guard.js';
 import { repoRoot, realPath, createWorktree, listWorktrees, removeWorktree, worktreeId } from './lib/worktree.js';
-import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills } from './lib/skills.js';
+import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills, skillVersion } from './lib/skills.js';
+import { scanUpdates, scanDue, installArgs } from './lib/update-scan.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
 import { McpManager } from './lib/mcp.js';
 import { loadPlugins, pluginDirs } from './lib/plugins.js';
@@ -99,7 +100,7 @@ import { acquireProject } from './lib/project-lock.js';
 import { isCliInvocation, parseCliArgs, CLI_HELP, streamLine, resultObject } from './lib/cli.js';
 import { isSelfCheck, selfCheckOut, runSelfCheck } from './lib/self-check.js';
 import { applySystemCa } from './lib/system-ca.js';
-import { runSignoff } from './lib/signoff.js';
+import { runSignoff, testCommandFor } from './lib/signoff.js';
 import { dataBoundaryReport } from './lib/data-boundary.js';
 import { detectLocalModels, providerFromLocal } from './lib/local-models.js';
 import { spawnShell, killTree as killProcessTree } from './lib/proc.js';
@@ -493,6 +494,8 @@ app.whenReady().then(async () => {
   }
   applyTheme(loadSettings().theme);
   createWindow();
+  // Сканер обновлений (N6): раз в сутки, в фоне, через полторы минуты после старта.
+  scheduleUpdateScan();
   const settings = loadSettings();
   emitLog('MAI Code запущен', { attributes: { platform: process.platform, version: app.getVersion() } });
   mcp.sync(mcpConfigs(settings.projectDir)).catch(() => {});
@@ -2824,6 +2827,120 @@ ipcMain.handle('skills:delete', (_e, file) => {
   requireAdmin();
   return deleteSkill(file);
 });
+
+// ---------- Сканер обновлений (N6, ADR 0102) ----------
+
+const updateReportFile = () => path.join(dataDir(), 'update-scan.json');
+const readUpdateReport = () => {
+  try {
+    return JSON.parse(fs.readFileSync(updateReportFile(), 'utf8'));
+  } catch {
+    return null;
+  }
+};
+let updateScanRunning = null;
+
+/** Скан: npm (только доверенный проект с package.json), навыки, CLI, MAI Code. */
+function runUpdateScan(projectDir) {
+  if (updateScanRunning) return updateScanRunning;
+  const settings = loadSettings();
+  const run = (cmd, args, cwd) => {
+    // npm на Windows — .cmd-обёртка; аргументы фиксированные, оболочка безопасна.
+    const r = spawnSync(cmd, args, { cwd: cwd || process.cwd(), encoding: 'utf8', windowsHide: true, timeout: 120_000, shell: process.platform === 'win32', maxBuffer: 32 * 1024 * 1024 });
+    return { code: r.status ?? -1, stdout: r.stdout || '' };
+  };
+  const fetchJson = async (url) => {
+    const res = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': 'mai-code-update-scan' }, signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  };
+  const bundledDir = path.join(app.getAppPath(), 'skills');
+  const installedDir = path.join(dataDir(), 'skills');
+  let skills = [];
+  try {
+    skills = fs.readdirSync(bundledDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => ({ name: e.name, bundled: skillVersion(path.join(bundledDir, e.name)), installed: skillVersion(path.join(installedDir, e.name)) }));
+  } catch {
+    /* нет встроенных навыков */
+  }
+  const hasPackageJson = Boolean(projectDir) && isTrusted(projectDir) && fs.existsSync(path.join(projectDir, 'package.json'));
+  updateScanRunning = scanUpdates({ projectDir, hasPackageJson, appVersion: app.getVersion(), skills, releasesRepo: settings.updateScan?.releasesRepo ?? 'crruton/MAI', run, fetchJson })
+    .then((report) => {
+      const full = { ...report, projectDir, npmChecked: hasPackageJson };
+      fs.writeFileSync(updateReportFile(), JSON.stringify(full, null, 2), 'utf8');
+      return full;
+    })
+    .finally(() => {
+      updateScanRunning = null;
+    });
+  return updateScanRunning;
+}
+
+ipcMain.handle('updates:last', () => readUpdateReport());
+ipcMain.handle('updates:scan', async (_e, payload = {}) => {
+  try {
+    return { ok: true, report: await runUpdateScan(projectOf(payload)) };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
+/**
+ * Обновить на ветке (N6): отдельная рабочая копия mai/update-…, npm install
+ * выбранных, тесты проекта. В проект ничего не попадает до слияния вручную.
+ */
+ipcMain.handle('updates:apply', async (_e, payload = {}) => {
+  requireAdmin();
+  const projectDir = projectOf(payload);
+  const settings = loadSettings();
+  const repo = repoRoot(projectDir);
+  if (!repo) return { ok: false, error: 'Папка проекта — не git-репозиторий: обновлять негде, кроме самого проекта' };
+  let args;
+  try {
+    args = installArgs(payload.packages);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 12);
+  let wt;
+  try {
+    wt = createWorktree({ repo, baseDir: path.join(worktreesDir(), path.basename(repo)), id: `deps-${stamp}`, branchPrefix: 'mai/update-' });
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+  if (isTrusted(repo)) setTrust(dataDir(), wt.dir, 'trusted');
+  const dir = path.join(wt.dir, path.relative(repo, realPath(projectDir)));
+  const install = await signoffExec(dir, `npm ${args.join(' ')}`, { ...settings, signoff: { timeoutMin: 15 } });
+  const command = testCommandFor(dir, settings);
+  const tests = install.code === 0 && command ? await signoffExec(dir, command, settings) : null;
+  audit({ at: new Date().toISOString(), tool: 'updates:apply', source: 'user', cls: 'exec', subject: `${wt.branch}: ${args.slice(1).join(' ')}`.slice(0, 300), decision: 'allow' });
+  return {
+    ok: install.code === 0 && (!tests || tests.code === 0),
+    branch: wt.branch,
+    dir,
+    installOk: install.code === 0,
+    testsRun: Boolean(tests),
+    testsOk: tests ? tests.code === 0 : null,
+    command,
+    output: String((tests || install).output || '').slice(-4000),
+  };
+});
+
+/** Раз в сутки после запуска — тихий скан; уязвимости высокого риска — уведомлением. */
+function scheduleUpdateScan() {
+  const settings = loadSettings();
+  if (settings.updateScan?.enabled === false) return;
+  const timer = setTimeout(async () => {
+    if (!scanDue(readUpdateReport()?.at, { intervalHours: Number(settings.updateScan?.intervalHours) || 24 })) return;
+    try {
+      const report = await runUpdateScan(loadSettings().projectDir);
+      const urgent = report.items.filter((i) => i.risk === 'high');
+      if (urgent.length) notify('background', { title: `Обновления: ${urgent.length} высокого риска`, body: urgent.slice(0, 3).map((i) => `${i.name}: ${i.note || i.latest}`).join('; ').slice(0, 200) }).catch(() => {});
+    } catch {
+      /* сеть или npm недоступны — попробуем при следующем запуске */
+    }
+  }, Number(process.env.MAI_UPDATE_SCAN_DELAY_MS || 90_000));
+  timer.unref?.();
+}
 
 // ---------- Границы данных (N2, ADR 0098) ----------
 

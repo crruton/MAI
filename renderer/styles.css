@@ -893,3 +893,9 @@ button { cursor: pointer; }
 .privacy-title { font-weight: 500; }
 .privacy-checklist { margin: 6px 0 0; padding-left: 0; list-style: none; display: grid; gap: 4px; }
 .privacy-checklist li.no { color: var(--text-muted); }
+
+/* Обновления (N6) */
+.updates-list { display: grid; gap: 6px; margin: 8px 0; max-height: 50vh; overflow: auto; }
+.updates-item { display: flex; gap: 8px; align-items: flex-start; }
+.updates-item.risk-high { border-left: 3px solid var(--red, #e5484d); }
+.updates-result { max-height: 30vh; overflow: auto; }
