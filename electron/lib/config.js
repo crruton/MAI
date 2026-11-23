@@ -71,6 +71,8 @@ const DEFAULTS = {
     command: 'multica',
   },
   // Локальный MAS: распознавание речи для кнопки микрофона.
+  // Голосовой ввод (F18): движок mas (локально) или provider (audio/transcriptions).
+  voice: { engine: 'mas', model: '', language: 'ru' },
   mas: {
     enabled: true,
     url: 'http://127.0.0.1:8765',

@@ -30,6 +30,9 @@ export const IPC_PERMISSIONS = {
   'mas:status': ANY,
   'mas:config': ANY,
   'mas:transcribe': ANY,
+  // Голосовой ввод с выбором движка (F18).
+  'voice:status': ANY,
+  'voice:transcribe': ANY,
   'ocr:status': ANY,
   'ocr:recognize': ANY,
 

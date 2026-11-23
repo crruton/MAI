@@ -221,6 +221,11 @@ contextBridge.exposeInMainWorld('mai', {
     config: () => invoke('mas:config'),
     transcribe: (payload) => invoke('mas:transcribe', payload),
   },
+  // Голосовой ввод: движок по настройке (F18).
+  voice: {
+    status: () => invoke('voice:status'),
+    transcribe: (payload) => invoke('voice:transcribe', payload),
+  },
   plugins: {
     list: (projectDir) => invoke('plugins:list', projectDir),
     openFolder: (projectDir) => invoke('plugins:openFolder', projectDir),

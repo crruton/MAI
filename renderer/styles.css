@@ -875,3 +875,7 @@ button { cursor: pointer; }
 /* «Запомнить?» (F4) */
 .memory-suggest { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 auto 8px; max-width: 880px; width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elev); font-size: 13px; }
 .memory-suggest-text { flex: 1; min-width: 200px; }
+
+/* Голосовой ввод: ошибка на кнопке и повтор (F18) */
+.mic.error { color: var(--red, #e5484d); border-color: var(--red, #e5484d); }
+.mic-retry { font-size: 14px; }

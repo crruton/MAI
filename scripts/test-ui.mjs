@@ -557,6 +557,15 @@ ipcMain.handle('boards:calibrate', () => {
   if (calibrateRuns === 1) return { ok: false, error: 'Калибратор не ответил за 180 с', log: ['Контекст собран: 1200 симв.'] };
   return { ok: true, at: '2026-11-23T10:00:00Z', report: { summary: 'Две находки', findings: [{ type: 'gap', severity: 'high', title: 'Нет SSO', detail: 'PRD требует SSO', refs: ['PRD', 'C2'], suggestion: 'Keycloak' }, { type: 'risk', severity: 'low', title: 'Один экземпляр БД', detail: '', refs: [], suggestion: '' }] }, diff: { added: [{ type: 'risk', title: 'Один экземпляр БД' }], resolved: [{ type: 'question', title: 'Кто админ' }], kept: [{ type: 'gap', title: 'Нет SSO' }] }, sameBaseline: false, artifact: { id: 'calibration:architecture', current: 2 }, log: ['Контекст собран', 'Находок: 2'] };
 });
+// Голос: ошибка на кнопке и повтор (раздел [54], F18).
+let voiceUp = false;
+const voiceSends = [];
+ipcMain.handle('voice:status', () => (voiceUp ? { ok: true, engine: 'mas' } : { ok: false, engine: 'mas', error: 'MAS не запущен. Откройте приложение MAS' }));
+ipcMain.handle('voice:transcribe', (_e, payload) => {
+  voiceSends.push(payload.wav.byteLength);
+  if (voiceSends.length === 1) throw new Error('MAS: HTTP 500');
+  return { text: 'надиктованный текст', engine: 'mas', elapsedMs: 900 };
+});
 ipcMain.handle('boards:load', () => ({
   boards: craftedBoards || loadBoards(root),
   projectDir: root,
@@ -731,7 +740,7 @@ app.whenReady().then(async () => {
       const buttons = [...body.querySelectorAll('button')].map((b) => b.innerText.trim());
       return {
         open: true,
-        hasGroup: raw.includes('MAS — распознавание речи'),
+        hasGroup: raw.includes('Голос — распознавание речи') && raw.includes('Движок'),
         hasHint: text.includes('кнопка микрофона'),
         hasToken: /api-token/.test(text),
         hasUrl: inputs.includes('http://127.0.0.1:8765'),
@@ -2084,6 +2093,28 @@ app.whenReady().then(async () => {
 
     console.log('\n[53] «Проект в отдельной папке» вместо «песочницы» (F16, ADR 0091)');
     const names = await ui(`({ btn: document.querySelector('#new-project-btn').title, docker: document.querySelector('[data-panel=sandbox]').textContent.trim() })`);
+    console.log('\n[54] Голос: ошибка на кнопке и повтор записи (F18, ADR 0092)');
+    await ui(`document.querySelector('#mic').click()`);
+    await wait(400);
+    const micDown = await ui(`({ cls: document.querySelector('#mic').className, title: document.querySelector('#mic').title, retry: Boolean(document.querySelector('#mic-retry')) })`);
+    check('MAS не запущен — ошибка на кнопке с причиной, без «↻»', /error/.test(micDown.cls) && /MAS не запущен/.test(micDown.title) && !micDown.retry, JSON.stringify(micDown));
+    voiceUp = true;
+    // Синтетический микрофон: тон из генератора вместо устройства.
+    await ui(`navigator.mediaDevices.getUserMedia = async () => { const c = new AudioContext(); const o = c.createOscillator(); const d = c.createMediaStreamDestination(); o.connect(d); o.start(); return d.stream; }; true`);
+    await ui(`document.querySelector('#mic').click()`);
+    await wait(1500);
+    const recording = await ui(`document.querySelector('#mic').classList.contains('recording')`);
+    await ui(`document.querySelector('#mic').click()`);
+    await wait(800);
+    const micFail = await ui(`({ cls: document.querySelector('#mic').className, title: document.querySelector('#mic').title, retry: Boolean(document.querySelector('#mic-retry')) })`);
+    check('запись есть, распознавание упало — ошибка и «↻»', recording && voiceSends.length === 1 && voiceSends[0] > 44 && /error/.test(micFail.cls) && /HTTP 500/.test(micFail.title) && micFail.retry, JSON.stringify({ recording, voiceSends, micFail }));
+    await ui(`document.querySelector('#input').value = ''`);
+    await ui(`document.querySelector('#mic-retry').click()`);
+    await wait(600);
+    const micOk = await ui(`({ cls: document.querySelector('#mic').className, input: document.querySelector('#input').value, retry: Boolean(document.querySelector('#mic-retry')) })`);
+    check('«↻» — та же запись, текст в поле, состояние сброшено', voiceSends.length === 2 && voiceSends[1] === voiceSends[0] && micOk.input === 'надиктованный текст' && !/error/.test(micOk.cls) && !micOk.retry, JSON.stringify({ voiceSends, micOk }));
+    await ui(`document.querySelector('#input').value = ''`);
+
     check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {
     fail += 1;

@@ -107,3 +107,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0089](0089-statusy-multica-v-openspec.md) | Статусы Multica обратно в OpenSpec | accepted | 2026-11-23 |
 | [0090](0090-kalibrator-arhitektury.md) | Калибратор архитектуры и PRD — субагент и вкладка доски | accepted | 2026-11-23 |
 | [0091](0091-proekt-v-otdelnoy-papke.md) | «Проект в отдельной папке» вместо «песочницы проекта» | accepted | 2026-11-23 |
+| [0092](0092-golos-sostoyanie-povtor-dvizhok.md) | Голосовой ввод: состояние на кнопке, повтор и выбор движка | accepted | 2026-11-23 |

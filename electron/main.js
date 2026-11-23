@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings, publicSettings, dataDir, providerUserAgent, migrateSecrets, secretBox } from './lib/config.js';
 import { titleBarOptions, windowColors, normalizeTheme } from './lib/window.js';
 import { masStatus, masTranscribe, masConfig } from './lib/mas.js';
+import { voiceConfig, providerVoiceStatus, providerTranscribe } from './lib/voice.js';
 import { listModels, resolveModel, modelContext } from './lib/models.js';
 import { startRuntime, describeRuntime, probeRuntime, permissionPlan, exportRuntimes, importRuntimes } from './lib/runtimes.js';
 import { createSession, deleteSession, getSession, listSessions, saveSession, setSessionMode, setSessionDirs, setSessionKind, setSessionRun, markInterrupted, addSessionRules, removeSessionRules, renameSession, forkSession, importSession, expiredSessions } from './lib/sessions.js';
@@ -546,6 +547,22 @@ ipcMain.handle('mas:transcribe', async (_e, payload) => {
   const wav = payload?.wav;
   if (!wav || !wav.byteLength) throw new Error('Пустая запись');
   return masTranscribe({ wav: Buffer.from(wav), model: payload?.model });
+});
+
+// Голосовой ввод (F18, ADR 0092): движок — MAS или провайдер (audio/transcriptions).
+ipcMain.handle('voice:status', async () => {
+  const settings = loadSettings();
+  const config = voiceConfig(settings);
+  if (config.engine === 'provider') return providerVoiceStatus(config, (key) => resolveModel(settings, key));
+  return { ...(await masStatus()), engine: 'mas' };
+});
+ipcMain.handle('voice:transcribe', async (_e, payload) => {
+  const wav = payload?.wav;
+  if (!wav || !wav.byteLength) throw new Error('Пустая запись');
+  const settings = loadSettings();
+  const config = voiceConfig(settings);
+  if (config.engine === 'provider') return providerTranscribe({ wav, config, resolve: (key) => resolveModel(settings, key) });
+  return { ...(await masTranscribe({ wav: Buffer.from(wav) })), engine: 'mas' };
 });
 
 // ---------- OCR: распознавание текста на изображениях ----------

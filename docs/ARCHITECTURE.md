@@ -356,6 +356,13 @@ ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,
 ADR 0091. Подписи «＋ Новый проект» и панели «Docker» в `index.html`/`app.js`;
 `workspace.js` по-прежнему создаёт проекты в `<данные>/sandboxes/` (совместимость).
 
+### Голосовой ввод
+
+ADR 0092. `voice.js` — `voiceConfig`, `providerVoiceStatus`, `providerTranscribe`;
+IPC `voice:status`/`voice:transcribe` выбирают MAS (`mas.js`) или провайдера. В
+app.js — `setMicState(kind, message)` с состоянием `error`, `transcribeWav`,
+`retryVoice` и кнопкой `#mic-retry` (запись — в `voice.lastWav`).
+
 ### Рантаймы: версия и перенос
 
 ADR 0085. `runtimes.js` — `probeRuntime` (+ `--version`, `versionOf`,

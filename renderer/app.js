@@ -4375,6 +4375,15 @@ async function openSettings() {
     value: '',
     placeholder: mas.tokenSet ? 'токен сохранён — оставьте пусто' : 'автоматически из %APPDATA%\\MAS\\data\\api-token',
   });
+  // Движок голосового ввода (F18): MAS локально или провайдер.
+  const voiceSettings = settings.voice || {};
+  const voiceEngine = el('select', { class: 'voice-engine' }, [
+    el('option', { value: 'mas', text: 'MAS — локально, запись не покидает компьютер' }),
+    el('option', { value: 'provider', text: 'Провайдер — audio/transcriptions (Whisper и др.)' }),
+  ]);
+  voiceEngine.value = voiceSettings.engine === 'provider' ? 'provider' : 'mas';
+  const voiceModel = el('input', { class: 'voice-model', value: voiceSettings.model || '', placeholder: 'openai/whisper-1' });
+  const voiceLanguage = el('input', { class: 'voice-language', value: voiceSettings.language || 'ru', placeholder: 'ru' });
   const masCheck = el('button', {
     class: 'btn',
     type: 'button',
@@ -4522,7 +4531,12 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Локальный стек: npm run obs:up. Grafana — http://localhost:3001, Tempo/Loki — 72 часа.',
       }),
-      el('div', { class: 'docs-group-title', text: 'MAS — распознавание речи' }),
+      el('div', { class: 'docs-group-title', text: 'Голос — распознавание речи' }),
+      el('div', { class: 'row' }, [field('Движок', voiceEngine), field('Модель провайдера', voiceModel), field('Язык', voiceLanguage)]),
+      el('p', {
+        class: 'hint-text',
+        text: 'Провайдер: модель вида «провайдер/модель» (например, openai/whisper-1); запись уходит этому провайдеру. MAS ниже — локальный движок.',
+      }),
       el('label', { class: 'hint-text' }, [masEnabled, ' кнопка микрофона отправляет запись в локальный MAS']),
       el('div', { class: 'row' }, [field('Адрес MAS', masUrl), field('Модель', masModel)]),
       el('div', { class: 'row' }, [field('Токен', masToken), masCheck]),
@@ -4598,6 +4612,7 @@ async function openSettings() {
               endpoint: telemetryEndpoint.value.trim() || 'http://127.0.0.1:4318',
               serviceName: 'mai-code',
             },
+            voice: { engine: voiceEngine.value, model: voiceModel.value.trim(), language: voiceLanguage.value.trim() || 'ru' },
             mas: {
               enabled: masEnabled.checked,
               url: masUrl.value.trim() || 'http://127.0.0.1:8765',
@@ -6088,19 +6103,72 @@ const voice = {
   chunks: [],
   startedAt: 0,
   ticker: null,
+  // Последняя запись, которую не удалось распознать (F18): «повторить» без новой записи.
+  lastWav: null,
+  error: '',
 };
 
-function setMicState(kind) {
+const VOICE_ENGINE_NAMES = { mas: 'MAS', provider: 'провайдер' };
+
+/**
+ * Состояние кнопки микрофона (F18): запись, распознавание, ошибка с причиной.
+ * При ошибке распознавания рядом — «↻» (та же запись ещё раз).
+ */
+function setMicState(kind, message = '') {
   const button = $('#mic');
   if (!button) return;
+  const engine = VOICE_ENGINE_NAMES[state.settings?.voice?.engine] || 'MAS';
+  voice.error = kind === 'error' ? message : '';
   button.classList.toggle('recording', kind === 'recording');
   button.classList.toggle('busy', kind === 'busy');
+  button.classList.toggle('error', kind === 'error');
   button.disabled = kind === 'busy';
   button.setAttribute('aria-pressed', kind === 'recording' ? 'true' : 'false');
   button.title =
     kind === 'recording'
       ? 'Идёт запись: нажмите, чтобы распознать'
-      : 'Голосовой ввод (MAS): нажмите, продиктуйте задачу, нажмите ещё раз';
+      : kind === 'busy'
+        ? `Распознаю (${engine})…`
+        : kind === 'error'
+          ? `Ошибка: ${message}. Нажмите, чтобы записать снова${voice.lastWav ? '; ↻ — распознать ту же запись ещё раз' : ''}`
+          : `Голосовой ввод (${engine}): нажмите, продиктуйте задачу, нажмите ещё раз`;
+  let retry = $('#mic-retry');
+  if (kind === 'error' && voice.lastWav) {
+    if (!retry) {
+      retry = el('button', { class: 'btn icon mic-retry', id: 'mic-retry', type: 'button', text: '↻', title: 'Распознать ту же запись ещё раз', 'aria-label': 'Повторить распознавание', onclick: () => retryVoice() });
+      button.after(retry);
+    }
+  } else {
+    retry?.remove();
+  }
+}
+
+/** Отправка записи на распознавание; при ошибке запись остаётся для «↻». */
+async function transcribeWav(wav) {
+  voice.busy = true;
+  setMicState('busy');
+  try {
+    const result = await api.voice.transcribe({ wav });
+    if (!result.text) {
+      voice.lastWav = wav;
+      setMicState('error', 'речь не разобрана — попробуйте ближе к микрофону');
+      return;
+    }
+    voice.lastWav = null;
+    insertIntoInput(result.text);
+    setMicState('');
+    toast(`Распознано за ${(result.elapsedMs / 1000).toFixed(1)} с (${VOICE_ENGINE_NAMES[result.engine] || 'MAS'})`, 'ok');
+  } catch (error) {
+    voice.lastWav = wav;
+    setMicState('error', String(error?.message || error).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+  } finally {
+    voice.busy = false;
+  }
+}
+
+function retryVoice() {
+  if (!voice.lastWav || voice.busy || voice.recording) return;
+  transcribeWav(voice.lastWav);
 }
 
 function writeAscii(view, offset, text) {
@@ -6160,18 +6228,20 @@ function insertIntoInput(text) {
 async function startVoice() {
   if (voice.recording || voice.busy) return;
 
-  const status = await api.mas.status().catch((error) => ({ ok: false, error: error?.message || String(error) }));
+  const status = await api.voice.status().catch((error) => ({ ok: false, error: error?.message || String(error) }));
   if (!status.ok) {
-    toast(status.error || 'MAS недоступен', 'error');
+    voice.lastWav = null;
+    setMicState('error', status.error || 'распознавание недоступно');
     return;
   }
+  voice.lastWav = null;
 
   try {
     voice.stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
   } catch (error) {
-    toast(`Нет доступа к микрофону: ${error?.message || error}`, 'error');
+    setMicState('error', `нет доступа к микрофону: ${error?.message || error}`);
     return;
   }
 
@@ -6191,7 +6261,7 @@ async function startVoice() {
     voice.sink.connect(voice.context.destination);
   } catch (error) {
     stopTracks();
-    toast(`Не удалось начать запись: ${error?.message || error}`, 'error');
+    setMicState('error', `не удалось начать запись: ${error?.message || error}`);
     return;
   }
 
@@ -6241,26 +6311,11 @@ async function stopVoice() {
   voice.chunks = [];
 
   if (seconds < 0.6) {
-    setMicState('');
-    toast('Слишком короткая запись: удерживайте кнопку и говорите дольше', 'error');
+    setMicState('error', 'слишком короткая запись — говорите дольше');
     return;
   }
 
-  setMicState('busy');
-  try {
-    const wav = encodeWav(chunks, sampleRate);
-    const result = await api.mas.transcribe({ wav });
-    if (!result.text) {
-      toast('MAS не разобрал речь: попробуйте ближе к микрофону', 'error');
-      return;
-    }
-    insertIntoInput(result.text);
-    toast(`Распознано за ${(result.elapsedMs / 1000).toFixed(1)} с`, 'ok');
-  } catch (error) {
-    toast(error?.message || String(error), 'error');
-  } finally {
-    setMicState('');
-  }
+  await transcribeWav(encodeWav(chunks, sampleRate));
 }
 
 function toggleVoice() {
