@@ -340,6 +340,12 @@ ADR 0079. `tools/notebook.js` — `renderNotebook` (в `read_file` для
 `splitTools`, `deferredPrompt`, `searchTools`: в `runAgent` `allTools` (что
 выполнить) и `tools` (что видит модель) + `tool_search`, `loadedTools` на прогон.
 
+### Набор сценариев
+
+ADR 0082. `evals/tasks.json`, `evals/profiles.json`; `scripts/eval-lib.mjs` —
+`writeFiles`, `runCheck`/`gradeTask`, `validateTasks`, `reportMarkdown`;
+`scripts/eval.mjs` гоняет профиль × задача через `bin/mai.mjs -p --output json`.
+
 ### Безголовый режим
 
 ADR 0077. `cli.js` — `isCliInvocation`, `parseCliArgs`, `resultObject`,

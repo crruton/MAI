@@ -97,3 +97,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0079](0079-noutbuki-diagnostika-otlozhennye-instrumenty.md) | Ноутбуки, диагностика кода и отложенная загрузка инструментов | accepted | 2026-11-23 |
 | [0080](0080-pamyat-sovmestimost-kesh-dubli-navykov.md) | Предел памяти, инструкции других агентов, кэш промпта, дубли навыков | accepted | 2026-11-23 |
 | [0081](0081-uvedomleniya.md) | Уведомления на рабочем столе и в мессенджеры (Telegram, MAX, WhatsApp, Rocket.Chat, webhook) | accepted | 2026-11-23 |
+| [0082](0082-nabor-scenariev-eval.md) | Набор сценариев (eval) по профилям агента | accepted | 2026-11-23 |

@@ -71,6 +71,10 @@ jobs:
       - name: CLI (дымовая)
         run: xvfb-run -a node scripts/smoke-cli.mjs
 
+      # Раннер набора сценариев на поддельной модели (ADR 0082).
+      - name: Набор сценариев (дымовая)
+        run: xvfb-run -a node scripts/smoke-eval.mjs
+
       - name: Ссылки в документации
         run: npm run docs:check
 
@@ -130,3 +134,6 @@ jobs:
 
       - name: CLI (дымовая)
         run: node scripts/smoke-cli.mjs
+
+      - name: Набор сценариев (дымовая)
+        run: node scripts/smoke-eval.mjs
