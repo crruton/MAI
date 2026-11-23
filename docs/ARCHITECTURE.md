@@ -387,6 +387,13 @@ macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL чер�
 `runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
 «Система: …; оболочка run_shell: …».
 
+### Фильтр секретов
+
+ADR 0099. `secret-filter.js` — `SECRET_RULES`, `findSecrets`, `createSecretFilter`
+(`mask`, `unmask`, `found`), `maskMessages`, `filterNotice`. В `runAgentInner` —
+фильтр на прогон: `buildRequest` маскирует запрос, `execCall` делает `unmask`
+аргументов; `completeOnce` и `reviewer` маскируют всегда.
+
 ### Границы данных
 
 ADR 0098. `data-boundary.js` — `isLocalUrl`, `dataBoundaryReport(settings, {mcp, connectors, schedules})`;

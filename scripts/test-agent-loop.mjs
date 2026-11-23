@@ -1483,6 +1483,44 @@ console.log('\n[28] Проект: инструкции в промпте и то
 }
 
 fs.rmSync(project, { recursive: true, force: true });
+{
+  console.log('\n[37] Фильтр секретов в запросах (N3, ADR 0099)');
+  const key = 'sk-proj-ABCDEFGHIJKLMNOPQRSTUVWX12345';
+  const bodies = [];
+  const notices = [];
+  const mcp = fakeMcp();
+  // Модель отвечает вызовом записи со знаком из запроса — значение подставится обратно.
+  let placeholder = '';
+  const client = () => ({
+    chat: {
+      completions: {
+        create: async (body) => {
+          bodies.push(JSON.parse(JSON.stringify(body)));
+          const text = JSON.stringify(body.messages);
+          placeholder ||= /\[СКРЫТО:ключ-openai:[0-9a-f]{6}\]/.exec(text)?.[0] || '';
+          return bodies.length === 1 ? stream({ calls: [{ name: 'mcp__fs__write_file', args: { content: `OPENAI_API_KEY=${placeholder}` } }] }) : stream({ text: 'записал' });
+        },
+      },
+    },
+  });
+  await runAgent(base({ messages: [{ role: 'user', content: `Запиши в .env мой ключ ${key}` }], mcp, clientFactory: client, emit: (e) => e.type === 'notice' && notices.push(e.text), policy: { getMode: () => 'bypass', getRules: () => ({}) }, approve: async () => ({ allow: true }) }));
+  check('ключ не ушёл модели ни в одном запросе', bodies.length === 2 && bodies.every((b) => !JSON.stringify(b).includes(key)) && Boolean(placeholder), placeholder);
+  check('уведомление «Скрыто от модели»', notices.some((t) => /Скрыто от модели: ключ-openai ×1/.test(t)), JSON.stringify(notices));
+  check('правка со знаком — инструмент получил настоящий ключ', mcp.calls[0]?.args.content === `OPENAI_API_KEY=${key}`, JSON.stringify(mcp.calls));
+  check('история вызова — со знаком, не с ключом', !JSON.stringify(bodies[1].messages.filter((m) => m.role === 'assistant')).includes(key));
+  const blocked = [];
+  let blockErr = '';
+  try {
+    await runAgent(base({ settings: { maxIterations: 3, permissions: {}, secretFilter: 'block' }, messages: [{ role: 'user', content: `ключ ${key}` }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'не должно' }], blocked) }));
+  } catch (e) {
+    blockErr = e.message;
+  }
+  check('режим «блокировать» — запрос не отправлен', blocked.length === 0 && /Запрос не отправлен/.test(blockErr), blockErr);
+  const plain = [];
+  await runAgent(base({ settings: { maxIterations: 3, permissions: {}, secretFilter: 'off' }, messages: [{ role: 'user', content: `ключ ${key}` }], mcp: fakeMcp(), clientFactory: fakeClient([{ text: 'ок' }], plain) }));
+  check('режим «выключен» — как есть', JSON.stringify(plain[0]).includes(key));
+}
+
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 disposePluginHosts();
 process.exit(fail ? 1 : 0);

@@ -71,6 +71,8 @@ const DEFAULTS = {
     command: 'multica',
   },
   // Локальный MAS: распознавание речи для кнопки микрофона.
+  // Фильтр секретов в запросах к модели (N3): mask | warn | block | off.
+  secretFilter: 'mask',
   // Оболочка команд агента (F26): auto — cmd.exe на Windows, $SHELL (bash/zsh) или sh.
   shell: 'auto',
   // Голосовой ввод (F18): движок mas (локально) или provider (audio/transcriptions).

@@ -39,6 +39,7 @@ import { normalizeRoots, describeRoots, resolveIn } from './workroots.js';
 import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DELAYS } from './retry.js';
 import { modelCapabilities, requestOptions, withCacheControl } from './capabilities.js';
 import { NO_TRACER } from './tracer.js';
+import { createSecretFilter, maskMessages, filterNotice } from './secret-filter.js';
 import { projectPrompt, connectorAllowed } from './projects.js';
 import { effectiveSandbox } from './shell-sandbox.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
@@ -211,6 +212,8 @@ function clientOptions(prov, { maxRetries = 0 } = {}) {
 
 /** Один ответ модели без потока: chat.completions, при отказе — Responses API. */
 async function completeOnce(client, model, prompt, signal) {
+  // Побочные запросы (компакция, заголовок, «Запомнить?») секреты не видят никогда (N3).
+  prompt = createSecretFilter({ mode: 'mask' }).mask(String(prompt || ''));
   try {
     const res = await client.chat.completions.create(
       { model, messages: [{ role: 'user', content: prompt }], ...(supportsTemperature(model) ? { temperature: 0 } : {}) },
@@ -489,6 +492,9 @@ async function runAgentInner({
   // Изображения из вложений — только моделям, которые их принимают (бэклог F1).
   let useImages = caps.vision;
   let imageNoticeShown = false;
+  // Фильтр секретов в запросах (N3, ADR 0099): по умолчанию маскирует.
+  const secretFilter = createSecretFilter({ mode: settings.secretFilter || 'mask' });
+  let secretNotice = '';
   // usage в потоке chat.completions приходит только с stream_options (A3.8).
   // Шлюз, который этот параметр не знает, отвечает 400 — тогда выключаем.
   let streamUsage = true;
@@ -866,8 +872,16 @@ async function runAgentInner({
         }
       }
       // Текстовый протокол: вызовы и результаты — текстом, инструменты — в системном промпте.
-      if (textTools) return [{ role: 'system', content: `${system}\n\n${textToolsPrompt(tools.map((t) => t.schema))}` }, ...toTextProtocol(api)];
-      return [{ role: 'system', content: system }, ...api];
+      const request = textTools ? [{ role: 'system', content: `${system}\n\n${textToolsPrompt(tools.map((t) => t.schema))}` }, ...toTextProtocol(api)] : [{ role: 'system', content: system }, ...api];
+      // Секреты — знаками [СКРЫТО:…] до отправки; уведомление — когда появились новые.
+      const masked = maskMessages(request, secretFilter);
+      const notice = filterNotice(secretFilter.found(), secretFilter.mode);
+      if (notice && notice !== secretNotice) {
+        secretNotice = notice;
+        if (secretFilter.mode === 'block') throw Object.assign(new Error(notice), { secretBlocked: true });
+        emit({ type: 'notice', text: notice });
+      }
+      return masked;
     };
 
     let content = '';
@@ -1226,7 +1240,8 @@ async function runAgentInner({
       skillDirs,
     };
     const execCall = async (call) => {
-      const args = parseArgs(call.function.arguments);
+      // Знаки [СКРЫТО:…] в аргументах — обратно в значения (N3): файл не испортится.
+      const args = parseArgs(secretFilter.unmask(call.function.arguments));
       let outcome;
       if (signal.aborted) {
         // Ответ на каждый tool_call обязателен, иначе следующий запрос получит 400.

@@ -4395,6 +4395,14 @@ async function openSettings() {
   guardExtra.value = (guard.extraDeny || []).join('\n');
   // Песочница для команд агента (ADR 0040).
   const shellBox = settings.shellSandbox || {};
+  // Фильтр секретов в запросах к модели (N3).
+  const secretMode = el('select', { class: 'secret-filter-mode' }, [
+    el('option', { value: 'mask', text: 'маскировать — модель видит [СКРЫТО:…] (рекомендуется)' }),
+    el('option', { value: 'warn', text: 'предупреждать — отправлять как есть' }),
+    el('option', { value: 'block', text: 'блокировать — не отправлять запрос' }),
+    el('option', { value: 'off', text: 'выключен' }),
+  ]);
+  secretMode.value = settings.secretFilter || 'mask';
   // Оболочка команд агента (F26): auto — по ОС.
   const isWin = /Windows/i.test(navigator.userAgent);
   const shellKind = el('select', { class: 'shell-kind' }, [
@@ -4591,6 +4599,7 @@ async function openSettings() {
       }),
       el('div', { class: 'docs-group-title', text: 'Команды агента' }),
       field('Оболочка run_shell на компьютере', shellKind),
+      field('Секреты в запросах к модели (ключи, токены, пароли, номера карт)', secretMode),
       field('Песочница run_shell (проект в /workspace, папки чата в /mnt, без лишних прав)', shellMode),
       el('div', { class: 'row' }, [field('Образ', shellImage), field('Сеть в контейнере', shellNetwork)]),
       field('На хосте (маски)', shellHost),
@@ -4679,6 +4688,7 @@ async function openSettings() {
             },
             webSearch: { provider: webProvider.value, url: webUrl.value.trim(), apiKey: webKey.value, allowPrivate: webPrivate.checked },
             shell: shellKind.value || 'auto',
+            secretFilter: secretMode.value || 'mask',
             shellSandbox: {
               mode: shellMode.value,
               image: shellImage.value.trim(),
