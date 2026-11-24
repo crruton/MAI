@@ -668,6 +668,13 @@ app.whenReady().then(async () => {
         fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, file), (await win.webContents.capturePage()).toPNG());
         await win.webContents.executeJavaScript(`document.body.click()`);
       }
+      await win.webContents.executeJavaScript(`document.querySelector('#settings-btn').click()`);
+      await new Promise((r) => setTimeout(r, 600));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'settings.png'), (await win.webContents.capturePage()).toPNG());
+      await win.webContents.executeJavaScript(`document.querySelector('.settings-tab[data-tab="Обслуживание"]')?.click()`);
+      await new Promise((r) => setTimeout(r, 300));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'settings-care.png'), (await win.webContents.capturePage()).toPNG());
+      await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
     }
 
     console.log('\n[1] Селектор режимов в DOM');
@@ -808,6 +815,8 @@ app.whenReady().then(async () => {
       await new Promise((r) => setTimeout(r, 500));
       const body = document.querySelector('.modal-body');
       if (!body) return { open: false };
+      // С N9 настройки — вкладками: голос на своей.
+      document.querySelector('.settings-tab[data-tab="Голос и OCR"]')?.click();
       const text = body.innerText;
       const raw = body.textContent;
       const inputs = [...body.querySelectorAll('input')].map((i) => i.value);
@@ -2300,6 +2309,25 @@ app.whenReady().then(async () => {
     await wait(500);
     const head3 = await ui(`({ closed: getComputedStyle(document.querySelector('#connections-menu')).display === 'none', modal: Boolean(document.querySelector('.modal-backdrop')) })`);
     check('пункт меню открывает окно и закрывает меню', head3.closed && head3.modal, JSON.stringify(head3));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[63] Настройки вкладками (N9)');
+    await ui(`document.querySelector('#settings-btn').click()`);
+    await wait(600);
+    const st0 = await ui(`({ tabs: [...document.querySelectorAll('.settings-tab')].map((b) => b.dataset.tab).join(','), on: document.querySelector('.settings-tab.on')?.dataset.tab, visible: [...document.querySelectorAll('.settings-pane')].filter((p) => getComputedStyle(p).display !== 'none').length })`);
+    check('вкладки: основное, уведомления, агент, безопасность, данные, голос, обслуживание, доступ; видна одна', st0.tabs === 'Основное,Уведомления,Агент и браузер,Безопасность,Данные и приватность,Голос и OCR,Обслуживание,Доступ' && st0.on === 'Основное' && st0.visible === 1, JSON.stringify(st0));
+    await ui(`document.querySelector('.settings-tab[data-tab="Данные и приватность"]').click()`);
+    await wait(200);
+    const st1 = await ui(`({ privacy: Boolean(document.querySelector('.settings-pane:not([hidden]) .settings-privacy')), secret: Boolean(document.querySelector('.settings-pane:not([hidden]) .secret-filter-mode')) })`);
+    check('«Данные и приватность»: отчёт /privacy и фильтр секретов', st1.privacy && st1.secret, JSON.stringify(st1));
+    await ui(`document.querySelector('.settings-tab[data-tab="Обслуживание"]').click()`);
+    await wait(300);
+    const st2 = await ui(`document.querySelector('.settings-pane:not([hidden])').textContent`);
+    check('«Обслуживание»: обновления и место с кнопками', /Обновления \(\/updates\)/.test(st2) && /Освободить место \(\/cleanup\)/.test(st2), st2.slice(0, 200));
+    const saved0 = savedSettings.length;
+    await ui(`[...document.querySelectorAll('.modal-foot button')].find((b) => /Сохранить/.test(b.textContent))?.click()`);
+    await wait(500);
+    check('«Сохранить» с другой вкладки сохраняет поля всех вкладок', savedSettings.length === saved0 + 1 && 'secretFilter' in savedSettings.at(-1) && 'shell' in savedSettings.at(-1) && 'voice' in savedSettings.at(-1), JSON.stringify(Object.keys(savedSettings.at(-1) || {})));
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
 
     check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));

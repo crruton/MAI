@@ -947,3 +947,22 @@ button { cursor: pointer; }
 .attention-dot[hidden] { display: none !important; }
 .turn-pop[hidden] { display: none !important; }
 .topbar-row-main .topbar-row-actions { margin-left: auto; }
+
+/* Настройки вкладками (N9). */
+.modal.settings-modal { width: min(980px, 100%); }
+.settings-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 16px; min-height: 0; }
+.settings-tabs { display: grid; align-content: start; gap: 2px; border-right: 1px solid var(--border-soft); padding-right: 10px; }
+.settings-tab { text-align: left; background: none; border: 0; border-radius: 8px; padding: 7px 10px; color: var(--text-dim); font: inherit; font-size: 13px; cursor: pointer; }
+.settings-tab:hover { background: var(--hover); }
+.settings-tab.on { background: var(--accent-soft); color: var(--text); }
+.settings-panes { min-width: 0; }
+.settings-pane { display: flex; flex-direction: column; gap: 14px; }
+.settings-pane[hidden] { display: none !important; }
+@media (max-width: 720px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-tabs { grid-auto-flow: column; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border-soft); padding: 0 0 8px; }
+}
+.settings-pane .row { flex-wrap: wrap; }
+.settings-pane .row > .field { flex: 1 1 200px; min-width: 0; }
+.settings-pane .row > .btn { flex: 0 0 auto; }
+.settings-panes { overflow-x: hidden; }

@@ -1979,6 +1979,44 @@ const fmtBytes = (n) => {
   return `${v.toFixed(v >= 10 ? 0 : 1).replace('.', ',')} ${u[i]}`;
 };
 
+/**
+ * Вкладки настроек (N9, ADR 0105): метки `.settings-tab-mark` делят тело окна на
+ * разделы; слева — список вкладок. Поля не пересоздаются: «Сохранить» видит все.
+ */
+function tabifySettings(modal, initialTab = '') {
+  const body = modal.bodyEl;
+  const panes = new Map();
+  let current = null;
+  for (const node of [...body.children]) {
+    if (node.classList.contains('settings-tab-mark')) {
+      const name = node.dataset.tab;
+      if (!panes.has(name)) panes.set(name, el('div', { class: 'settings-pane', 'data-tab': name, role: 'tabpanel' }));
+      current = panes.get(name);
+      node.remove();
+      continue;
+    }
+    if (!current) {
+      panes.set('Основное', el('div', { class: 'settings-pane', 'data-tab': 'Основное', role: 'tabpanel' }));
+      current = panes.get('Основное');
+    }
+    current.append(node);
+  }
+  const nav = el('nav', { class: 'settings-tabs', role: 'tablist', 'aria-label': 'Разделы настроек' });
+  const show = (name) => {
+    for (const [n, pane] of panes) pane.hidden = n !== name;
+    for (const b of nav.children) {
+      b.classList.toggle('on', b.dataset.tab === name);
+      b.setAttribute('aria-selected', String(b.dataset.tab === name));
+    }
+  };
+  for (const name of panes.keys()) {
+    nav.append(el('button', { class: 'settings-tab', type: 'button', role: 'tab', 'data-tab': name, text: name, onclick: () => show(name) }));
+  }
+  body.replaceChildren(el('div', { class: 'settings-layout' }, [nav, el('div', { class: 'settings-panes' }, [...panes.values()])]));
+  modal.modal.classList.add('settings-modal');
+  show(panes.has(initialTab) ? initialTab : 'Основное');
+}
+
 /** /cleanup (N7, ADR 0103): старые копии, вывод, временное и кеши — по отметкам. */
 async function openCleanup() {
   const plan = await api.cleanup.plan();
@@ -4513,7 +4551,7 @@ document.addEventListener('keydown', (event) => {
 
 /* ---------- настройки ---------- */
 
-async function openSettings() {
+async function openSettings(initialTab = '') {
   const settings = state.settings;
   const temperature = el('input', { type: 'number', step: '0.1', min: '0', max: '2', value: settings.temperature });
   const maxIterations = el('input', { type: 'number', min: '1', max: '100', value: settings.maxIterations });
@@ -4771,9 +4809,25 @@ async function openSettings() {
       }
     },
   });
+  // Вкладка «Обслуживание» (N9): обновления и место — с кнопками /updates и /cleanup.
+  const maintenanceBox = el('div', { class: 'settings-maintenance' }, [el('p', { class: 'hint-text', text: 'Загружаю…' })]);
+  (async () => {
+    const [report, plan] = await Promise.all([api.updates?.last().catch(() => null), api.cleanup?.plan().catch(() => null)]);
+    const c = report?.counts || {};
+    maintenanceBox.replaceChildren(
+      el('div', { class: 'docs-group-title', text: 'Обновления' }),
+      el('p', { class: 'hint-text', text: report ? `Проверено ${new Date(report.at).toLocaleString()}: высокий риск ${c.high || 0}, средний ${c.medium || 0}, низкий ${c.low || 0}. MAI проверяет раз в сутки.` : 'Ещё не проверялось — MAI проверит в фоне или нажмите «Обновления».' }),
+      el('div', { class: 'row' }, [el('button', { class: 'btn settings-updates', type: 'button', text: 'Обновления (/updates)', onclick: () => { modal.close(); openUpdates(); } })]),
+      el('div', { class: 'docs-group-title', text: 'Место на диске' }),
+      el('p', { class: 'hint-text', text: plan ? `${plan.bytes ? `Можно освободить ${fmtBytes(plan.bytes)}` : 'Удалять нечего'}${plan.stable ? '' : '; старые копии навыков удалятся, когда версия поработает несколько дней'}.` : '—' }),
+      el('div', { class: 'row' }, [el('button', { class: 'btn settings-cleanup', type: 'button', text: 'Освободить место (/cleanup)', onclick: () => { modal.close(); openCleanup(); } })]),
+    );
+  })();
   const modal = openModal({
     title: 'Настройки',
+    // Вкладки (N9, ADR 0105): метки делят тело окна на разделы, поля и сохранение — прежние.
     body: [
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Основное' }),
       el('div', { class: 'row' }, [
         field('Температура', temperature),
         field('Максимум шагов агента', maxIterations),
@@ -4788,6 +4842,7 @@ async function openSettings() {
         el('label', { class: 'hint-text' }, [outside, ' разрешить абсолютные пути вне папки проекта']),
       ]),
       el('div', { class: 'field' }, [el('span', { text: 'Статусная строка под полем ввода' }), el('div', { class: 'statusline-items' }, statusBoxes)]),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Уведомления' }),
       el('div', { class: 'field' }, [
         el('span', { text: 'Уведомления' }),
         el('label', { class: 'hint-text' }, [notifyOn, ' на рабочем столе, когда окно MAI не в фокусе:']),
@@ -4799,6 +4854,7 @@ async function openSettings() {
         el('button', { class: 'btn ghost small channel-add', type: 'button', text: '＋ Канал', onclick: () => addChannel() }),
         el('button', { class: 'btn ghost small notify-test', type: 'button', text: 'Проверить на рабочем столе', onclick: async () => { const r = await api.notify?.test(); toast(r?.desktop ? 'Показано на рабочем столе' : 'Не показано — уведомления выключены в системе?', r?.desktop ? 'ok' : 'err'); } }),
       ]),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Основное' }),
       el('label', { class: 'field' }, [
         el('span', { text: 'Инструкции других агентов' }),
         el('label', { class: 'hint-text' }, [compat, ' читать также CLAUDE.md, GEMINI.md, правила Cursor и Copilot (повторы AGENTS.md пропускаются)']),
@@ -4809,6 +4865,7 @@ async function openSettings() {
         el('label', { class: 'hint-text' }, [autoTitle, ' название чата придумывает модель после первого ответа (переименованные вручную не трогает)']),
       ]),
       el('div', { class: 'row' }, [field('Хранить чаты, дней (0 — всегда; старые удаляются при запуске)', retention)]),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Агент и браузер' }),
       el('label', { class: 'field' }, [
         el('span', { text: 'Браузер агента' }),
         el('label', { class: 'hint-text' }, [browserEnabled, ' агент может открывать сайты в своём окне, нажимать и заполнять формы (пароли и оплату — только вы)']),
@@ -4817,6 +4874,7 @@ async function openSettings() {
         field('Сайты без вопросов (и поддомены)', browserAllow),
         field('Сайты под запретом', browserBlock),
       ]),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Основное' }),
       el('label', { class: 'field' }, [
         el('span', { text: 'Ревизор: вторая модель проверяет ответ' }),
         el('label', { class: 'hint-text' }, [reviewerEnabled, ' включить approve/revise']),
@@ -4826,6 +4884,7 @@ async function openSettings() {
         field('Модель ревизора', reviewerModel),
         field('Раундов доработки', reviewerRounds),
       ]),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Безопасность' }),
       el('div', { class: 'docs-group-title', text: 'Ключи и токены' }),
       el('p', {
         class: `hint-text secrets-${settings.secretsProtection || 'none'}`,
@@ -4857,9 +4916,9 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Guardrails не заменяют песочницу: внешние рантаймы запускаются как отдельные процессы/контейнеры и не проходят эти проверки.',
       }),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Агент и браузер' }),
       el('div', { class: 'docs-group-title', text: 'Команды агента' }),
       field('Оболочка run_shell на компьютере', shellKind),
-      field('Секреты в запросах к модели (ключи, токены, пароли, номера карт)', secretMode),
       field('Песочница run_shell (проект в /workspace, папки чата в /mnt, без лишних прав)', shellMode),
       el('div', { class: 'row' }, [field('Образ', shellImage), field('Сеть в контейнере', shellNetwork)]),
       field('На хосте (маски)', shellHost),
@@ -4870,6 +4929,10 @@ async function openSettings() {
       el('div', { class: 'docs-group-title', text: 'Поиск в интернете' }),
       el('div', { class: 'row' }, [field('Поисковик', webProvider), field('Адрес SearXNG', webUrl), field('Ключ', webKey)]),
       el('label', { class: 'hint-text' }, [webPrivate, ' разрешить web_fetch адреса локальной сети (localhost, 192.168.*) — осторожно']),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Данные и приватность' }),
+      el('div', { class: 'docs-group-title', text: 'Куда уходят данные' }),
+      el('div', { class: 'row' }, [el('button', { class: 'btn settings-privacy', type: 'button', text: 'Открыть отчёт (/privacy)', onclick: () => { modal.close(); openPrivacy(); } })]),
+      field('Секреты в запросах к модели (ключи, токены, пароли, номера карт)', secretMode),
       el('div', { class: 'docs-group-title', text: 'OpenTelemetry' }),
       el('label', { class: 'hint-text' }, [telemetryEnabled, ' отправлять логи и трейсы в OTLP-коллектор']),
       field('OTLP HTTP endpoint', telemetryEndpoint),
@@ -4877,6 +4940,7 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Локальный стек: npm run obs:up. Grafana — http://localhost:3001, Tempo/Loki — 72 часа.',
       }),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Голос и OCR' }),
       el('div', { class: 'docs-group-title', text: 'Голос — распознавание речи' }),
       el('div', { class: 'row' }, [field('Движок', voiceEngine), field('Модель провайдера', voiceModel), field('Язык', voiceLanguage)]),
       el('p', {
@@ -4898,10 +4962,16 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Локальные движки не отправляют изображение в сеть. Шлюз MAI отправляет и расходует токены.',
       }),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Основное' }),
       el('p', {
         class: 'hint-text',
-        text: 'Провайдеры и ключи — в панели «Провайдеры». Настройки лежат в %APPDATA%\\mai-code\\settings.json',
+        text: 'Провайдеры и ключи — «Кто выполняет ▾» → «Провайдеры и ключи…». Настройки лежат в %APPDATA%\\mai-code\\settings.json',
       }),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Обслуживание' }),
+      maintenanceBox,
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Доступ' }),
+      el('p', { class: 'hint-text', text: 'Режим интерфейса (admin/guest), вход через Keycloak и корпоративный режим.' }),
+      el('div', { class: 'row' }, [el('button', { class: 'btn settings-auth', type: 'button', text: 'Доступ и роли…', onclick: () => { modal.close(); openAuth(); } })]),
     ],
     footer: [
       el('button', {
@@ -4982,6 +5052,7 @@ async function openSettings() {
       }),
     ],
   });
+  tabifySettings(modal, initialTab);
 }
 
 /* ---------- AGENTS.md ---------- */
@@ -6863,7 +6934,8 @@ $('#export-chat').addEventListener('click', async (event) => {
   $('#project-btn').addEventListener('click', pickProject);
   $('#new-project-btn').addEventListener('click', newProjectModal);
   $('#projects-btn')?.addEventListener('click', openProjects);
-  $('#settings-btn').addEventListener('click', openSettings);
+  // Точка на ⚙ (N9): сразу вкладка «Обслуживание», где написано, что требует внимания.
+  $('#settings-btn').addEventListener('click', () => openSettings($('#settings-dot')?.hidden === false ? 'Обслуживание' : ''));
   for (const button of document.querySelectorAll('#kind-toggle .kind-btn')) {
     button.addEventListener('click', () => setKind(button.dataset.kind));
   }
