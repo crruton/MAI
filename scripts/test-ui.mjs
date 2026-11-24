@@ -631,7 +631,7 @@ app.whenReady().then(async () => {
   nativeTheme.themeSource = 'dark';
   const win = new BrowserWindow({
     show: false,
-    width: 1200,
+    width: Number(process.env.MAI_UI_WIDTH) || 1200,
     height: 800,
     ...titleBarOptions(),
     webPreferences: {

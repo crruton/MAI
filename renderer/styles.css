@@ -976,3 +976,10 @@ button { cursor: pointer; }
 /* Группы команд «/» (N9). */
 .suggest { max-height: 360px; overflow-y: auto; }
 .suggest-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); padding: 8px 10px 2px; }
+
+/* Узкое окно (Windows резервирует справа место под кнопки окна): сжимается
+   «Кто выполняет», а не правые кнопки — они не уезжают под кнопки окна. */
+.topbar-row-main .runner-wrap { flex: 0 1 auto; min-width: 0; }
+.topbar-row-main .runner-chip { max-width: 100%; }
+.topbar-row-main .topbar-row-actions { flex: 0 0 auto; }
+@media (max-width: 1280px) { .runner-label { display: none; } }

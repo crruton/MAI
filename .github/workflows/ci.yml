@@ -59,6 +59,8 @@ jobs:
           xvfb-run -a npx electron --no-sandbox scripts/test-secrets-electron.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-auth-electron.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-ui.mjs
+          # Узкое окно: правые кнопки шапки не уходят под кнопки окна (N9).
+          MAI_UI_WIDTH=900 xvfb-run -a npx electron --no-sandbox scripts/test-ui.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-storage-safety.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-telemetry.mjs
           xvfb-run -a npx electron --no-sandbox scripts/test-pdf.mjs
