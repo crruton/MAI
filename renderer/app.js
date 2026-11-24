@@ -3901,6 +3901,21 @@ function openCost() {
 
 const suggest = { kind: '', items: [], index: 0, token: null, timer: null };
 
+/** Группы команд «/» (N9, ADR 0105). Свои команды проекта и пакетов — отдельно. */
+const SLASH_GROUPS = {
+  'Чат': ['compact', 'context', 'cost', 'clear', 'rename', 'fork', 'rewind', 'resume', 'export', 'import', 'help'],
+  'Модель и режим': ['model', 'mode'],
+  'Git': ['commit', 'review', 'security-review', 'pr', 'worktree', 'signoff'],
+  'Проект': ['init', 'memory', 'agents', 'hooks', 'permissions', 'trash', 'projects', 'onboarding'],
+  'Подключения': ['connectors', 'packages', 'schedule'],
+  'Обслуживание': ['updates', 'cleanup', 'privacy'],
+};
+const SLASH_GROUP_ORDER = [...Object.keys(SLASH_GROUPS), 'Свои команды', 'Другое'];
+function slashGroup(item) {
+  if (item.source && item.source !== 'builtin') return 'Свои команды';
+  return Object.keys(SLASH_GROUPS).find((g) => SLASH_GROUPS[g].includes(item.name)) || 'Другое';
+}
+
 function closeSuggest() {
   suggest.kind = '';
   suggest.items = [];
@@ -3916,9 +3931,14 @@ function renderSuggest() {
     return;
   }
   box.hidden = false;
+  let lastGroup = '';
   box.replaceChildren(
-    ...suggest.items.map((item, i) =>
-      el(
+    ...suggest.items.flatMap((item, i) => {
+      // Заголовок группы перед первой командой группы (только для «/»).
+      const group = suggest.kind === 'slash' ? slashGroup(item) : '';
+      const head = group && group !== lastGroup ? el('div', { class: 'suggest-group', text: group }) : null;
+      lastGroup = group || lastGroup;
+      return [head, el(
         'button',
         {
           class: `suggest-item${i === suggest.index ? ' active' : ''}`,
@@ -3937,9 +3957,10 @@ function renderSuggest() {
               item.source !== 'builtin' ? el('span', { class: 'suggest-source', text: { project: 'проект', global: 'глобальная', skill: 'навык', mcp: 'MCP' }[item.source] || '' }) : null,
             ]
           : [el('span', { class: 'suggest-path', text: item })],
-      ),
-    ),
+      )].filter(Boolean);
+    }),
   );
+  box.querySelector('.suggest-item.active')?.scrollIntoView({ block: 'nearest' });
 }
 
 /** Что подсказывать по тексту до курсора: команду в начале строки или файл после @. */
@@ -3953,7 +3974,10 @@ async function updateSuggest() {
     const list = (state.commands || []).filter((c) => c.name.toLowerCase().startsWith(q));
     const more = (state.commands || []).filter((c) => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q));
     suggest.kind = 'slash';
-    suggest.items = [...list, ...more].slice(0, 12);
+    // Группы (N9): пустой «/» — все команды по группам, иначе совпадения; порядок групп
+    // и стрелки совпадают, потому что список отсортирован по группе.
+    const matched = q ? [...list, ...more].slice(0, 20) : state.commands || [];
+    suggest.items = matched.map((c, i) => ({ c, i, g: SLASH_GROUP_ORDER.indexOf(slashGroup(c)) })).sort((a, b) => a.g - b.g || (q ? a.i - b.i : 0)).map((x) => x.c);
     suggest.index = 0;
     suggest.token = { start: 0, end: before.length };
     renderSuggest();

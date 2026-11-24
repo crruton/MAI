@@ -2350,6 +2350,19 @@ app.whenReady().then(async () => {
     check('«⤓» у строки чата — меню форматов', sb3 >= 2, sb3);
     await ui(`document.querySelector('.export-picker') && document.body.click(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
 
+    console.log('\n[65] Команды «/» по группам (N9)');
+    const typeSlash = (v) => ui(`(() => { const i = document.querySelector('#input'); i.focus(); i.value = ${JSON.stringify('X')}; i.setSelectionRange(i.value.length, i.value.length); i.dispatchEvent(new Event('input', { bubbles: true })); })()`.replace('"X"', JSON.stringify(v)));
+    await typeSlash('/');
+    await wait(500);
+    const sl0 = await ui(`({ open: !document.querySelector('#suggest').hidden, groups: [...document.querySelectorAll('#suggest .suggest-group')].map((g) => g.textContent).join(','), items: [...document.querySelectorAll('#suggest .suggest-item code')].map((c) => c.textContent).join(',') })`);
+    check('пустой «/»: все команды по группам, свои — отдельно в конце', sl0.open && sl0.groups === 'Чат,Модель и режим,Проект,Свои команды' && sl0.items === '/help,/clear,/mode,/init,/review,/handoff,/mcp__db__review', JSON.stringify(sl0));
+    await typeSlash('/cl');
+    await wait(400);
+    const sl1 = await ui(`({ open: !document.querySelector('#suggest').hidden, groups: [...document.querySelectorAll('#suggest .suggest-group')].map((g) => g.textContent).join(','), items: [...document.querySelectorAll('#suggest .suggest-item code')].map((c) => c.textContent).join(',') })`);
+    check('«/cl»: только /clear в группе «Чат»', sl1.open && sl1.items === '/clear' && sl1.groups === 'Чат', JSON.stringify(sl1));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await wait(200);
+
     check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {
     fail += 1;

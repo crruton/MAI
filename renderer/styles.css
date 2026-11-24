@@ -972,3 +972,7 @@ button { cursor: pointer; }
 .project-wrap .project-btn { width: 100%; }
 .project-caret { margin-left: auto; color: var(--text-faint); }
 .sidebar .menu-pop.project-pop { top: auto; bottom: calc(100% + 6px); left: 0; right: 0; min-width: 0; }
+
+/* Группы команд «/» (N9). */
+.suggest { max-height: 360px; overflow-y: auto; }
+.suggest-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); padding: 8px 10px 2px; }

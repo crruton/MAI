@@ -399,7 +399,8 @@ ADR 0105. Строка ввода: `#turn-chip` и окно `#turn-pop` (вну�
 `tabifySettings(modal, tab)` раскладывает по `.settings-pane`. Боковая панель:
 `#project-btn` открывает `#sidebar-project-menu` (`#project-pick`, `#projects-btn`,
 `#new-project-btn`, `#project-trust-item`); `exportChat(anchor)` — «⤓» у строки
-чата и скрытая `#export-chat`.
+чата и скрытая `#export-chat`. Подсказки «/»: `SLASH_GROUPS`, `slashGroup`,
+заголовки `.suggest-group` в `renderSuggest`.
 
 ### Удаление папок
 
