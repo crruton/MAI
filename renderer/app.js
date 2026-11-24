@@ -676,9 +676,13 @@ async function renderWorkDirs(force = false) {
   }
   const extra = (info.roots || []).filter((r) => !r.primary);
   const admin = state.auth?.role !== 'guest';
+  // Путь проекта не дублируем: он уже в кнопке проекта ниже (N9).
+  // Блок показываем только когда есть что показать — лишние папки или пропавшие.
+  if (!extra.length && !(info.missing || []).length && !admin) {
+    bar.hidden = true;
+    return;
+  }
   bar.replaceChildren(
-    el('span', { class: 'hint-text', text: 'Папки:' }),
-    el('span', { class: 'work-dir primary', title: info.roots?.[0]?.dir || '', text: info.roots?.[0]?.name || 'проект' }),
     ...extra.map((r) =>
       el('span', { class: 'work-dir', title: r.dir, 'data-dir': r.dir }, [
         `@${r.name}`,

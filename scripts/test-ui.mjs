@@ -1772,7 +1772,7 @@ app.whenReady().then(async () => {
     await new Promise((r) => setTimeout(r, 500));
     const bar = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector('#work-dirs'); return { hidden: b.hidden, text: b.textContent, chips: [...b.querySelectorAll('.work-dir')].map((c) => c.textContent) }; })()`);
     check('строка папок видна у чата', bar.hidden === false && dirCalls.some((c) => c.type === 'dirs' && c.sessionId === 's-dirs'), JSON.stringify(bar));
-    check('проект, @Документы и пропавшая папка', bar.chips[0] === 'proj' && bar.chips.some((c) => c.startsWith('@Документы')) && bar.chips.some((c) => /old \(нет на диске\)/.test(c)), JSON.stringify(bar.chips));
+    check('только доп. папки и пропавшая, без дубля проекта', !bar.chips.includes('proj') && bar.chips.some((c) => c.startsWith('@Документы')) && bar.chips.some((c) => /old \(нет на диске\)/.test(c)), JSON.stringify(bar.chips));
     await win.webContents.executeJavaScript(`document.querySelector('.work-dir-add').click()`);
     await new Promise((r) => setTimeout(r, 400));
     const afterAdd = await win.webContents.executeJavaScript(`[...document.querySelectorAll('#work-dirs .work-dir')].map((c) => c.textContent)`);
