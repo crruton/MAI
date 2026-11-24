@@ -631,7 +631,7 @@ app.whenReady().then(async () => {
   nativeTheme.themeSource = 'dark';
   const win = new BrowserWindow({
     show: false,
-    width: 1200,
+    width: Number(process.env.MAI_UI_WIDTH) || 1200,
     height: 800,
     ...titleBarOptions(),
     webPreferences: {
@@ -653,8 +653,58 @@ app.whenReady().then(async () => {
     await win.loadFile(path.join(root, 'renderer', 'index.html'));
     // Даём app.js время выполнить init().
     await new Promise((r) => setTimeout(r, 2500));
+    // Снимок окна для ручной проверки вида: MAI_UI_SHOT=папка (не входит в проверки).
+    if (process.env.MAI_UI_SHOT) {
+      win.setSize(1280, 800);
+      await new Promise((r) => setTimeout(r, 300));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'main.png'), (await win.webContents.capturePage()).toPNG());
+      // Снимок для README: те же элементы, подписи тестовых заглушек — на примеры.
+      win.setSize(1424, 880);
+      await win.webContents.executeJavaScript(`(() => {
+        document.querySelector('#runner-chip .runner-name').textContent = 'MAI · DeepSeek V4.1 Flash';
+        document.querySelector('#conn span').textContent = 'MAI подключён';
+        document.querySelector('#project-name').textContent = 'Desktop\\\\mai-code';
+        const st = document.querySelector('#statusline'); if (st) st.textContent = 'DeepSeek V4.1 Flash · Вручную · ⎇ dev';
+        const box = document.querySelector('#sessions');
+        const rows = [['Разобрать структуру проекта', '22:31'], ['Обновить зависимости на ветке', '21:05'], ['Тесты для модуля оплаты', 'вчера'], ['Отчёт: куда уходят данные', '22.11']];
+        document.querySelector('#toasts')?.replaceChildren();
+        box.innerHTML = rows.map(([t, d], i) => '<button class="session' + (i ? '' : ' active') + '" type="button"><span class="session-title">' + t + '</span><span class="session-meta">DeepSeek V4.1 Flash · ' + d + '</span></button>').join('');
+      })()`);
+      await new Promise((r) => setTimeout(r, 400));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'readme.png'), (await win.webContents.capturePage()).toPNG());
+      // Панель «Провайдеры» для README — открыта, как пользователь: чип «Кто выполняет» → «Провайдеры…».
+      await win.webContents.executeJavaScript(`document.querySelector('#runner-chip').click(); document.querySelector('#runner-pop [data-panel="providers"]')?.click()`);
+      await new Promise((r) => setTimeout(r, 600));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'providers.png'), (await win.webContents.capturePage()).toPNG());
+      await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+      win.setSize(1280, 800);
+      await win.webContents.executeJavaScript(`document.querySelector('#turn-chip')?.click()`);
+      await new Promise((r) => setTimeout(r, 300));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'turn-pop.png'), (await win.webContents.capturePage()).toPNG());
+      await win.webContents.executeJavaScript(`document.querySelector('#turn-chip')?.click()`);
+      for (const [id, file] of [['#runner-chip', 'runner.png'], ['#project-menu-btn', 'project-menu.png'], ['#connections-menu-btn', 'connections-menu.png'], ['#project-btn', 'sidebar-menu.png']]) {
+        await win.webContents.executeJavaScript(`document.querySelector('${id}')?.click()`);
+        await new Promise((r) => setTimeout(r, 300));
+        fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, file), (await win.webContents.capturePage()).toPNG());
+        await win.webContents.executeJavaScript(`document.body.click()`);
+      }
+      await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.focus(); i.value = '/'; i.setSelectionRange(1, 1); i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+      await new Promise((r) => setTimeout(r, 500));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'slash.png'), (await win.webContents.capturePage()).toPNG());
+      await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+      await win.webContents.executeJavaScript(`document.querySelector('#settings-btn').click()`);
+      await new Promise((r) => setTimeout(r, 600));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'settings.png'), (await win.webContents.capturePage()).toPNG());
+      await win.webContents.executeJavaScript(`document.querySelector('.settings-tab[data-tab="Обслуживание"]')?.click()`);
+      await new Promise((r) => setTimeout(r, 300));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'settings-care.png'), (await win.webContents.capturePage()).toPNG());
+      await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+    }
 
     console.log('\n[1] Селектор режимов в DOM');
+    // С N9 режим — в окне чипа хода: открываем его, как пользователь.
+    await win.webContents.executeJavaScript(`document.querySelector('#turn-chip')?.click()`);
+    await new Promise((r) => setTimeout(r, 200));
     const info = await win.webContents.executeJavaScript(`(() => {
       const sel = document.querySelector('#mode-select');
       if (!sel) return { found: false };
@@ -681,6 +731,7 @@ app.whenReady().then(async () => {
     check('opacity не 0', info.opacity !== '0', info.opacity);
     check('селектор в пределах окна', info.inViewport === true, JSON.stringify(info));
     check('опций 5', info.options?.length === 5, JSON.stringify(info.options));
+    await win.webContents.executeJavaScript(`document.body.click()`);
     check(
       'подписи режимов на месте',
       info.options?.map((o) => o.text).join(',') === 'Вручную,Принимать правки,План,Только разрешённое,⚠ Без вопросов',
@@ -788,6 +839,8 @@ app.whenReady().then(async () => {
       await new Promise((r) => setTimeout(r, 500));
       const body = document.querySelector('.modal-body');
       if (!body) return { open: false };
+      // С N9 настройки — вкладками: голос на своей.
+      document.querySelector('.settings-tab[data-tab="Голос и OCR"]')?.click();
       const text = body.innerText;
       const raw = body.textContent;
       const inputs = [...body.querySelectorAll('input')].map((i) => i.value);
@@ -1190,7 +1243,8 @@ app.whenReady().then(async () => {
     check('Bash с командой', titles.some((t) => t === 'Bash npm test'), JSON.stringify(titles));
 
     console.log('\n[15] Доверие к папке при выборе проекта (ADR 0028)');
-    await win.webContents.executeJavaScript(`document.querySelector('#project-btn').click()`);
+    // С N9 смена папки — пункт меню кнопки проекта.
+    await win.webContents.executeJavaScript(`document.querySelector('#project-btn').click(); document.querySelector('#project-pick').click()`);
     await new Promise((r) => setTimeout(r, 600));
     const trustModal = await win.webContents.executeJavaScript(`(() => {
       const m = document.querySelector('.trust-modal');
@@ -2246,6 +2300,96 @@ app.whenReady().then(async () => {
     check('удаляется только отмеченное', cleanupCalls.length === 1 && cleanupCalls[0].length === 1 && /impeccable-4.8.1/.test(cleanupCalls[0][0]), JSON.stringify(cleanupCalls));
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
     await ui(`document.querySelector('#input').value = ''`);
+
+    console.log('\n[60a] Атрибут hidden скрывает элемент');
+    const hiddenShown = await ui(`[...document.querySelectorAll('[hidden]')].filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.id || n.className).slice(0, 5)`);
+    check('ни один элемент с hidden не виден (баннер прерванной работы и др.)', hiddenShown.length === 0, JSON.stringify(hiddenShown));
+
+    console.log('\n[61] Строка ввода: чип хода (N9)');
+    const chip0 = await ui(`({ text: document.querySelector('#turn-chip').textContent.replace(/\\s+/g, ' ').trim(), popHidden: document.querySelector('#turn-pop').hidden, inPop: Boolean(document.querySelector('#turn-pop #mode-select')) && Boolean(document.querySelector('#turn-pop #kind-toggle')), ctxInStatus: Boolean(document.querySelector('.statusbar #context-meter')) && Boolean(document.querySelector('.statusbar #results-btn')), visibleInBar: [...document.querySelectorAll('.composer-actions > *')].filter((e) => !e.hidden && e.offsetParent).map((e) => e.id || e.className).join(',') })`);
+    check('в строке ввода: +, микрофон, чип, отправка; режим и вид — в окне чипа; контекст — в строке состояния', /^(Код|Задача) · /.test(chip0.text) && chip0.popHidden && chip0.inPop && chip0.ctxInStatus && !/mode-select|kind-toggle|context-meter/.test(chip0.visibleInBar), JSON.stringify(chip0));
+    await ui(`document.querySelector('#turn-chip').click()`);
+    await wait(200);
+    const chip1 = await ui(`({ open: !document.querySelector('#turn-pop').hidden, expanded: document.querySelector('#turn-chip').getAttribute('aria-expanded') })`);
+    check('клик по чипу — окно открыто', chip1.open && chip1.expanded === 'true', JSON.stringify(chip1));
+    await ui(`document.querySelector('#kind-toggle [data-kind=task]').click()`);
+    await wait(500);
+    const chip2 = await ui(`document.querySelector('#turn-chip .turn-kind').textContent`);
+    check('«Задача» в окне — чип показывает «Задача»', chip2 === 'Задача', chip2);
+    await ui(`document.querySelector('#kind-toggle [data-kind=code]').click()`);
+    await wait(400);
+    await ui(`document.body.click()`);
+    await wait(200);
+    check('клик вне окна — закрыто и не видно', await ui(`document.querySelector('#turn-pop').hidden && getComputedStyle(document.querySelector('#turn-pop')).display === 'none' && document.querySelector('#turn-chip').getAttribute('aria-expanded') === 'false'`));
+
+    console.log('\n[62] Шапка: «Кто выполняет» и меню (N9)');
+    const head0 = await ui(`({ panels: [...document.querySelectorAll('.topbar [data-panel]')].filter((b) => b.offsetParent).map((b) => b.dataset.panel).join(','), runner: document.querySelector('#runner-chip .runner-name').textContent, selectsInPop: Boolean(document.querySelector('#runner-pop #model-select')) && Boolean(document.querySelector('#runner-pop #runtime-select')) })`);
+    check('в шапке видны только «?» и «Доступ»; модель и рантайм — в окне «Кто выполняет»', head0.panels === 'docs,auth' && head0.runner === 'test-model' && head0.selectsInPop, JSON.stringify(head0));
+    await ui(`document.querySelector('#turn-chip').click()`);
+    await ui(`document.querySelector('#project-menu-btn').click()`);
+    await wait(200);
+    const head1 = await ui(`({ menu: getComputedStyle(document.querySelector('#project-menu')).display !== 'none', turn: getComputedStyle(document.querySelector('#turn-pop')).display, items: [...document.querySelectorAll('#project-menu [data-panel]')].map((b) => b.dataset.panel).join(',') })`);
+    check('меню «Проект»: доски, данные, AGENTS.md, память, навыки, Multica; окно чипа закрылось', head1.menu && head1.turn === 'none' && head1.items === 'boards,storage,agents,memory,skills,multica', JSON.stringify(head1));
+    await ui(`document.querySelector('#connections-menu-btn').click()`);
+    await wait(200);
+    const head2 = await ui(`({ project: getComputedStyle(document.querySelector('#project-menu')).display, items: [...document.querySelectorAll('#connections-menu [data-panel]')].map((b) => b.dataset.panel).join(',') })`);
+    check('«Подключения»: коннекторы, MCP, пакеты, рантаймы, Docker; «Проект» закрылось', head2.project === 'none' && head2.items === 'connectors,mcp,plugins,runtimes,sandbox', JSON.stringify(head2));
+    await ui(`document.querySelector('#connections-menu [data-panel=mcp]').click()`);
+    await wait(500);
+    const head3 = await ui(`({ closed: getComputedStyle(document.querySelector('#connections-menu')).display === 'none', modal: Boolean(document.querySelector('.modal-backdrop')) })`);
+    check('пункт меню открывает окно и закрывает меню', head3.closed && head3.modal, JSON.stringify(head3));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[63] Настройки вкладками (N9)');
+    await ui(`document.querySelector('#settings-btn').click()`);
+    await wait(600);
+    const st0 = await ui(`({ tabs: [...document.querySelectorAll('.settings-tab')].map((b) => b.dataset.tab).join(','), on: document.querySelector('.settings-tab.on')?.dataset.tab, visible: [...document.querySelectorAll('.settings-pane')].filter((p) => getComputedStyle(p).display !== 'none').length })`);
+    check('вкладки: основное, уведомления, агент, безопасность, данные, голос, обслуживание, доступ; видна одна', st0.tabs === 'Основное,Уведомления,Агент и браузер,Безопасность,Данные и приватность,Голос и OCR,Обслуживание,Доступ' && st0.on === 'Основное' && st0.visible === 1, JSON.stringify(st0));
+    await ui(`document.querySelector('.settings-tab[data-tab="Данные и приватность"]').click()`);
+    await wait(200);
+    const st1 = await ui(`({ privacy: Boolean(document.querySelector('.settings-pane:not([hidden]) .settings-privacy')), secret: Boolean(document.querySelector('.settings-pane:not([hidden]) .secret-filter-mode')) })`);
+    check('«Данные и приватность»: отчёт /privacy и фильтр секретов', st1.privacy && st1.secret, JSON.stringify(st1));
+    await ui(`document.querySelector('.settings-tab[data-tab="Обслуживание"]').click()`);
+    await wait(300);
+    const st2 = await ui(`document.querySelector('.settings-pane:not([hidden])').textContent`);
+    check('«Обслуживание»: обновления и место с кнопками', /Обновления \(\/updates\)/.test(st2) && /Освободить место \(\/cleanup\)/.test(st2), st2.slice(0, 200));
+    const saved0 = savedSettings.length;
+    await ui(`[...document.querySelectorAll('.modal-foot button')].find((b) => /Сохранить/.test(b.textContent))?.click()`);
+    await wait(500);
+    check('«Сохранить» с другой вкладки сохраняет поля всех вкладок', savedSettings.length === saved0 + 1 && 'secretFilter' in savedSettings.at(-1) && 'shell' in savedSettings.at(-1) && 'voice' in savedSettings.at(-1), JSON.stringify(Object.keys(savedSettings.at(-1) || {})));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[64] Боковая панель: проект одной кнопкой, «⤓» у чата (N9)');
+    const sb0 = await ui(`({ visible: [...document.querySelectorAll('.sidebar button')].filter((b) => b.offsetParent && !b.closest('#sessions')).map((b) => b.id || b.className).join(','), exportRow: Boolean(document.querySelector('#sessions .session .session-export')) })`);
+    check('в панели видны: новый чат, «этот проект», кнопка проекта; «Скачать чат» — у строки чата', sb0.visible === 'new-chat,sessions-scope,project-btn' && sb0.exportRow, JSON.stringify(sb0));
+    await ui(`document.querySelector('#project-btn').click()`);
+    await wait(200);
+    const sb1 = await ui(`({ open: getComputedStyle(document.querySelector('#sidebar-project-menu')).display !== 'none', items: [...document.querySelectorAll('#sidebar-project-menu .menu-item')].map((b) => b.id).join(',') })`);
+    check('меню проекта: сменить папку, проекты, новый проект, доверие', sb1.open && sb1.items === 'project-pick,projects-btn,new-project-btn,project-trust-item', JSON.stringify(sb1));
+    await ui(`document.querySelector('#project-trust-item').click()`);
+    await wait(600);
+    const sb2 = await ui(`({ closed: getComputedStyle(document.querySelector('#sidebar-project-menu')).display === 'none', tab: document.querySelector('.settings-tab.on')?.dataset.tab })`);
+    check('«Доверие к папкам…» — настройки на вкладке «Безопасность»', sb2.closed && sb2.tab === 'Безопасность', JSON.stringify(sb2));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await wait(200);
+    await ui(`document.querySelector('#sessions .session .session-export').click()`);
+    await wait(700);
+    const sb3 = await ui(`[...document.querySelectorAll('.export-picker button')].map((b) => b.textContent.trim()).length`);
+    check('«⤓» у строки чата — меню форматов', sb3 >= 2, sb3);
+    await ui(`document.querySelector('.export-picker') && document.body.click(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+
+    console.log('\n[65] Команды «/» по группам (N9)');
+    const typeSlash = (v) => ui(`(() => { const i = document.querySelector('#input'); i.focus(); i.value = ${JSON.stringify('X')}; i.setSelectionRange(i.value.length, i.value.length); i.dispatchEvent(new Event('input', { bubbles: true })); })()`.replace('"X"', JSON.stringify(v)));
+    await typeSlash('/');
+    await wait(500);
+    const sl0 = await ui(`({ open: !document.querySelector('#suggest').hidden, groups: [...document.querySelectorAll('#suggest .suggest-group')].map((g) => g.textContent).join(','), items: [...document.querySelectorAll('#suggest .suggest-item code')].map((c) => c.textContent).join(',') })`);
+    check('пустой «/»: все команды по группам, свои — отдельно в конце', sl0.open && sl0.groups === 'Чат,Модель и режим,Проект,Свои команды' && sl0.items === '/help,/clear,/mode,/init,/review,/handoff,/mcp__db__review', JSON.stringify(sl0));
+    await typeSlash('/cl');
+    await wait(400);
+    const sl1 = await ui(`({ open: !document.querySelector('#suggest').hidden, groups: [...document.querySelectorAll('#suggest .suggest-group')].map((g) => g.textContent).join(','), items: [...document.querySelectorAll('#suggest .suggest-item code')].map((c) => c.textContent).join(',') })`);
+    check('«/cl»: только /clear в группе «Чат»', sl1.open && sl1.items === '/clear' && sl1.groups === 'Чат', JSON.stringify(sl1));
+    await ui(`(() => { const i = document.querySelector('#input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    await wait(200);
 
     check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {

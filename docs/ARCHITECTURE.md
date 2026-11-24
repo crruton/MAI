@@ -353,7 +353,7 @@ ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,
 
 ### Проект в отдельной папке
 
-ADR 0091. Подписи «＋ Новый проект» и панели «Docker» в `index.html`/`app.js`;
+ADR 0091. Подписи «＋ Новый проект» (меню 📁) и окна «Docker» («Подключения ▾») в `index.html`/`app.js`;
 `workspace.js` по-прежнему создаёт проекты в `<данные>/sandboxes/` (совместимость).
 
 ### Голосовой ввод
@@ -386,6 +386,21 @@ macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL чер�
 используют `tools/shell.js` (`setShellPreference` из `settings.shell` в
 `runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
 «Система: …; оболочка run_shell: …».
+
+### Главное окно (N9)
+
+ADR 0105. Строка ввода: `#turn-chip` и окно `#turn-pop` (внутри — прежние
+`#kind-toggle`, `#mode-select`, `#effort-select`), `renderTurnChip`,
+`toggleTurnPop`; `.statusbar` — `#statusline`, `#context-meter`, `#results-btn`.
+Шапка: `#runner-chip`/`#runner-pop` (`#model-select`, `#runtime-select`),
+`#project-menu`, `#connections-menu` — пункты с `data-panel`; `bindMenus`,
+`closeMenus` (одно окно за раз), `renderRunnerChip`, `refreshAttention` (точка
+`#settings-dot`). Настройки: метки `.settings-tab-mark` в теле `openSettings`,
+`tabifySettings(modal, tab)` раскладывает по `.settings-pane`. Боковая панель:
+`#project-btn` открывает `#sidebar-project-menu` (`#project-pick`, `#projects-btn`,
+`#new-project-btn`, `#project-trust-item`); `exportChat(anchor)` — «⤓» у строки
+чата и скрытая `#export-chat`. Подсказки «/»: `SLASH_GROUPS`, `slashGroup`,
+заголовки `.suggest-group` в `renderSuggest`.
 
 ### Удаление папок
 

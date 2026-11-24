@@ -1,3 +1,7 @@
+/* Атрибут hidden скрывает всегда: display из правил ниже его не перебивает
+   (так «скрытый» баннер прерванной работы был пустой полосой под шапкой). */
+[hidden] { display: none !important; }
+
 :root {
   --bg: #0f1117;
   --bg-elev: #161922;
@@ -904,3 +908,82 @@ button { cursor: pointer; }
 .cleanup-list { display: grid; gap: 6px; max-height: 50vh; overflow: auto; margin: 8px 0; }
 .cleanup-item { display: flex; gap: 8px; align-items: flex-start; }
 .cleanup-item.readonly { opacity: 0.75; }
+
+/* Чип хода (N9): вид работы, режим и глубина — одной кнопкой. */
+.turn-wrap { position: relative; }
+.turn-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 340px; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-elev-2); color: var(--text-dim); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.turn-chip:hover { border-color: var(--accent); color: var(--text); }
+.turn-chip b { color: var(--text); font-weight: 500; }
+.turn-chip.mode-bypass { border-color: var(--red); }
+.turn-chip.mode-plan { border-color: var(--accent); }
+.turn-pop { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 30; min-width: 260px; display: grid; gap: 10px; padding: 12px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35); }
+.turn-field { display: grid; gap: 4px; }
+.turn-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
+.turn-pop select { width: 100%; }
+
+/* Строка состояния: контекст и результаты — рядом с моделью и режимом. */
+.statusbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.statusbar .statusline { flex: 1; min-width: 0; }
+.statusbar .context-meter, .statusbar .results-btn { background: none; border: 0; padding: 0; font-size: 12px; color: var(--text-dim); text-decoration: underline dotted; cursor: pointer; }
+.statusbar { justify-content: center; margin-top: 8px; }
+.statusbar .composer-note { margin-top: 0; }
+.statusbar .context-meter.ctx-mid { color: var(--amber); }
+.statusbar .context-meter.ctx-high { color: var(--red); }
+/* hidden сильнее display из правил выше (поле глубины, счётчик контекста, результаты). */
+.turn-pop [hidden], .turn-field[hidden], .statusbar [hidden] { display: none !important; }
+
+/* Шапка (N9): «Кто выполняет» и меню вместо 11 кнопок. */
+.menu-wrap { position: relative; }
+.runner-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 420px; height: 36px; padding: 0 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elev-2); color: var(--text-dim); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.runner-chip:hover { border-color: var(--accent); }
+.runner-chip b { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.runner-label { color: var(--text-faint); font-size: 12px; }
+.menu-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; min-width: 240px; display: grid; gap: 2px; padding: 6px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35); }
+.topbar-row-actions .menu-pop { left: auto; right: 0; }
+.runner-pop { min-width: 320px; padding: 12px; gap: 10px; }
+.menu-pop[hidden] { display: none !important; }
+.menu-item { display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-radius: 8px; padding: 7px 10px; color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.menu-item:hover, .menu-item:focus-visible { background: var(--hover); }
+.menu-item small { margin-left: auto; color: var(--text-faint); font-size: 11px; }
+.menu-sep { height: 1px; background: var(--border-soft); margin: 4px 0; }
+.settings-btn { position: relative; }
+.attention-dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--red); border: 2px solid var(--bg); }
+.attention-dot[hidden] { display: none !important; }
+.turn-pop[hidden] { display: none !important; }
+.topbar-row-main .topbar-row-actions { margin-left: auto; }
+
+/* Настройки вкладками (N9). */
+.modal.settings-modal { width: min(980px, 100%); }
+.settings-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 16px; min-height: 0; }
+.settings-tabs { display: grid; align-content: start; gap: 2px; border-right: 1px solid var(--border-soft); padding-right: 10px; }
+.settings-tab { text-align: left; background: none; border: 0; border-radius: 8px; padding: 7px 10px; color: var(--text-dim); font: inherit; font-size: 13px; cursor: pointer; }
+.settings-tab:hover { background: var(--hover); }
+.settings-tab.on { background: var(--accent-soft); color: var(--text); }
+.settings-panes { min-width: 0; }
+.settings-pane { display: flex; flex-direction: column; gap: 14px; }
+.settings-pane[hidden] { display: none !important; }
+@media (max-width: 720px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-tabs { grid-auto-flow: column; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border-soft); padding: 0 0 8px; }
+}
+.settings-pane .row { flex-wrap: wrap; }
+.settings-pane .row > .field { flex: 1 1 200px; min-width: 0; }
+.settings-pane .row > .btn { flex: 0 0 auto; }
+.settings-panes { overflow-x: hidden; }
+
+/* Боковая панель (N9): одна кнопка проекта, меню открывается вверх. */
+.project-wrap { width: 100%; }
+.project-wrap .project-btn { width: 100%; }
+.project-caret { margin-left: auto; color: var(--text-faint); }
+.sidebar .menu-pop.project-pop { top: auto; bottom: calc(100% + 6px); left: 0; right: 0; min-width: 0; }
+
+/* Группы команд «/» (N9). */
+.suggest { max-height: 360px; overflow-y: auto; }
+.suggest-group { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); padding: 8px 10px 2px; }
+
+/* Узкое окно (Windows резервирует справа место под кнопки окна): сжимается
+   «Кто выполняет», а не правые кнопки — они не уезжают под кнопки окна. */
+.topbar-row-main .runner-wrap { flex: 0 1 auto; min-width: 0; }
+.topbar-row-main .runner-chip { max-width: 100%; }
+.topbar-row-main .topbar-row-actions { flex: 0 0 auto; }
+@media (max-width: 1280px) { .runner-label { display: none; } }

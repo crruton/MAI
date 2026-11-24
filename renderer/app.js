@@ -362,6 +362,36 @@ async function renderModeSelect() {
   select.classList.toggle('mode-plan', state.permissionMode === 'plan');
   select.classList.toggle('mode-bypass', state.permissionMode === 'bypass');
   select.classList.toggle('mode-dontask', state.permissionMode === 'dontAsk');
+  renderTurnChip();
+}
+
+/**
+ * Чип хода (N9): «Код · Правки · средняя». Вид работы, режим разрешений и
+ * глубина живут во всплывающем окне под ним; здесь — только подпись.
+ */
+const EFFORT_LABELS = { low: 'быстро', medium: 'средняя', high: 'глубоко' };
+function renderTurnChip() {
+  const chip = $('#turn-chip');
+  if (!chip) return;
+  const mode = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).find((m) => m.id === state.permissionMode);
+  const effortOn = !$('#effort-select')?.hidden;
+  chip.querySelector('.turn-kind').textContent = state.kind === 'task' ? 'Задача' : 'Код';
+  chip.querySelector('.turn-rest').textContent = [mode ? ` · ${mode.label}` : '', effortOn && state.effort ? ` · ${EFFORT_LABELS[state.effort] || state.effort}` : ''].join('');
+  chip.classList.toggle('mode-bypass', state.permissionMode === 'bypass');
+  chip.classList.toggle('mode-plan', state.permissionMode === 'plan');
+  const field = $('.turn-effort');
+  if (field) field.hidden = !effortOn;
+}
+
+function toggleTurnPop(open) {
+  const pop = $('#turn-pop');
+  const chip = $('#turn-chip');
+  if (!pop || !chip) return;
+  const next = open ?? pop.hidden;
+  if (next) closeMenus(pop);
+  pop.hidden = !next;
+  chip.setAttribute('aria-expanded', String(next));
+  if (next) pop.querySelector('.kind-btn.active, select')?.focus();
 }
 
 /** Перечитывает режим для текущей сессии (или значение по умолчанию). */
@@ -729,6 +759,7 @@ function paintKind() {
   $('#results-btn')?.addEventListener('click', openResults);
   $('#effort-select')?.addEventListener('change', (e) => {
     state.effort = e.target.value;
+    renderTurnChip();
     try {
       localStorage.setItem('mai.effort', state.effort);
     } catch {
@@ -743,6 +774,7 @@ function paintKind() {
   for (const button of document.querySelectorAll('#kind-toggle .kind-btn')) {
     button.classList.toggle('active', button.dataset.kind === (state.kind || 'code'));
   }
+  renderTurnChip();
   const input = $('#input');
   if (input) input.placeholder = state.kind === 'task'
     ? 'Опишите задачу: что сделать с документами, какой нужен результат…  Enter — отправить'
@@ -856,6 +888,7 @@ async function refreshEffort() {
   select.hidden = !levels.length;
   if (!levels.includes(state.effort)) state.effort = '';
   select.value = state.effort || '';
+  renderTurnChip();
 }
 
 function renderAll() {
@@ -1415,6 +1448,23 @@ function renderSessions() {
     node.append(
       el('span', { class: 'del session-rename', text: '✎', title: 'Переименовать', 'aria-label': 'Переименовать чат', onclick: (event) => { event.stopPropagation(); renameChat(session.id, session.title); } }),
       el('span', { class: 'del session-fork', text: '⑂', title: 'Копия чата — попробовать другой подход', 'aria-label': 'Копия чата', onclick: (event) => { event.stopPropagation(); forkChat(session.id); } }),
+      // Скачать чат (N9): из строки чата, а не отдельной кнопкой панели.
+      el('span', {
+        class: 'del session-export',
+        text: '⤓',
+        title: 'Скачать чат',
+        'aria-label': 'Скачать чат',
+        onclick: async (event) => {
+          event.stopPropagation();
+          let anchor = event.currentTarget;
+          // Загрузка чата перерисовывает список: меню — у новой строки активного чата.
+          if (session.id !== state.sessionId) {
+            await loadSession(session.id);
+            anchor = document.querySelector('#sessions .session.active .session-export') || $('#export-chat');
+          }
+          exportChat(anchor);
+        },
+      }),
     );
     const del = el('span', {
       class: 'del',
@@ -1460,6 +1510,72 @@ function renderModels() {
     state.model = state.models[0].key;
   }
   select.value = state.model;
+  renderRunnerChip();
+}
+
+/**
+ * Точка на ⚙ (N9): обновление высокого риска (/updates) или место для очистки
+ * от 100 МБ при стабильной версии (/cleanup). Без неё ⚙ ничего не просит.
+ */
+async function refreshAttention() {
+  const dot = $('#settings-dot');
+  if (!dot) return;
+  const reasons = [];
+  try {
+    const report = await api.updates?.last();
+    if (report?.counts?.high) reasons.push(`обновления: высокий риск ${report.counts.high} — /updates`);
+  } catch {
+    /* отчёта нет */
+  }
+  try {
+    const plan = await api.cleanup?.plan();
+    if (plan?.stable && plan.bytes >= 100 * 1024 * 1024) reasons.push(`можно освободить ${fmtBytes(plan.bytes)} — /cleanup`);
+  } catch {
+    /* план недоступен */
+  }
+  dot.hidden = !reasons.length;
+  $('#settings-btn').title = reasons.length ? `Настройки · ${reasons.join('; ')}` : 'Настройки';
+}
+
+/** «Кто выполняет» (N9): внешний рантайм, если выбран, иначе модель. */
+function renderRunnerChip() {
+  const name = $('#runner-chip .runner-name');
+  if (!name) return;
+  const runtime = state.runtime && state.runtime !== 'agent' ? (state.runtime === '__all__' ? 'все рантаймы параллельно' : state.runtimes?.[state.runtime]?.name || state.runtime) : '';
+  name.textContent = runtime || (state.model ? modelLabel(state.model) : 'модель не выбрана');
+  $('#runner-chip').title = runtime ? `Внешний агент: ${runtime}` : `Модель: ${state.model || '—'}`;
+}
+
+/** Всплывающие меню шапки и «Кто выполняет»: одно открыто, клик вне или Esc — закрыть. */
+function closeMenus(except = null) {
+  // Окно чипа хода — тоже всплывающее: открыто одно окно за раз.
+  for (const pop of document.querySelectorAll('.menu-pop, .turn-pop')) {
+    if (pop === except) continue;
+    pop.hidden = true;
+    document.querySelector(`[aria-controls="${pop.id}"]`)?.setAttribute('aria-expanded', 'false');
+  }
+}
+function bindMenus() {
+  for (const button of document.querySelectorAll('.menu-btn, #runner-chip')) {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const pop = document.getElementById(button.getAttribute('aria-controls'));
+      if (!pop) return;
+      const open = pop.hidden;
+      closeMenus(pop);
+      pop.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+      if (open) pop.querySelector('select, .menu-item')?.focus();
+    });
+  }
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest?.('.menu-pop, .turn-wrap')) closeMenus();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && document.querySelector('.menu-pop:not([hidden])')) closeMenus();
+  });
+  // Пункт меню выполнен — меню закрывается.
+  for (const item of document.querySelectorAll('.menu-pop .menu-item')) item.addEventListener('click', () => closeMenus());
 }
 
 function renderRuntimes() {
@@ -1486,12 +1602,14 @@ function renderRuntimes() {
   }
   if (state.runtime !== 'agent' && state.runtime !== '__all__' && !state.runtimes[state.runtime]) {
     state.runtime = 'agent';
+    renderRunnerChip();
   }
   if (state.runtime === '__all__' && enabled.length < 2) state.runtime = 'agent';
   select.value = state.runtime;
 }
 
 function updateChrome() {
+  renderRunnerChip();
   $('#project-name').textContent = shortPath(state.projectDir);
   $('#project-name').title = state.projectDir || '';
   const badge = $('#project-trust');
@@ -1877,6 +1995,44 @@ const fmtBytes = (n) => {
   }
   return `${v.toFixed(v >= 10 ? 0 : 1).replace('.', ',')} ${u[i]}`;
 };
+
+/**
+ * Вкладки настроек (N9, ADR 0105): метки `.settings-tab-mark` делят тело окна на
+ * разделы; слева — список вкладок. Поля не пересоздаются: «Сохранить» видит все.
+ */
+function tabifySettings(modal, initialTab = '') {
+  const body = modal.bodyEl;
+  const panes = new Map();
+  let current = null;
+  for (const node of [...body.children]) {
+    if (node.classList.contains('settings-tab-mark')) {
+      const name = node.dataset.tab;
+      if (!panes.has(name)) panes.set(name, el('div', { class: 'settings-pane', 'data-tab': name, role: 'tabpanel' }));
+      current = panes.get(name);
+      node.remove();
+      continue;
+    }
+    if (!current) {
+      panes.set('Основное', el('div', { class: 'settings-pane', 'data-tab': 'Основное', role: 'tabpanel' }));
+      current = panes.get('Основное');
+    }
+    current.append(node);
+  }
+  const nav = el('nav', { class: 'settings-tabs', role: 'tablist', 'aria-label': 'Разделы настроек' });
+  const show = (name) => {
+    for (const [n, pane] of panes) pane.hidden = n !== name;
+    for (const b of nav.children) {
+      b.classList.toggle('on', b.dataset.tab === name);
+      b.setAttribute('aria-selected', String(b.dataset.tab === name));
+    }
+  };
+  for (const name of panes.keys()) {
+    nav.append(el('button', { class: 'settings-tab', type: 'button', role: 'tab', 'data-tab': name, text: name, onclick: () => show(name) }));
+  }
+  body.replaceChildren(el('div', { class: 'settings-layout' }, [nav, el('div', { class: 'settings-panes' }, [...panes.values()])]));
+  modal.modal.classList.add('settings-modal');
+  show(panes.has(initialTab) ? initialTab : 'Основное');
+}
 
 /** /cleanup (N7, ADR 0103): старые копии, вывод, временное и кеши — по отметкам. */
 async function openCleanup() {
@@ -3745,6 +3901,21 @@ function openCost() {
 
 const suggest = { kind: '', items: [], index: 0, token: null, timer: null };
 
+/** Группы команд «/» (N9, ADR 0105). Свои команды проекта и пакетов — отдельно. */
+const SLASH_GROUPS = {
+  'Чат': ['compact', 'context', 'cost', 'clear', 'rename', 'fork', 'rewind', 'resume', 'export', 'import', 'help'],
+  'Модель и режим': ['model', 'mode'],
+  'Git': ['commit', 'review', 'security-review', 'pr', 'worktree', 'signoff'],
+  'Проект': ['init', 'memory', 'agents', 'hooks', 'permissions', 'trash', 'projects', 'onboarding'],
+  'Подключения': ['connectors', 'packages', 'schedule'],
+  'Обслуживание': ['updates', 'cleanup', 'privacy'],
+};
+const SLASH_GROUP_ORDER = [...Object.keys(SLASH_GROUPS), 'Свои команды', 'Другое'];
+function slashGroup(item) {
+  if (item.source && item.source !== 'builtin') return 'Свои команды';
+  return Object.keys(SLASH_GROUPS).find((g) => SLASH_GROUPS[g].includes(item.name)) || 'Другое';
+}
+
 function closeSuggest() {
   suggest.kind = '';
   suggest.items = [];
@@ -3760,9 +3931,14 @@ function renderSuggest() {
     return;
   }
   box.hidden = false;
+  let lastGroup = '';
   box.replaceChildren(
-    ...suggest.items.map((item, i) =>
-      el(
+    ...suggest.items.flatMap((item, i) => {
+      // Заголовок группы перед первой командой группы (только для «/»).
+      const group = suggest.kind === 'slash' ? slashGroup(item) : '';
+      const head = group && group !== lastGroup ? el('div', { class: 'suggest-group', text: group }) : null;
+      lastGroup = group || lastGroup;
+      return [head, el(
         'button',
         {
           class: `suggest-item${i === suggest.index ? ' active' : ''}`,
@@ -3781,9 +3957,10 @@ function renderSuggest() {
               item.source !== 'builtin' ? el('span', { class: 'suggest-source', text: { project: 'проект', global: 'глобальная', skill: 'навык', mcp: 'MCP' }[item.source] || '' }) : null,
             ]
           : [el('span', { class: 'suggest-path', text: item })],
-      ),
-    ),
+      )].filter(Boolean);
+    }),
   );
+  box.querySelector('.suggest-item.active')?.scrollIntoView({ block: 'nearest' });
 }
 
 /** Что подсказывать по тексту до курсора: команду в начале строки или файл после @. */
@@ -3797,7 +3974,10 @@ async function updateSuggest() {
     const list = (state.commands || []).filter((c) => c.name.toLowerCase().startsWith(q));
     const more = (state.commands || []).filter((c) => !c.name.toLowerCase().startsWith(q) && c.name.toLowerCase().includes(q));
     suggest.kind = 'slash';
-    suggest.items = [...list, ...more].slice(0, 12);
+    // Группы (N9): пустой «/» — все команды по группам, иначе совпадения; порядок групп
+    // и стрелки совпадают, потому что список отсортирован по группе.
+    const matched = q ? [...list, ...more].slice(0, 20) : state.commands || [];
+    suggest.items = matched.map((c, i) => ({ c, i, g: SLASH_GROUP_ORDER.indexOf(slashGroup(c)) })).sort((a, b) => a.g - b.g || (q ? a.i - b.i : 0)).map((x) => x.c);
     suggest.index = 0;
     suggest.token = { start: 0, end: before.length };
     renderSuggest();
@@ -4412,7 +4592,7 @@ document.addEventListener('keydown', (event) => {
 
 /* ---------- настройки ---------- */
 
-async function openSettings() {
+async function openSettings(initialTab = '') {
   const settings = state.settings;
   const temperature = el('input', { type: 'number', step: '0.1', min: '0', max: '2', value: settings.temperature });
   const maxIterations = el('input', { type: 'number', min: '1', max: '100', value: settings.maxIterations });
@@ -4670,9 +4850,25 @@ async function openSettings() {
       }
     },
   });
+  // Вкладка «Обслуживание» (N9): обновления и место — с кнопками /updates и /cleanup.
+  const maintenanceBox = el('div', { class: 'settings-maintenance' }, [el('p', { class: 'hint-text', text: 'Загружаю…' })]);
+  (async () => {
+    const [report, plan] = await Promise.all([api.updates?.last().catch(() => null), api.cleanup?.plan().catch(() => null)]);
+    const c = report?.counts || {};
+    maintenanceBox.replaceChildren(
+      el('div', { class: 'docs-group-title', text: 'Обновления' }),
+      el('p', { class: 'hint-text', text: report ? `Проверено ${new Date(report.at).toLocaleString()}: высокий риск ${c.high || 0}, средний ${c.medium || 0}, низкий ${c.low || 0}. MAI проверяет раз в сутки.` : 'Ещё не проверялось — MAI проверит в фоне или нажмите «Обновления».' }),
+      el('div', { class: 'row' }, [el('button', { class: 'btn settings-updates', type: 'button', text: 'Обновления (/updates)', onclick: () => { modal.close(); openUpdates(); } })]),
+      el('div', { class: 'docs-group-title', text: 'Место на диске' }),
+      el('p', { class: 'hint-text', text: plan ? `${plan.bytes ? `Можно освободить ${fmtBytes(plan.bytes)}` : 'Удалять нечего'}${plan.stable ? '' : '; старые копии навыков удалятся, когда версия поработает несколько дней'}.` : '—' }),
+      el('div', { class: 'row' }, [el('button', { class: 'btn settings-cleanup', type: 'button', text: 'Освободить место (/cleanup)', onclick: () => { modal.close(); openCleanup(); } })]),
+    );
+  })();
   const modal = openModal({
     title: 'Настройки',
+    // Вкладки (N9, ADR 0105): метки делят тело окна на разделы, поля и сохранение — прежние.
     body: [
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Основное' }),
       el('div', { class: 'row' }, [
         field('Температура', temperature),
         field('Максимум шагов агента', maxIterations),
@@ -4687,6 +4883,7 @@ async function openSettings() {
         el('label', { class: 'hint-text' }, [outside, ' разрешить абсолютные пути вне папки проекта']),
       ]),
       el('div', { class: 'field' }, [el('span', { text: 'Статусная строка под полем ввода' }), el('div', { class: 'statusline-items' }, statusBoxes)]),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Уведомления' }),
       el('div', { class: 'field' }, [
         el('span', { text: 'Уведомления' }),
         el('label', { class: 'hint-text' }, [notifyOn, ' на рабочем столе, когда окно MAI не в фокусе:']),
@@ -4698,6 +4895,7 @@ async function openSettings() {
         el('button', { class: 'btn ghost small channel-add', type: 'button', text: '＋ Канал', onclick: () => addChannel() }),
         el('button', { class: 'btn ghost small notify-test', type: 'button', text: 'Проверить на рабочем столе', onclick: async () => { const r = await api.notify?.test(); toast(r?.desktop ? 'Показано на рабочем столе' : 'Не показано — уведомления выключены в системе?', r?.desktop ? 'ok' : 'err'); } }),
       ]),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Основное' }),
       el('label', { class: 'field' }, [
         el('span', { text: 'Инструкции других агентов' }),
         el('label', { class: 'hint-text' }, [compat, ' читать также CLAUDE.md, GEMINI.md, правила Cursor и Copilot (повторы AGENTS.md пропускаются)']),
@@ -4708,6 +4906,7 @@ async function openSettings() {
         el('label', { class: 'hint-text' }, [autoTitle, ' название чата придумывает модель после первого ответа (переименованные вручную не трогает)']),
       ]),
       el('div', { class: 'row' }, [field('Хранить чаты, дней (0 — всегда; старые удаляются при запуске)', retention)]),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Агент и браузер' }),
       el('label', { class: 'field' }, [
         el('span', { text: 'Браузер агента' }),
         el('label', { class: 'hint-text' }, [browserEnabled, ' агент может открывать сайты в своём окне, нажимать и заполнять формы (пароли и оплату — только вы)']),
@@ -4716,6 +4915,7 @@ async function openSettings() {
         field('Сайты без вопросов (и поддомены)', browserAllow),
         field('Сайты под запретом', browserBlock),
       ]),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Основное' }),
       el('label', { class: 'field' }, [
         el('span', { text: 'Ревизор: вторая модель проверяет ответ' }),
         el('label', { class: 'hint-text' }, [reviewerEnabled, ' включить approve/revise']),
@@ -4725,6 +4925,7 @@ async function openSettings() {
         field('Модель ревизора', reviewerModel),
         field('Раундов доработки', reviewerRounds),
       ]),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Безопасность' }),
       el('div', { class: 'docs-group-title', text: 'Ключи и токены' }),
       el('p', {
         class: `hint-text secrets-${settings.secretsProtection || 'none'}`,
@@ -4756,9 +4957,9 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Guardrails не заменяют песочницу: внешние рантаймы запускаются как отдельные процессы/контейнеры и не проходят эти проверки.',
       }),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Агент и браузер' }),
       el('div', { class: 'docs-group-title', text: 'Команды агента' }),
       field('Оболочка run_shell на компьютере', shellKind),
-      field('Секреты в запросах к модели (ключи, токены, пароли, номера карт)', secretMode),
       field('Песочница run_shell (проект в /workspace, папки чата в /mnt, без лишних прав)', shellMode),
       el('div', { class: 'row' }, [field('Образ', shellImage), field('Сеть в контейнере', shellNetwork)]),
       field('На хосте (маски)', shellHost),
@@ -4769,6 +4970,10 @@ async function openSettings() {
       el('div', { class: 'docs-group-title', text: 'Поиск в интернете' }),
       el('div', { class: 'row' }, [field('Поисковик', webProvider), field('Адрес SearXNG', webUrl), field('Ключ', webKey)]),
       el('label', { class: 'hint-text' }, [webPrivate, ' разрешить web_fetch адреса локальной сети (localhost, 192.168.*) — осторожно']),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Данные и приватность' }),
+      el('div', { class: 'docs-group-title', text: 'Куда уходят данные' }),
+      el('div', { class: 'row' }, [el('button', { class: 'btn settings-privacy', type: 'button', text: 'Открыть отчёт (/privacy)', onclick: () => { modal.close(); openPrivacy(); } })]),
+      field('Секреты в запросах к модели (ключи, токены, пароли, номера карт)', secretMode),
       el('div', { class: 'docs-group-title', text: 'OpenTelemetry' }),
       el('label', { class: 'hint-text' }, [telemetryEnabled, ' отправлять логи и трейсы в OTLP-коллектор']),
       field('OTLP HTTP endpoint', telemetryEndpoint),
@@ -4776,6 +4981,7 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Локальный стек: npm run obs:up. Grafana — http://localhost:3001, Tempo/Loki — 72 часа.',
       }),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Голос и OCR' }),
       el('div', { class: 'docs-group-title', text: 'Голос — распознавание речи' }),
       el('div', { class: 'row' }, [field('Движок', voiceEngine), field('Модель провайдера', voiceModel), field('Язык', voiceLanguage)]),
       el('p', {
@@ -4797,10 +5003,16 @@ async function openSettings() {
         class: 'hint-text',
         text: 'Локальные движки не отправляют изображение в сеть. Шлюз MAI отправляет и расходует токены.',
       }),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Основное' }),
       el('p', {
         class: 'hint-text',
-        text: 'Провайдеры и ключи — в панели «Провайдеры». Настройки лежат в %APPDATA%\\mai-code\\settings.json',
+        text: 'Провайдеры и ключи — «Кто выполняет ▾» → «Провайдеры и ключи…». Настройки лежат в %APPDATA%\\mai-code\\settings.json',
       }),
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Обслуживание' }),
+      maintenanceBox,
+      el('div', { class: 'settings-tab-mark', 'data-tab': 'Доступ' }),
+      el('p', { class: 'hint-text', text: 'Режим интерфейса (admin/guest), вход через Keycloak и корпоративный режим.' }),
+      el('div', { class: 'row' }, [el('button', { class: 'btn settings-auth', type: 'button', text: 'Доступ и роли…', onclick: () => { modal.close(); openAuth(); } })]),
     ],
     footer: [
       el('button', {
@@ -4881,6 +5093,7 @@ async function openSettings() {
       }),
     ],
   });
+  tabifySettings(modal, initialTab);
 }
 
 /* ---------- AGENTS.md ---------- */
@@ -5082,10 +5295,11 @@ function applyRoleGuard() {
     newProject.disabled = !admin;
     newProject.title = admin ? 'Создать проект в отдельной папке (это не изоляция: агент работает с вашими правами)' : 'Создание проектов доступно роли admin';
   }
-  const projectButton = $('#project-btn');
-  if (projectButton) {
-    projectButton.disabled = !admin;
-    projectButton.title = admin ? 'Сменить папку проекта' : 'Смена проекта доступна роли admin';
+  // Смена папки — только admin; меню проекта открывается всем (N9).
+  const projectPick = $('#project-pick');
+  if (projectPick) {
+    projectPick.disabled = !admin;
+    projectPick.title = admin ? 'Сменить папку проекта' : 'Смена проекта доступна роли admin';
   }
   const authButton = $('#auth-btn');
   if (authButton) {
@@ -6679,6 +6893,29 @@ function watchSession() {
   }, 60_000);
 }
 
+/** Скачать текущий чат (кнопка «⤓» у строки чата, /export). */
+async function exportChat(button) {
+  const messages = state.messages.filter((m) => m.role === 'user' || m.role === 'assistant');
+  if (!messages.length) {
+    toast('В диалоге пока нет сообщений');
+    return;
+  }
+  const format = await pickExportFormat(button, { chatFile: Boolean(state.sessionId) });
+  if (!format) return;
+  // Файл чата (CC6.9): вся история, открывается через /import.
+  if (format === 'json') {
+    const r = await api.sessions.exportFile(state.sessionId);
+    if (r?.ok) toast(`Сохранено: ${r.path}`);
+    else if (r?.error) toast(r.error, 'err');
+    return;
+  }
+  button.disabled = true;
+  const result = await api.export.chat({ messages, format, title: 'Диалог MAI Code' });
+  button.disabled = false;
+  if (result?.ok) toast(`Сохранено: ${result.file}`);
+  else if (result?.error) toast(result.error);
+}
+
 async function init() {
   // Корпоративный режим (F21): без входа — только экран входа, до любых других вызовов.
   const auth0 = await api.auth.status().catch(() => null);
@@ -6737,37 +6974,37 @@ async function init() {
   });
 
 // Экспорт всего диалога: меню форматов открывается по клику.
-$('#export-chat').addEventListener('click', async (event) => {
-  const button = event.currentTarget;
-  const messages = state.messages.filter((m) => m.role === 'user' || m.role === 'assistant');
-  if (!messages.length) {
-    toast('В диалоге пока нет сообщений');
-    return;
-  }
-  const format = await pickExportFormat(button, { chatFile: Boolean(state.sessionId) });
-  if (!format) return;
-  // Файл чата (CC6.9): вся история, открывается через /import.
-  if (format === 'json') {
-    const r = await api.sessions.exportFile(state.sessionId);
-    if (r?.ok) toast(`Сохранено: ${r.path}`);
-    else if (r?.error) toast(r.error, 'err');
-    return;
-  }
-  button.disabled = true;
-  const result = await api.export.chat({ messages, format, title: 'Диалог MAI Code' });
-  button.disabled = false;
-  if (result?.ok) toast(`Сохранено: ${result.file}`);
-  else if (result?.error) toast(result.error);
-});
-  $('#project-btn').addEventListener('click', pickProject);
+$('#export-chat').addEventListener('click', (event) => exportChat(event.currentTarget));
+
+  // Кнопка проекта (N9) открывает меню; смена папки — его первый пункт.
+  $('#project-pick')?.addEventListener('click', pickProject);
+  $('#project-trust-item')?.addEventListener('click', () => openSettings('Безопасность'));
   $('#new-project-btn').addEventListener('click', newProjectModal);
   $('#projects-btn')?.addEventListener('click', openProjects);
-  $('#settings-btn').addEventListener('click', openSettings);
+  // Точка на ⚙ (N9): сразу вкладка «Обслуживание», где написано, что требует внимания.
+  $('#settings-btn').addEventListener('click', () => openSettings($('#settings-dot')?.hidden === false ? 'Обслуживание' : ''));
   for (const button of document.querySelectorAll('#kind-toggle .kind-btn')) {
     button.addEventListener('click', () => setKind(button.dataset.kind));
   }
   syncKind(true);
+  // Точка на ⚙ (N9): чуть позже, чтобы не тормозить запуск.
+  setTimeout(() => refreshAttention().catch(() => {}), 1500);
   $('#mode-select').addEventListener('change', (event) => setPermissionMode(event.target.value));
+  // Чип хода (N9): открыть/закрыть; клик вне окна и Esc — закрыть.
+  $('#turn-chip')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleTurnPop();
+  });
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest?.('.turn-wrap')) toggleTurnPop(false);
+  });
+  $('#turn-pop')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      toggleTurnPop(false);
+      $('#turn-chip')?.focus();
+    }
+  });
   $('#send').addEventListener('click', send);
   $('#mic').addEventListener('click', toggleVoice);
   $('#stop').addEventListener('click', stopRun);
@@ -6780,7 +7017,9 @@ $('#export-chat').addEventListener('click', async (event) => {
 
   $('#runtime-select').addEventListener('change', (event) => {
     state.runtime = event.target.value;
+    renderRunnerChip();
   });
+  bindMenus();
 
   for (const button of document.querySelectorAll('[data-panel]')) {
     button.addEventListener('click', () => {
@@ -6790,7 +7029,8 @@ $('#export-chat').addEventListener('click', async (event) => {
       if (panel === 'agents') openAgents();
       if (panel === 'memory') openMemory();
       if (panel === 'skills') openSkills();
-      if (panel === 'providers') openProviders();
+      if (panel === 'providers' || panel === 'local-models') openProviders();
+      if (panel === 'connectors') openConnectors();
       if (panel === 'runtimes') openRuntimes();
       if (panel === 'mcp') openMcp();
       if (panel === 'plugins') openPlugins();
