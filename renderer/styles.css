@@ -790,12 +790,13 @@ button { cursor: pointer; }
 .trash-row { grid-template-columns: 160px 1fr auto; align-items: center; }
 .trash-actions { display: flex; gap: 6px; }
 
-/* рабочие папки чата (ADR 0045) */
-.work-dirs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 8px; font-size: 12px; }
-.work-dir { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); }
+/* рабочие папки чата (ADR 0045) — в левой панели, над кнопкой проекта */
+.work-dirs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 0 2px; font-size: 12px; }
+.work-dir { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .work-dir.primary { opacity: 0.8; }
 .work-dir.missing { color: var(--text-faint); border-style: dashed; }
 .work-dir-remove { background: none; border: 0; color: var(--text-faint); cursor: pointer; padding: 0 2px; font-size: 13px; }
+.work-dirs .work-dir-add { padding: 1px 8px; font-size: 12px; }
 
 /* «Код / Задача» (ADR 0046) */
 .kind-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }

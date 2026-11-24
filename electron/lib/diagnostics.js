@@ -35,6 +35,25 @@ function onPath(name) {
   return probe.status === 0 ? String(probe.stdout).split(/\r?\n/)[0].trim() : '';
 }
 
+/**
+ * Python из PATH, который действительно работает.
+ *
+ * В Windows `python3.exe` часто оказывается заглушкой Microsoft Store: файл
+ * есть, `where` его находит, но запуск возвращает 9009 и пустой вывод. Раньше
+ * `onPath('python3')` выбирал такую заглушку, и проверка синтаксиса молча
+ * возвращала пустой список — ошибка в файле выглядела как «Ошибок нет».
+ * Поэтому кандидат проверяется запуском, а не наличием файла.
+ */
+function pythonOnPath() {
+  for (const name of ['python3', 'python']) {
+    const cmd = onPath(name);
+    if (!cmd) continue;
+    const probe = spawnSync(cmd, ['-c', 'pass'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+    if (probe.status === 0) return cmd;
+  }
+  return '';
+}
+
 const quote = (arg) => (/[\s"&|<>^]/.test(arg) ? `"${String(arg).replace(/"/g, '\\"')}"` : arg);
 
 function run(cmd, args, cwd, { timeoutMs = TIMEOUT_MS, signal } = {}) {
@@ -160,7 +179,7 @@ export async function runDiagnostics(projectDir, { file = '', signal, timeoutMs 
       used.push('node --check');
       items.push(...parseNodeCheck(`${r.err}\n${r.out}`, target));
     } else if (PY_EXT.test(target)) {
-      const python = onPath('python3') || onPath('python');
+      const python = pythonOnPath();
       if (python) {
         const r = await run(python, ['-m', 'py_compile', target], projectDir, { timeoutMs, signal });
         used.push('py_compile');

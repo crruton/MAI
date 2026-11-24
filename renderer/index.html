@@ -35,6 +35,9 @@
         <div class="sessions" id="sessions"></div>
 
         <div class="sidebar-footer">
+          <!-- Рабочие папки чата (ADR 0045): перенесены из строки ввода.
+               Путь проекта уже показан в кнопке ниже — дубль убран. -->
+          <div class="work-dirs" id="work-dirs" hidden></div>
           <!-- Проект (N9): одна кнопка, остальное — в её меню. -->
           <div class="menu-wrap project-wrap">
             <button class="project-btn menu-btn" id="project-btn" type="button" title="Проект: сменить папку, проекты, новый проект, доверие" aria-haspopup="menu" aria-expanded="false" aria-controls="sidebar-project-menu">
@@ -122,7 +125,6 @@
             <div class="queue" id="queue" hidden></div>
             <div class="suggest" id="suggest" role="listbox" hidden></div>
             <div class="attachments" id="attachments" hidden></div>
-            <div class="work-dirs" id="work-dirs" hidden></div>
             <textarea id="input" rows="1" placeholder="Опишите задачу…  Enter — отправить, Shift+Enter — новая строка. Файлы можно перетащить сюда"></textarea>
             <div class="composer-actions">
               <button class="btn icon attach" id="attach" type="button" title="Прикрепить файлы: документы, архивы, изображения" aria-label="Прикрепить файлы">+</button>
