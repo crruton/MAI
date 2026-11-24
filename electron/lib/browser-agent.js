@@ -54,6 +54,14 @@ export function normalizeUrl(raw) {
  * всё, что он вернул, для агента данные, а проверка полей повторяется при вводе. */
 const SNAPSHOT_SCRIPT = `(() => {
   const MAX_TEXT = ${MAX_TEXT}, MAX_ELEMENTS = ${MAX_ELEMENTS};
+  // Обрезка по границе символа: разрезанная суррогатная пара (эмодзи) даёт
+  // одиночный surrogate, и шлюз отвечает 400 (ADR 0107).
+  const cut = (value, limit) => {
+    const s = String(value == null ? '' : value);
+    if (s.length <= limit) return s;
+    const code = s.charCodeAt(limit - 1);
+    return code >= 0xD800 && code <= 0xDBFF ? s.slice(0, limit - 1) : s.slice(0, limit);
+  };
   document.querySelectorAll('[data-mai-ref]').forEach((el) => el.removeAttribute('data-mai-ref'));
   const visible = (el) => {
     const r = el.getBoundingClientRect();
@@ -72,24 +80,30 @@ const SNAPSHOT_SCRIPT = `(() => {
     const ref = items.length + 1;
     el.setAttribute('data-mai-ref', String(ref));
     const tag = el.tagName.toLowerCase();
-    const text = (el.innerText || el.value || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
-    items.push({ ref, tag, type: el.type || '', name: el.name || '', id: el.id || '', placeholder: el.placeholder || '', label: labelOf(el).slice(0, 80), text, href: tag === 'a' ? el.href : '', checked: el.checked === true });
+    const text = cut((el.innerText || el.value || '').replace(/\\s+/g, ' ').trim(), 80);
+    items.push({ ref, tag, type: el.type || '', name: el.name || '', id: el.id || '', placeholder: el.placeholder || '', label: cut(labelOf(el), 80), text, href: tag === 'a' ? el.href : '', checked: el.checked === true });
   }
   const body = (document.body ? document.body.innerText : '').replace(/\\n{3,}/g, '\\n\\n').trim();
-  return { title: document.title, url: location.href, text: body.slice(0, MAX_TEXT), truncated: body.length > MAX_TEXT, items };
+  return { title: document.title, url: location.href, text: cut(body, MAX_TEXT), truncated: body.length > MAX_TEXT, items };
 })()`;
 
 /* Сведения об одном элементе по номеру — для проверки перед действием. */
 const ELEMENT_SCRIPT = (ref) => `(() => {
   const el = document.querySelector('[data-mai-ref="${Number(ref)}"]');
   if (!el) return null;
+  const cut = (value, limit) => {
+    const s = String(value == null ? '' : value);
+    if (s.length <= limit) return s;
+    const code = s.charCodeAt(limit - 1);
+    return code >= 0xD800 && code <= 0xDBFF ? s.slice(0, limit - 1) : s.slice(0, limit);
+  };
   const form = el.form || el.closest('form');
   const sensitive = (f) => f && f.type === 'password' || /(^|\\s)(cc-|current-password|new-password|one-time-code)/.test(f.autocomplete || '');
   const tag = el.tagName.toLowerCase();
   return {
     tag, type: el.type || '', name: el.name || '', id: el.id || '', autocomplete: el.autocomplete || el.getAttribute('autocomplete') || '',
-    placeholder: el.placeholder || '', label: (el.labels && el.labels[0] ? el.labels[0].innerText : el.getAttribute('aria-label') || '').trim().slice(0, 80),
-    text: (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 120), value: tag === 'input' && /submit|button/.test(el.type) ? el.value : '',
+    placeholder: el.placeholder || '', label: cut((el.labels && el.labels[0] ? el.labels[0].innerText : el.getAttribute('aria-label') || '').trim(), 80),
+    text: cut((el.innerText || '').replace(/\\s+/g, ' ').trim(), 120), value: tag === 'input' && /submit|button/.test(el.type) ? el.value : '',
     submits: tag === 'button' ? (el.type || 'submit') === 'submit' && !!form : tag === 'input' && /submit|image/.test(el.type),
     formHasSensitive: !!form && Array.from(form.elements || []).some(sensitive),
     editable: tag === 'textarea' || tag === 'select' || el.isContentEditable || (tag === 'input' && !/^(button|submit|reset|image|checkbox|radio|file|hidden)$/.test(el.type)),

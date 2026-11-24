@@ -15,6 +15,7 @@ import { classifyTool, evaluate, subjectOf, summarize, suggestRules } from './po
 import { effectiveCommand } from './tools/shell.js';
 import { pushViolation, currentBranch, DEFAULT_PROTECTED } from './git-guard.js';
 import { unifiedDiff } from './diff.js';
+import { safeSlice, safeTail } from './text-safe.js';
 
 const ARGS_PREVIEW = 2000;
 
@@ -63,8 +64,10 @@ const KEEP_DAYS = 7;
  */
 export function spillOutput(ctx, tool, content) {
   if (content.length <= MAX_TOOL_OUTPUT) return content;
-  const head = content.slice(0, Math.floor(MAX_TOOL_OUTPUT * 0.7));
-  const tail = content.slice(-Math.floor(MAX_TOOL_OUTPUT * 0.2));
+  // Границы — по символам, а не по кодовым единицам: разрезанная суррогатная
+  // пара даёт одиночный surrogate и 400 от шлюза (ADR 0107).
+  const head = safeSlice(content, Math.floor(MAX_TOOL_OUTPUT * 0.7));
+  const tail = safeTail(content, Math.floor(MAX_TOOL_OUTPUT * 0.2));
   if (!ctx?.outputDir) return `${head}\n\n… обрезано ${content.length - head.length - tail.length} символов …\n\n${tail}`;
   try {
     fs.mkdirSync(ctx.outputDir, { recursive: true });
