@@ -85,6 +85,26 @@ const marked = runStore.markInterrupted();
 check('после перезапуска running → interrupted, остальные не тронуты', marked.length === 1 && marked[0] === r1.id && runStore.getSession(r1.id).run.status === 'interrupted' && runStore.getSession(r2.id).run.status === 'done');
 check('повторно — ничего', runStore.markInterrupted().length === 0);
 
+console.log('[битый текст на диске] (ADR 0107)');
+const EMOJI = '\u{1F5D3}'; // U+1F5D3: две кодовые единицы
+const lone = (s) => /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
+const brokenStore = createSessionStore(fs.mkdtempSync(path.join(os.tmpdir(), 'mai-broken-')));
+const broken = brokenStore.createSession({ title: 'битый' });
+broken.messages.push(
+  { role: 'user', content: `привет ${EMOJI[0]}` },
+  { role: 'tool', name: 'browser_read', content: `снимок ${EMOJI[0]}` },
+);
+brokenStore.saveSession(broken);
+const loaded = brokenStore.getSession(broken.id);
+check('загрузка: одиночный суррогат вычищен', !lone(loaded.messages[0].content) && !lone(loaded.messages[1].content), JSON.stringify(loaded.messages));
+check('загрузка: целая пара сохранена', (() => {
+  const ok = brokenStore.createSession({ title: 'целый' });
+  ok.messages.push({ role: 'user', content: `x${EMOJI}y` });
+  brokenStore.saveSession(ok);
+  return brokenStore.getSession(ok.id).messages[0].content === `x${EMOJI}y`;
+})());
+check('загрузка: роли и имена сохранены', loaded.messages[1].role === 'tool' && loaded.messages[1].name === 'browser_read');
+
 fs.rmSync(root, { recursive: true, force: true });
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

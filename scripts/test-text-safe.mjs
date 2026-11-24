@@ -4,6 +4,7 @@
  */
 import { safeSlice, safeTail, sanitizeText, hasLoneSurrogate, sanitizeMessages } from '../electron/lib/text-safe.js';
 import { spillOutput, MAX_TOOL_OUTPUT } from '../electron/lib/tool-runner.js';
+import { withTextSafety } from '../electron/lib/safe-client.js';
 
 let pass = 0;
 let fail = 0;
@@ -67,6 +68,38 @@ const long = `${'a'.repeat(MAX_TOOL_OUTPUT * 0.7 - 1)}${EMOJI}${'b'.repeat(MAX_T
 const spilled = spillOutput(null, 'run_shell', long);
 check('spillOutput: обрезка без одиночных суррогатов', !hasLoneSurrogate(spilled));
 check('spillOutput: помечает обрезку', spilled.includes('обрезано'));
+
+// withTextSafety: последний рубеж перед шлюзом — любой запрос к модели
+const sent = [];
+const fakeClient = {
+  chat: { completions: { create: async (body) => { sent.push(body); return { ok: true }; } } },
+  responses: { create: async (body) => { sent.push(body); return { ok: true }; } },
+  models: { list: async () => ({ data: [] }) },
+};
+const safe = withTextSafety(fakeClient);
+
+await safe.chat.completions.create({ model: 'm', messages: [{ role: 'user', content: `привет ${EMOJI[0]}` }] });
+check('withTextSafety: chat — суррогат вычищен', !hasLoneSurrogate(sent[0].messages[0].content));
+check('withTextSafety: chat — модель сохранена', sent[0].model === 'm');
+
+await safe.chat.completions.create({
+  model: 'm',
+  messages: [{ role: 'assistant', content: null, tool_calls: [{ id: '1', function: { name: 'read_file', arguments: `{"p":"${EMOJI[0]}"}` } }] }],
+  tools: [{ type: 'function', function: { name: `f${EMOJI[0]}`, parameters: {} } }],
+});
+check('withTextSafety: chat — аргументы вызова', !hasLoneSurrogate(sent[1].messages[0].tool_calls[0].function.arguments));
+check('withTextSafety: chat — имя инструмента', !hasLoneSurrogate(sent[1].tools[0].function.name));
+
+await safe.responses.create({ model: 'm', instructions: `сис ${EMOJI[0]}`, input: [{ role: 'user', content: `вход ${EMOJI[0]}` }] });
+check('withTextSafety: responses — instructions', !hasLoneSurrogate(sent[2].instructions));
+check('withTextSafety: responses — input', !hasLoneSurrogate(sent[2].input[0].content));
+
+await safe.responses.create({ model: 'm', input: `строка ${EMOJI[0]}` });
+check('withTextSafety: responses — input строкой', !hasLoneSurrogate(sent[3].input));
+
+check('withTextSafety: прочие методы клиента живы', typeof safe.models.list === 'function');
+check('withTextSafety: null не падает', withTextSafety(null) === null);
+check('withTextSafety: целая пара сохранена', (await safe.chat.completions.create({ model: 'm', messages: [{ role: 'user', content: `x${EMOJI}y` }] }), sent[4].messages[0].content === `x${EMOJI}y`));
 
 console.log(`\nИтог: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

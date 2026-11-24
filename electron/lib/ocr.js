@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { safeSlice } from './text-safe.js';
 
 /**
  * Распознавание текста на изображениях (OCR).
@@ -94,7 +95,7 @@ function mimeFor(filePath) {
 
 function clip(text) {
   const value = String(text || '');
-  return value.length > MAX_TEXT_CHARS ? value.slice(0, MAX_TEXT_CHARS) : value;
+  return value.length > MAX_TEXT_CHARS ? safeSlice(value, MAX_TEXT_CHARS) : value;
 }
 
 /** Скрипты копируются во временную папку: из asar их нельзя запустить. */

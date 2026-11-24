@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { sanitizeMessages } from './text-safe.js';
 
 /**
  * Поля, которые меняются только своими функциями (setSessionMode,
@@ -94,7 +95,11 @@ export function createSessionStore(root) {
     migrate();
     if (!id) return null;
     const session = readJson(fileOf(id), null);
-    return session?.id === id ? session : null;
+    if (session?.id !== id) return null;
+    // История могла быть записана старым кодом с разрезанной суррогатной парой.
+    // Один такой обрывок ломает все следующие запросы сессии (ADR 0107).
+    if (Array.isArray(session.messages)) session.messages = sanitizeMessages(session.messages);
+    return session;
   }
 
   function write(session) {

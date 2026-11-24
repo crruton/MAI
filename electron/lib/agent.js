@@ -40,7 +40,8 @@ import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DEL
 import { modelCapabilities, requestOptions, withCacheControl } from './capabilities.js';
 import { NO_TRACER } from './tracer.js';
 import { createSecretFilter, maskMessages, filterNotice } from './secret-filter.js';
-import { sanitizeMessages } from './text-safe.js';
+import { sanitizeMessages, safeSlice } from './text-safe.js';
+import { withTextSafety } from './safe-client.js';
 import { projectPrompt, connectorAllowed } from './projects.js';
 import { effectiveSandbox } from './shell-sandbox.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
@@ -261,7 +262,7 @@ export async function compactHistory({ client, model, history, instructions = ''
 
 /** Ручная компакция сессии из окна (`/compact`): тот же код, свой клиент. */
 export async function compactSession({ provider, model, messages, instructions = '', signal, clientFactory = null }) {
-  const client = (clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider, { maxRetries: 2 }));
+  const client = withTextSafety((clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider, { maxRetries: 2 })));
   const history = [...messages];
   const marker = await compactHistory({ client, model, history, instructions, signal });
   return { marker, history };
@@ -269,10 +270,10 @@ export async function compactSession({ provider, model, messages, instructions =
 
 /** Автозаголовок (CC6.8): короткое имя чата по первому запросу и ответу. */
 export async function suggestTitle({ provider, model, request, answer = '', signal, clientFactory = null }) {
-  const client = (clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider, { maxRetries: 1 }));
+  const client = withTextSafety((clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider, { maxRetries: 1 })));
   const prompt =
     'Придумай короткий заголовок (2–6 слов) для этого чата — о чём задача. Только заголовок, без кавычек и точки, на языке запроса.\n\n' +
-    `Запрос: ${String(request || '').slice(0, 1500)}\n\nНачало ответа: ${String(answer || '').slice(0, 800)}`;
+    `Запрос: ${safeSlice(request, 1500)}\n\nНачало ответа: ${safeSlice(answer, 800)}`;
   return cleanTitle(await completeOnce(client, model, prompt, signal));
 }
 
@@ -295,12 +296,12 @@ export function cleanLesson(raw) {
  * урок для памяти проекта. Одна строка или ''.
  */
 export async function suggestLesson({ provider, model, request, actions = '', answer = '', signal, clientFactory = null }) {
-  const client = (clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider, { maxRetries: 1 }));
+  const client = withTextSafety((clientFactory || ((options) => new OpenAI(options)))(clientOptions(provider, { maxRetries: 1 })));
   const prompt =
     'Ты помогаешь вести память проекта (memory.md): короткие проверенные уроки, которые пригодятся в следующих задачах — правило проекта, рабочая команда, ' +
     'неочевидное решение, ловушка. Не записывай то, что видно из кода, и детали одной задачи.\n' +
     'Если в работе ниже есть такой урок — ответь одной строкой до 200 символов в повелительном наклонении. Если нет — ответь «НЕТ».\n\n' +
-    `Задача: ${String(request || '').slice(0, 1500)}\n\nДействия агента:\n${String(actions || '').slice(0, 2500)}\n\nИтог: ${String(answer || '').slice(0, 1200)}`;
+    `Задача: ${safeSlice(request, 1500)}\n\nДействия агента:\n${safeSlice(actions, 2500)}\n\nИтог: ${safeSlice(answer, 1200)}`;
   return cleanLesson(await completeOnce(client, model, prompt, signal));
 }
 
@@ -467,9 +468,9 @@ async function runAgentInner({
   // defaultHeaders собираем отдельно для каждого провайдера: User-Agent
   // основного не должен перетекать в клиент ревизора.
   const makeClient = clientFactory || ((options) => new OpenAI(options));
-  let client = makeClient(clientOptions(provider));
+  let client = withTextSafety(makeClient(clientOptions(provider)));
   const reviewerClient = reviewer?.provider?.baseURL && reviewer?.provider?.apiKey
-    ? makeClient(clientOptions(reviewer.provider, { maxRetries: 2 }))
+    ? withTextSafety(makeClient(clientOptions(reviewer.provider, { maxRetries: 2 })))
     : null;
   // Часть моделей (gpt-5.6-sol, gpt-6.1-sol на AgentRouter) не принимает
   // /v1/chat/completions. Запоминаем выбор транспорта на всю сессию,
@@ -626,10 +627,10 @@ async function runAgentInner({
     const final = [...subHistory].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '(субагент не вернул текст)';
     const usage = subHistory.filter((m) => m.role === 'assistant' && m.usage).reduce((sum, m) => addUsage(sum, m.usage), null);
     if (usage) runUsage = addUsage(runUsage, usage);
-    const title = args.description ? ` «${String(args.description).slice(0, 80)}»` : '';
+    const title = args.description ? ` «${safeSlice(args.description, 80)}»` : '';
     const head = `[Субагент ${def.name}${title}: шагов ${steps}${usage ? `, токенов ↑${usage.input} ↓${usage.output}` : ''}]`;
     const merge = worktree ? await mergeWorktree(def, worktree) : '';
-    return `${head}${merge ? `\n${merge}` : ''}\n\n${String(final).slice(0, 20000)}`;
+    return `${head}${merge ? `\n${merge}` : ''}\n\n${safeSlice(final, 20000)}`;
   };
 
   /** Слияние рабочей копии субагента (CC8.5): спросить, наложить, записать в чекпоинт хода. */
@@ -788,7 +789,7 @@ async function runAgentInner({
     if (wantPlanner !== onPlanner) {
       if (wantPlanner) {
         baseRoute = { client, model, provider, caps };
-        client = makeClient(clientOptions(planner.provider));
+        client = withTextSafety(makeClient(clientOptions(planner.provider)));
         model = planner.model;
         provider = planner.provider;
         caps = modelCapabilities(model, provider);
@@ -1061,7 +1062,7 @@ async function runAgentInner({
           if (clean && fallback?.provider && !usingFallback && needsFallback(err)) {
             usingFallback = true;
             const failed = model;
-            client = makeClient(clientOptions(fallback.provider));
+            client = withTextSafety(makeClient(clientOptions(fallback.provider)));
             model = fallback.model;
             provider = fallback.provider;
             caps = modelCapabilities(model, provider);
@@ -1125,7 +1126,7 @@ async function runAgentInner({
       if (takeQueued()) continue;
       // Хук Stop (ADR 0035): может не дать закончить, пока условие не выполнено. Не больше 3 раз.
       if (!subagent && hooks?.has('Stop') && stopRounds < 3) {
-        const stop = await hooks.run('Stop', { last_assistant_message: String(content || '').slice(0, 20000), stop_hook_round: stopRounds + 1 });
+        const stop = await hooks.run('Stop', { last_assistant_message: safeSlice(content, 20000), stop_hook_round: stopRounds + 1 });
         if (stop.decision === 'block') {
           stopRounds += 1;
           history.push({
@@ -1157,7 +1158,7 @@ async function runAgentInner({
               messages: [
                 {
                   role: 'user',
-                  content: `${VERIFY_PROMPT}\n${reviewContext({ mode: currentMode(), kind })}\n\nЗадача:\n${task.slice(0, 8000)}\n\nОтвет агента:\n${String(content).slice(0, 12000)}\n\nИзменённые файлы:\n${[...touched].slice(0, 50).map((f) => `- ${f}`).join('\n')}`,
+                  content: `${VERIFY_PROMPT}\n${reviewContext({ mode: currentMode(), kind })}\n\nЗадача:\n${safeSlice(task, 8000)}\n\nОтвет агента:\n${safeSlice(content, 12000)}\n\nИзменённые файлы:\n${[...touched].slice(0, 50).map((f) => `- ${f}`).join('\n')}`,
                 },
               ],
               emit: (e) => (e.type === 'notice' ? emit(e) : undefined),
