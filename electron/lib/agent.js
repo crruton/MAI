@@ -40,6 +40,7 @@ import { isTransient, needsFallback, retryDelay, describeError, sleep, RETRY_DEL
 import { modelCapabilities, requestOptions, withCacheControl } from './capabilities.js';
 import { NO_TRACER } from './tracer.js';
 import { createSecretFilter, maskMessages, filterNotice } from './secret-filter.js';
+import { sanitizeMessages } from './text-safe.js';
 import { projectPrompt, connectorAllowed } from './projects.js';
 import { effectiveSandbox } from './shell-sandbox.js';
 import { isDataTool, detectInjection, wrapData, DATA_RULE } from './injection.js';
@@ -875,13 +876,15 @@ async function runAgentInner({
       const request = textTools ? [{ role: 'system', content: `${system}\n\n${textToolsPrompt(tools.map((t) => t.schema))}` }, ...toTextProtocol(api)] : [{ role: 'system', content: system }, ...api];
       // Секреты — знаками [СКРЫТО:…] до отправки; уведомление — когда появились новые.
       const masked = maskMessages(request, secretFilter);
+      // Одиночные суррогаты (обрезка посреди эмодзи) шлюз отвергает с 400 (ADR 0107).
+      const safe = sanitizeMessages(masked);
       const notice = filterNotice(secretFilter.found(), secretFilter.mode);
       if (notice && notice !== secretNotice) {
         secretNotice = notice;
         if (secretFilter.mode === 'block') throw Object.assign(new Error(notice), { secretBlocked: true });
         emit({ type: 'notice', text: notice });
       }
-      return masked;
+      return safe;
     };
 
     let content = '';
