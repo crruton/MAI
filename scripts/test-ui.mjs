@@ -668,6 +668,10 @@ app.whenReady().then(async () => {
         fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, file), (await win.webContents.capturePage()).toPNG());
         await win.webContents.executeJavaScript(`document.body.click()`);
       }
+      await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.focus(); i.value = '/'; i.setSelectionRange(1, 1); i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+      await new Promise((r) => setTimeout(r, 500));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'slash.png'), (await win.webContents.capturePage()).toPNG());
+      await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
       await win.webContents.executeJavaScript(`document.querySelector('#settings-btn').click()`);
       await new Promise((r) => setTimeout(r, 600));
       fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'settings.png'), (await win.webContents.capturePage()).toPNG());
