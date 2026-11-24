@@ -353,7 +353,7 @@ ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,
 
 ### Проект в отдельной папке
 
-ADR 0091. Подписи «＋ Новый проект» и панели «Docker» в `index.html`/`app.js`;
+ADR 0091. Подписи «＋ Новый проект» (меню 📁) и окна «Docker» («Подключения ▾») в `index.html`/`app.js`;
 `workspace.js` по-прежнему создаёт проекты в `<данные>/sandboxes/` (совместимость).
 
 ### Голосовой ввод

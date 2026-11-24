@@ -108,7 +108,7 @@ Realm `mai-code` импортируется из `realm-mai-code.json`:
 затем Credentials и Role mapping. Подробности и команды `kcadm.sh`:
 `infra/keycloak/README.md`.
 
-В MAI Code откройте «Доступ», укажите issuer:
+В MAI Code откройте «Доступ» (кнопка в шапке или ⚙ → «Доступ»), укажите issuer:
 
 ```
 http://localhost:8080/realms/mai-code
@@ -215,7 +215,7 @@ npm.cmd run multica:sync
   по импорту в OpenScion;
 - глобальные навыки, `AGENTS.md` и профили моделей остаются общими.
 
-Панель «Docker» запускает Docker-контейнер с папкой проекта в `/workspace`:
+Окно «Docker» («Подключения ▾» → «Docker») запускает Docker-контейнер с папкой проекта в `/workspace`:
 read-only корневая ФС, сброс capabilities, лимиты CPU/RAM, публикация портов.
 Подробности: `docs/SANDBOXES.md`.
 

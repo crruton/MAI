@@ -658,6 +658,26 @@ app.whenReady().then(async () => {
       win.setSize(1280, 800);
       await new Promise((r) => setTimeout(r, 300));
       fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'main.png'), (await win.webContents.capturePage()).toPNG());
+      // Снимок для README: те же элементы, подписи тестовых заглушек — на примеры.
+      win.setSize(1424, 880);
+      await win.webContents.executeJavaScript(`(() => {
+        document.querySelector('#runner-chip .runner-name').textContent = 'MAI · DeepSeek V4.1 Flash';
+        document.querySelector('#conn span').textContent = 'MAI подключён';
+        document.querySelector('#project-name').textContent = 'Desktop\\\\mai-code';
+        const st = document.querySelector('#statusline'); if (st) st.textContent = 'DeepSeek V4.1 Flash · Вручную · ⎇ dev';
+        const box = document.querySelector('#sessions');
+        const rows = [['Разобрать структуру проекта', '22:31'], ['Обновить зависимости на ветке', '21:05'], ['Тесты для модуля оплаты', 'вчера'], ['Отчёт: куда уходят данные', '22.11']];
+        document.querySelector('#toasts')?.replaceChildren();
+        box.innerHTML = rows.map(([t, d], i) => '<button class="session' + (i ? '' : ' active') + '" type="button"><span class="session-title">' + t + '</span><span class="session-meta">DeepSeek V4.1 Flash · ' + d + '</span></button>').join('');
+      })()`);
+      await new Promise((r) => setTimeout(r, 400));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'readme.png'), (await win.webContents.capturePage()).toPNG());
+      // Панель «Провайдеры» для README — открыта, как пользователь: чип «Кто выполняет» → «Провайдеры…».
+      await win.webContents.executeJavaScript(`document.querySelector('#runner-chip').click(); document.querySelector('#runner-pop [data-panel="providers"]')?.click()`);
+      await new Promise((r) => setTimeout(r, 600));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'providers.png'), (await win.webContents.capturePage()).toPNG());
+      await win.webContents.executeJavaScript(`document.querySelector('.modal-backdrop .x')?.click()`);
+      win.setSize(1280, 800);
       await win.webContents.executeJavaScript(`document.querySelector('#turn-chip')?.click()`);
       await new Promise((r) => setTimeout(r, 300));
       fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'turn-pop.png'), (await win.webContents.capturePage()).toPNG());
@@ -2280,6 +2300,10 @@ app.whenReady().then(async () => {
     check('удаляется только отмеченное', cleanupCalls.length === 1 && cleanupCalls[0].length === 1 && /impeccable-4.8.1/.test(cleanupCalls[0][0]), JSON.stringify(cleanupCalls));
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
     await ui(`document.querySelector('#input').value = ''`);
+
+    console.log('\n[60a] Атрибут hidden скрывает элемент');
+    const hiddenShown = await ui(`[...document.querySelectorAll('[hidden]')].filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.id || n.className).slice(0, 5)`);
+    check('ни один элемент с hidden не виден (баннер прерванной работы и др.)', hiddenShown.length === 0, JSON.stringify(hiddenShown));
 
     console.log('\n[61] Строка ввода: чип хода (N9)');
     const chip0 = await ui(`({ text: document.querySelector('#turn-chip').textContent.replace(/\\s+/g, ' ').trim(), popHidden: document.querySelector('#turn-pop').hidden, inPop: Boolean(document.querySelector('#turn-pop #mode-select')) && Boolean(document.querySelector('#turn-pop #kind-toggle')), ctxInStatus: Boolean(document.querySelector('.statusbar #context-meter')) && Boolean(document.querySelector('.statusbar #results-btn')), visibleInBar: [...document.querySelectorAll('.composer-actions > *')].filter((e) => !e.hidden && e.offsetParent).map((e) => e.id || e.className).join(',') })`);
