@@ -387,6 +387,12 @@ macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL чер�
 `runAgent`), `hooks.js`, `deploy.js`, `runtimes.js`. Системный промпт — строка
 «Система: …; оболочка run_shell: …».
 
+### Главное окно (N9)
+
+ADR 0105. Строка ввода: `#turn-chip` и окно `#turn-pop` (внутри — прежние
+`#kind-toggle`, `#mode-select`, `#effort-select`), `renderTurnChip`,
+`toggleTurnPop`; `.statusbar` — `#statusline`, `#context-meter`, `#results-btn`.
+
 ### Удаление папок
 
 ADR 0104. `remove-tree.js` — `removeTree(path)`: на Windows снимает «только

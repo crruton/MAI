@@ -904,3 +904,26 @@ button { cursor: pointer; }
 .cleanup-list { display: grid; gap: 6px; max-height: 50vh; overflow: auto; margin: 8px 0; }
 .cleanup-item { display: flex; gap: 8px; align-items: flex-start; }
 .cleanup-item.readonly { opacity: 0.75; }
+
+/* Чип хода (N9): вид работы, режим и глубина — одной кнопкой. */
+.turn-wrap { position: relative; }
+.turn-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 340px; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-elev-2); color: var(--text-dim); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.turn-chip:hover { border-color: var(--accent); color: var(--text); }
+.turn-chip b { color: var(--text); font-weight: 500; }
+.turn-chip.mode-bypass { border-color: var(--red); }
+.turn-chip.mode-plan { border-color: var(--accent); }
+.turn-pop { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 30; min-width: 260px; display: grid; gap: 10px; padding: 12px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35); }
+.turn-field { display: grid; gap: 4px; }
+.turn-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
+.turn-pop select { width: 100%; }
+
+/* Строка состояния: контекст и результаты — рядом с моделью и режимом. */
+.statusbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.statusbar .statusline { flex: 1; min-width: 0; }
+.statusbar .context-meter, .statusbar .results-btn { background: none; border: 0; padding: 0; font-size: 12px; color: var(--text-dim); text-decoration: underline dotted; cursor: pointer; }
+.statusbar { justify-content: center; margin-top: 8px; }
+.statusbar .composer-note { margin-top: 0; }
+.statusbar .context-meter.ctx-mid { color: var(--amber); }
+.statusbar .context-meter.ctx-high { color: var(--red); }
+/* hidden сильнее display из правил выше (поле глубины, счётчик контекста, результаты). */
+.turn-pop [hidden], .turn-field[hidden], .statusbar [hidden] { display: none !important; }

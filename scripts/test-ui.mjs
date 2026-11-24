@@ -653,6 +653,16 @@ app.whenReady().then(async () => {
     await win.loadFile(path.join(root, 'renderer', 'index.html'));
     // Даём app.js время выполнить init().
     await new Promise((r) => setTimeout(r, 2500));
+    // Снимок окна для ручной проверки вида: MAI_UI_SHOT=папка (не входит в проверки).
+    if (process.env.MAI_UI_SHOT) {
+      win.setSize(1280, 800);
+      await new Promise((r) => setTimeout(r, 300));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'main.png'), (await win.webContents.capturePage()).toPNG());
+      await win.webContents.executeJavaScript(`document.querySelector('#turn-chip')?.click()`);
+      await new Promise((r) => setTimeout(r, 300));
+      fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'turn-pop.png'), (await win.webContents.capturePage()).toPNG());
+      await win.webContents.executeJavaScript(`document.querySelector('#turn-chip')?.click()`);
+    }
 
     console.log('\n[1] Селектор режимов в DOM');
     const info = await win.webContents.executeJavaScript(`(() => {
@@ -2246,6 +2256,23 @@ app.whenReady().then(async () => {
     check('удаляется только отмеченное', cleanupCalls.length === 1 && cleanupCalls[0].length === 1 && /impeccable-4.8.1/.test(cleanupCalls[0][0]), JSON.stringify(cleanupCalls));
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
     await ui(`document.querySelector('#input').value = ''`);
+
+    console.log('\n[61] Строка ввода: чип хода (N9)');
+    const chip0 = await ui(`({ text: document.querySelector('#turn-chip').textContent.replace(/\\s+/g, ' ').trim(), popHidden: document.querySelector('#turn-pop').hidden, inPop: Boolean(document.querySelector('#turn-pop #mode-select')) && Boolean(document.querySelector('#turn-pop #kind-toggle')), ctxInStatus: Boolean(document.querySelector('.statusbar #context-meter')) && Boolean(document.querySelector('.statusbar #results-btn')), visibleInBar: [...document.querySelectorAll('.composer-actions > *')].filter((e) => !e.hidden && e.offsetParent).map((e) => e.id || e.className).join(',') })`);
+    check('в строке ввода: +, микрофон, чип, отправка; режим и вид — в окне чипа; контекст — в строке состояния', /^(Код|Задача) · /.test(chip0.text) && chip0.popHidden && chip0.inPop && chip0.ctxInStatus && !/mode-select|kind-toggle|context-meter/.test(chip0.visibleInBar), JSON.stringify(chip0));
+    await ui(`document.querySelector('#turn-chip').click()`);
+    await wait(200);
+    const chip1 = await ui(`({ open: !document.querySelector('#turn-pop').hidden, expanded: document.querySelector('#turn-chip').getAttribute('aria-expanded') })`);
+    check('клик по чипу — окно открыто', chip1.open && chip1.expanded === 'true', JSON.stringify(chip1));
+    await ui(`document.querySelector('#kind-toggle [data-kind=task]').click()`);
+    await wait(500);
+    const chip2 = await ui(`document.querySelector('#turn-chip .turn-kind').textContent`);
+    check('«Задача» в окне — чип показывает «Задача»', chip2 === 'Задача', chip2);
+    await ui(`document.querySelector('#kind-toggle [data-kind=code]').click()`);
+    await wait(400);
+    await ui(`document.body.click()`);
+    await wait(200);
+    check('клик вне окна — закрыто', await ui(`document.querySelector('#turn-pop').hidden && document.querySelector('#turn-chip').getAttribute('aria-expanded') === 'false'`));
 
     check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {

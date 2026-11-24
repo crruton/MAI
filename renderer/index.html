@@ -111,27 +111,40 @@
                   <path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path>
                 </svg>
               </button>
-              <div class="kind-toggle" id="kind-toggle" role="group" title="Код — программирование; Задача — документы и данные">
-                <button type="button" class="kind-btn" data-kind="code">Код</button>
-                <button type="button" class="kind-btn" data-kind="task">Задача</button>
+              <!-- Чип хода (N9): вид работы, режим разрешений и глубина — в одном месте. -->
+              <div class="turn-wrap">
+                <button class="turn-chip" id="turn-chip" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="turn-pop" title="Вид работы, режим разрешений и глубина рассуждений"><b class="turn-kind">Код</b><span class="turn-rest"></span><span aria-hidden="true">▾</span></button>
+                <div class="turn-pop" id="turn-pop" role="dialog" aria-label="Настройки хода" hidden>
+                  <div class="turn-field"><span class="turn-label">Вид работы</span>
+                    <div class="kind-toggle" id="kind-toggle" role="group" title="Код — программирование; Задача — документы и данные">
+                      <button type="button" class="kind-btn" data-kind="code">Код</button>
+                      <button type="button" class="kind-btn" data-kind="task">Задача</button>
+                    </div>
+                  </div>
+                  <label class="turn-field"><span class="turn-label">Разрешения</span>
+                    <span class="mode-wrap"><select id="mode-select" class="mode-select" title="Режим разрешений"></select></span>
+                  </label>
+                  <label class="turn-field turn-effort" hidden><span class="turn-label">Глубина рассуждений</span>
+                    <select id="effort-select" class="effort-select" title="Глубина рассуждений модели" hidden>
+                      <option value="">по умолчанию</option>
+                      <option value="low">быстро</option>
+                      <option value="medium">средняя</option>
+                      <option value="high">глубоко</option>
+                    </select>
+                  </label>
+                </div>
               </div>
-              <select id="effort-select" class="effort-select" title="Глубина рассуждений модели" hidden>
-                <option value="">Глубина: по умолчанию</option>
-                <option value="low">Глубина: быстро</option>
-                <option value="medium">Глубина: средняя</option>
-                <option value="high">Глубина: глубоко</option>
-              </select>
-              <div class="mode-wrap">
-                <select id="mode-select" class="mode-select" title="Режим разрешений"></select>
-              </div>
-              <button class="results-btn" id="results-btn" type="button" title="Файлы, созданные и изменённые агентом в этом чате" hidden></button>
-              <button class="context-meter" id="context-meter" type="button" title="Заполнение контекста модели — /context" hidden></button>
               <span class="composer-hint" id="composer-hint"></span>
               <button class="btn icon send" id="send" title="Отправить" aria-label="Отправить">➤</button>
               <button class="btn icon stop" id="stop" title="Остановить" aria-label="Остановить" hidden>■</button>
             </div>
           </div>
-          <div class="composer-note statusline" id="statusline" role="status" aria-live="polite">Модели: MAI · агент может менять файлы и запускать команды — с вашего подтверждения</div>
+          <!-- Строка состояния (N9): модель, режим, ветка — и рядом контекст и результаты. -->
+          <div class="statusbar">
+            <div class="composer-note statusline" id="statusline" role="status" aria-live="polite">Модели: MAI · агент может менять файлы и запускать команды — с вашего подтверждения</div>
+            <button class="context-meter" id="context-meter" type="button" title="Заполнение контекста модели — /context" hidden></button>
+            <button class="results-btn" id="results-btn" type="button" title="Файлы, созданные и изменённые агентом в этом чате" hidden></button>
+          </div>
         </footer>
       </main>
     </div>

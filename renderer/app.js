@@ -362,6 +362,35 @@ async function renderModeSelect() {
   select.classList.toggle('mode-plan', state.permissionMode === 'plan');
   select.classList.toggle('mode-bypass', state.permissionMode === 'bypass');
   select.classList.toggle('mode-dontask', state.permissionMode === 'dontAsk');
+  renderTurnChip();
+}
+
+/**
+ * Чип хода (N9): «Код · Правки · средняя». Вид работы, режим разрешений и
+ * глубина живут во всплывающем окне под ним; здесь — только подпись.
+ */
+const EFFORT_LABELS = { low: 'быстро', medium: 'средняя', high: 'глубоко' };
+function renderTurnChip() {
+  const chip = $('#turn-chip');
+  if (!chip) return;
+  const mode = (state.permissionModes.length ? state.permissionModes : MODE_FALLBACK).find((m) => m.id === state.permissionMode);
+  const effortOn = !$('#effort-select')?.hidden;
+  chip.querySelector('.turn-kind').textContent = state.kind === 'task' ? 'Задача' : 'Код';
+  chip.querySelector('.turn-rest').textContent = [mode ? ` · ${mode.label}` : '', effortOn && state.effort ? ` · ${EFFORT_LABELS[state.effort] || state.effort}` : ''].join('');
+  chip.classList.toggle('mode-bypass', state.permissionMode === 'bypass');
+  chip.classList.toggle('mode-plan', state.permissionMode === 'plan');
+  const field = $('.turn-effort');
+  if (field) field.hidden = !effortOn;
+}
+
+function toggleTurnPop(open) {
+  const pop = $('#turn-pop');
+  const chip = $('#turn-chip');
+  if (!pop || !chip) return;
+  const next = open ?? pop.hidden;
+  pop.hidden = !next;
+  chip.setAttribute('aria-expanded', String(next));
+  if (next) pop.querySelector('.kind-btn.active, select')?.focus();
 }
 
 /** Перечитывает режим для текущей сессии (или значение по умолчанию). */
@@ -729,6 +758,7 @@ function paintKind() {
   $('#results-btn')?.addEventListener('click', openResults);
   $('#effort-select')?.addEventListener('change', (e) => {
     state.effort = e.target.value;
+    renderTurnChip();
     try {
       localStorage.setItem('mai.effort', state.effort);
     } catch {
@@ -743,6 +773,7 @@ function paintKind() {
   for (const button of document.querySelectorAll('#kind-toggle .kind-btn')) {
     button.classList.toggle('active', button.dataset.kind === (state.kind || 'code'));
   }
+  renderTurnChip();
   const input = $('#input');
   if (input) input.placeholder = state.kind === 'task'
     ? 'Опишите задачу: что сделать с документами, какой нужен результат…  Enter — отправить'
@@ -856,6 +887,7 @@ async function refreshEffort() {
   select.hidden = !levels.length;
   if (!levels.includes(state.effort)) state.effort = '';
   select.value = state.effort || '';
+  renderTurnChip();
 }
 
 function renderAll() {
@@ -6768,6 +6800,21 @@ $('#export-chat').addEventListener('click', async (event) => {
   }
   syncKind(true);
   $('#mode-select').addEventListener('change', (event) => setPermissionMode(event.target.value));
+  // Чип хода (N9): открыть/закрыть; клик вне окна и Esc — закрыть.
+  $('#turn-chip')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    toggleTurnPop();
+  });
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest?.('.turn-wrap')) toggleTurnPop(false);
+  });
+  $('#turn-pop')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      toggleTurnPop(false);
+      $('#turn-chip')?.focus();
+    }
+  });
   $('#send').addEventListener('click', send);
   $('#mic').addEventListener('click', toggleVoice);
   $('#stop').addEventListener('click', stopRun);
