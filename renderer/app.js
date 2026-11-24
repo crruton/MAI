@@ -388,6 +388,7 @@ function toggleTurnPop(open) {
   const chip = $('#turn-chip');
   if (!pop || !chip) return;
   const next = open ?? pop.hidden;
+  if (next) closeMenus(pop);
   pop.hidden = !next;
   chip.setAttribute('aria-expanded', String(next));
   if (next) pop.querySelector('.kind-btn.active, select')?.focus();
@@ -1492,6 +1493,72 @@ function renderModels() {
     state.model = state.models[0].key;
   }
   select.value = state.model;
+  renderRunnerChip();
+}
+
+/**
+ * Точка на ⚙ (N9): обновление высокого риска (/updates) или место для очистки
+ * от 100 МБ при стабильной версии (/cleanup). Без неё ⚙ ничего не просит.
+ */
+async function refreshAttention() {
+  const dot = $('#settings-dot');
+  if (!dot) return;
+  const reasons = [];
+  try {
+    const report = await api.updates?.last();
+    if (report?.counts?.high) reasons.push(`обновления: высокий риск ${report.counts.high} — /updates`);
+  } catch {
+    /* отчёта нет */
+  }
+  try {
+    const plan = await api.cleanup?.plan();
+    if (plan?.stable && plan.bytes >= 100 * 1024 * 1024) reasons.push(`можно освободить ${fmtBytes(plan.bytes)} — /cleanup`);
+  } catch {
+    /* план недоступен */
+  }
+  dot.hidden = !reasons.length;
+  $('#settings-btn').title = reasons.length ? `Настройки · ${reasons.join('; ')}` : 'Настройки';
+}
+
+/** «Кто выполняет» (N9): внешний рантайм, если выбран, иначе модель. */
+function renderRunnerChip() {
+  const name = $('#runner-chip .runner-name');
+  if (!name) return;
+  const runtime = state.runtime && state.runtime !== 'agent' ? (state.runtime === '__all__' ? 'все рантаймы параллельно' : state.runtimes?.[state.runtime]?.name || state.runtime) : '';
+  name.textContent = runtime || (state.model ? modelLabel(state.model) : 'модель не выбрана');
+  $('#runner-chip').title = runtime ? `Внешний агент: ${runtime}` : `Модель: ${state.model || '—'}`;
+}
+
+/** Всплывающие меню шапки и «Кто выполняет»: одно открыто, клик вне или Esc — закрыть. */
+function closeMenus(except = null) {
+  // Окно чипа хода — тоже всплывающее: открыто одно окно за раз.
+  for (const pop of document.querySelectorAll('.menu-pop, .turn-pop')) {
+    if (pop === except) continue;
+    pop.hidden = true;
+    document.querySelector(`[aria-controls="${pop.id}"]`)?.setAttribute('aria-expanded', 'false');
+  }
+}
+function bindMenus() {
+  for (const button of document.querySelectorAll('.menu-btn, #runner-chip')) {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const pop = document.getElementById(button.getAttribute('aria-controls'));
+      if (!pop) return;
+      const open = pop.hidden;
+      closeMenus(pop);
+      pop.hidden = !open;
+      button.setAttribute('aria-expanded', String(open));
+      if (open) pop.querySelector('select, .menu-item')?.focus();
+    });
+  }
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest?.('.menu-pop, .turn-wrap')) closeMenus();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && document.querySelector('.menu-pop:not([hidden])')) closeMenus();
+  });
+  // Пункт меню выполнен — меню закрывается.
+  for (const item of document.querySelectorAll('.menu-pop .menu-item')) item.addEventListener('click', () => closeMenus());
 }
 
 function renderRuntimes() {
@@ -1518,12 +1585,14 @@ function renderRuntimes() {
   }
   if (state.runtime !== 'agent' && state.runtime !== '__all__' && !state.runtimes[state.runtime]) {
     state.runtime = 'agent';
+    renderRunnerChip();
   }
   if (state.runtime === '__all__' && enabled.length < 2) state.runtime = 'agent';
   select.value = state.runtime;
 }
 
 function updateChrome() {
+  renderRunnerChip();
   $('#project-name').textContent = shortPath(state.projectDir);
   $('#project-name').title = state.projectDir || '';
   const badge = $('#project-trust');
@@ -6799,6 +6868,8 @@ $('#export-chat').addEventListener('click', async (event) => {
     button.addEventListener('click', () => setKind(button.dataset.kind));
   }
   syncKind(true);
+  // Точка на ⚙ (N9): чуть позже, чтобы не тормозить запуск.
+  setTimeout(() => refreshAttention().catch(() => {}), 1500);
   $('#mode-select').addEventListener('change', (event) => setPermissionMode(event.target.value));
   // Чип хода (N9): открыть/закрыть; клик вне окна и Esc — закрыть.
   $('#turn-chip')?.addEventListener('click', (event) => {
@@ -6827,7 +6898,9 @@ $('#export-chat').addEventListener('click', async (event) => {
 
   $('#runtime-select').addEventListener('change', (event) => {
     state.runtime = event.target.value;
+    renderRunnerChip();
   });
+  bindMenus();
 
   for (const button of document.querySelectorAll('[data-panel]')) {
     button.addEventListener('click', () => {
@@ -6837,7 +6910,8 @@ $('#export-chat').addEventListener('click', async (event) => {
       if (panel === 'agents') openAgents();
       if (panel === 'memory') openMemory();
       if (panel === 'skills') openSkills();
-      if (panel === 'providers') openProviders();
+      if (panel === 'providers' || panel === 'local-models') openProviders();
+      if (panel === 'connectors') openConnectors();
       if (panel === 'runtimes') openRuntimes();
       if (panel === 'mcp') openMcp();
       if (panel === 'plugins') openPlugins();

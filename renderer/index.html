@@ -48,35 +48,46 @@
       <main class="main">
         <header class="topbar">
           <div class="topbar-row topbar-row-main">
-            <div class="top-left">
-              <div class="model-wrap">
-                <label class="model-label">Модель</label>
-                <select id="model-select" class="model-select"></select>
-              </div>
-              <div class="model-wrap">
-                <label class="model-label">Рантайм</label>
-                <select id="runtime-select" class="model-select runtime-select"></select>
+            <!-- «Кто выполняет» (N9): модель и рантайм — в одном окне. -->
+            <div class="menu-wrap runner-wrap">
+              <button class="runner-chip" id="runner-chip" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="runner-pop" title="Модель или внешний агент, который выполняет задачу"><span class="runner-label">Кто выполняет</span> <b class="runner-name">—</b> <span aria-hidden="true">▾</span></button>
+              <div class="menu-pop runner-pop" id="runner-pop" role="dialog" aria-label="Кто выполняет" hidden>
+                <label class="turn-field"><span class="turn-label">Модель</span><select id="model-select" class="model-select"></select></label>
+                <label class="turn-field"><span class="turn-label">Рантайм</span><select id="runtime-select" class="model-select runtime-select"></select></label>
+                <div class="menu-sep"></div>
+                <button class="menu-item" type="button" data-panel="providers">Провайдеры и ключи…</button>
+                <button class="menu-item" type="button" data-panel="local-models">Найти локальные модели</button>
               </div>
             </div>
             <div class="topbar-row-actions">
-              <button class="btn ghost" data-panel="docs" title="Документация GitBook">📖 Документация</button>
+              <!-- Меню вместо 11 кнопок панелей (N9). -->
+              <div class="menu-wrap">
+                <button class="btn ghost menu-btn" type="button" id="project-menu-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="project-menu">Проект ▾</button>
+                <div class="menu-pop" id="project-menu" role="menu" aria-label="Проект" hidden>
+                  <button class="menu-item" role="menuitem" type="button" data-panel="boards">Доски <small>окно</small></button>
+                  <button class="menu-item" role="menuitem" type="button" data-panel="storage">Данные (хранилище) <small>окно</small></button>
+                  <div class="menu-sep"></div>
+                  <button class="menu-item" role="menuitem" type="button" data-panel="agents">Инструкции (AGENTS.md)</button>
+                  <button class="menu-item" role="menuitem" type="button" data-panel="memory">Память</button>
+                  <button class="menu-item" role="menuitem" type="button" data-panel="skills">Навыки</button>
+                  <button class="menu-item" role="menuitem" type="button" data-panel="multica" title="Задачи Multica">Multica</button>
+                </div>
+              </div>
+              <div class="menu-wrap">
+                <button class="btn ghost menu-btn" type="button" id="connections-menu-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="connections-menu">Подключения ▾</button>
+                <div class="menu-pop" id="connections-menu" role="menu" aria-label="Подключения" hidden>
+                  <button class="menu-item" role="menuitem" type="button" data-panel="connectors">Коннекторы</button>
+                  <button class="menu-item" role="menuitem" type="button" data-panel="mcp">MCP-серверы</button>
+                  <button class="menu-item" role="menuitem" type="button" data-panel="plugins">Пакеты и плагины</button>
+                  <button class="menu-item" role="menuitem" type="button" data-panel="runtimes">Рантаймы</button>
+                  <button class="menu-item" role="menuitem" type="button" data-panel="sandbox" title="Docker-песочницы: изоляция процессов и сети">Docker</button>
+                </div>
+              </div>
+              <button class="btn ghost icon" data-panel="docs" title="Документация" aria-label="Документация">?</button>
               <button class="btn ghost" data-panel="auth" id="auth-btn" title="Роли и вход">Доступ</button>
-              <button class="btn icon" id="settings-btn" title="Настройки" aria-label="Настройки">⚙</button>
+              <button class="btn icon settings-btn" id="settings-btn" title="Настройки" aria-label="Настройки">⚙<span class="attention-dot" id="settings-dot" hidden></span></button>
             </div>
           </div>
-          <nav class="top-actions" aria-label="Панели">
-            <button class="btn ghost" data-panel="boards">Доски</button>
-            <button class="btn ghost" data-panel="storage">Данные</button>
-            <button class="btn ghost" data-panel="agents">AGENTS.md</button>
-            <button class="btn ghost" data-panel="memory">Память</button>
-            <button class="btn ghost" data-panel="skills">Навыки</button>
-            <button class="btn ghost" data-panel="providers">Провайдеры</button>
-            <button class="btn ghost" data-panel="runtimes">Рантаймы</button>
-            <button class="btn ghost" data-panel="mcp">MCP</button>
-            <button class="btn ghost" data-panel="plugins">Плагины</button>
-            <button class="btn ghost" data-panel="multica" title="Задачи Multica">Multica</button>
-            <button class="btn ghost" data-panel="sandbox" title="Docker-песочницы: изоляция процессов и сети">Docker</button>
-          </nav>
         </header>
 
         <div class="run-banner" id="run-banner" hidden></div>

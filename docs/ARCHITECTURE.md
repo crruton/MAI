@@ -392,6 +392,10 @@ macOS/Linux), `killTree` (taskkill / сигнал группе + SIGKILL чер�
 ADR 0105. Строка ввода: `#turn-chip` и окно `#turn-pop` (внутри — прежние
 `#kind-toggle`, `#mode-select`, `#effort-select`), `renderTurnChip`,
 `toggleTurnPop`; `.statusbar` — `#statusline`, `#context-meter`, `#results-btn`.
+Шапка: `#runner-chip`/`#runner-pop` (`#model-select`, `#runtime-select`),
+`#project-menu`, `#connections-menu` — пункты с `data-panel`; `bindMenus`,
+`closeMenus` (одно окно за раз), `renderRunnerChip`, `refreshAttention` (точка
+`#settings-dot`).
 
 ### Удаление папок
 

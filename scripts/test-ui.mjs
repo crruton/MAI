@@ -662,9 +662,18 @@ app.whenReady().then(async () => {
       await new Promise((r) => setTimeout(r, 300));
       fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'turn-pop.png'), (await win.webContents.capturePage()).toPNG());
       await win.webContents.executeJavaScript(`document.querySelector('#turn-chip')?.click()`);
+      for (const [id, file] of [['#runner-chip', 'runner.png'], ['#project-menu-btn', 'project-menu.png'], ['#connections-menu-btn', 'connections-menu.png']]) {
+        await win.webContents.executeJavaScript(`document.querySelector('${id}')?.click()`);
+        await new Promise((r) => setTimeout(r, 300));
+        fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, file), (await win.webContents.capturePage()).toPNG());
+        await win.webContents.executeJavaScript(`document.body.click()`);
+      }
     }
 
     console.log('\n[1] Селектор режимов в DOM');
+    // С N9 режим — в окне чипа хода: открываем его, как пользователь.
+    await win.webContents.executeJavaScript(`document.querySelector('#turn-chip')?.click()`);
+    await new Promise((r) => setTimeout(r, 200));
     const info = await win.webContents.executeJavaScript(`(() => {
       const sel = document.querySelector('#mode-select');
       if (!sel) return { found: false };
@@ -691,6 +700,7 @@ app.whenReady().then(async () => {
     check('opacity не 0', info.opacity !== '0', info.opacity);
     check('селектор в пределах окна', info.inViewport === true, JSON.stringify(info));
     check('опций 5', info.options?.length === 5, JSON.stringify(info.options));
+    await win.webContents.executeJavaScript(`document.body.click()`);
     check(
       'подписи режимов на месте',
       info.options?.map((o) => o.text).join(',') === 'Вручную,Принимать правки,План,Только разрешённое,⚠ Без вопросов',
@@ -2272,7 +2282,25 @@ app.whenReady().then(async () => {
     await wait(400);
     await ui(`document.body.click()`);
     await wait(200);
-    check('клик вне окна — закрыто', await ui(`document.querySelector('#turn-pop').hidden && document.querySelector('#turn-chip').getAttribute('aria-expanded') === 'false'`));
+    check('клик вне окна — закрыто и не видно', await ui(`document.querySelector('#turn-pop').hidden && getComputedStyle(document.querySelector('#turn-pop')).display === 'none' && document.querySelector('#turn-chip').getAttribute('aria-expanded') === 'false'`));
+
+    console.log('\n[62] Шапка: «Кто выполняет» и меню (N9)');
+    const head0 = await ui(`({ panels: [...document.querySelectorAll('.topbar [data-panel]')].filter((b) => b.offsetParent).map((b) => b.dataset.panel).join(','), runner: document.querySelector('#runner-chip .runner-name').textContent, selectsInPop: Boolean(document.querySelector('#runner-pop #model-select')) && Boolean(document.querySelector('#runner-pop #runtime-select')) })`);
+    check('в шапке видны только «?» и «Доступ»; модель и рантайм — в окне «Кто выполняет»', head0.panels === 'docs,auth' && head0.runner === 'test-model' && head0.selectsInPop, JSON.stringify(head0));
+    await ui(`document.querySelector('#turn-chip').click()`);
+    await ui(`document.querySelector('#project-menu-btn').click()`);
+    await wait(200);
+    const head1 = await ui(`({ menu: getComputedStyle(document.querySelector('#project-menu')).display !== 'none', turn: getComputedStyle(document.querySelector('#turn-pop')).display, items: [...document.querySelectorAll('#project-menu [data-panel]')].map((b) => b.dataset.panel).join(',') })`);
+    check('меню «Проект»: доски, данные, AGENTS.md, память, навыки, Multica; окно чипа закрылось', head1.menu && head1.turn === 'none' && head1.items === 'boards,storage,agents,memory,skills,multica', JSON.stringify(head1));
+    await ui(`document.querySelector('#connections-menu-btn').click()`);
+    await wait(200);
+    const head2 = await ui(`({ project: getComputedStyle(document.querySelector('#project-menu')).display, items: [...document.querySelectorAll('#connections-menu [data-panel]')].map((b) => b.dataset.panel).join(',') })`);
+    check('«Подключения»: коннекторы, MCP, пакеты, рантаймы, Docker; «Проект» закрылось', head2.project === 'none' && head2.items === 'connectors,mcp,plugins,runtimes,sandbox', JSON.stringify(head2));
+    await ui(`document.querySelector('#connections-menu [data-panel=mcp]').click()`);
+    await wait(500);
+    const head3 = await ui(`({ closed: getComputedStyle(document.querySelector('#connections-menu')).display === 'none', modal: Boolean(document.querySelector('.modal-backdrop')) })`);
+    check('пункт меню открывает окно и закрывает меню', head3.closed && head3.modal, JSON.stringify(head3));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
 
     check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {
