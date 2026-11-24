@@ -42,6 +42,34 @@ UTF-8. Шлюз на protobuf отвергает всю строку, а ист�
 - `tool-runner.js::spillOutput` — `safeSlice`/`safeTail` вместо `slice`.
 - `browser-agent.js` — функция `cut` внутри скриптов снимка страницы.
 
+### Дополнение: санитайз на уровне клиента и при загрузке сессии
+
+Первый заход закрыл только цикл агента. Повторный разбор показал две дыры:
+
+1. Мимо `buildRequest` идут побочные вызовы модели: компакция
+   (`completeOnce`), ревизор, калибратор, диаграмма, заголовок и урок. Каждый
+   режет текст своим `.slice` и отправляет запрос напрямую.
+2. История читается с диска как есть. Сессия, записанная старой версией,
+   приносит обрывок обратно — и он снова ломает все запросы.
+
+Поэтому санитайз опущен на два уровня ниже:
+
+- `electron/lib/safe-client.js::withTextSafety(client)` — обёртка клиента
+  провайдера. Через `Proxy` перехватывает `chat.completions.create` и
+  `responses.create` и чистит тело запроса: `messages`, `instructions`, `input`
+  (строка и части), `tools`, имена и аргументы вызовов. Остальные свойства
+  клиента (`models`, `files` и прочие) проходят как есть. Обёрнуты все места
+  создания клиента: `agent.js` (основной, плановый, запасной, ревизор,
+  компакция, заголовок, урок), `calibrator.js`, `diagram-agent.js`.
+- `session-store.js::getSession` — `sanitizeMessages` при чтении сессии. Файл на
+  диске не переписывается, но в приложение история попадает уже чистой.
+
+Плюс закрыты оставшиеся точки обрезки, которые питают запрос: `context.js`
+(компакция), `reviewer.js`, `calibrator.js::buildContext`, `diagram-agent.js`,
+`memory-limits.js`, `mcp.js` (ресурсы), `ocr.js`, `attachments.js`,
+`tool-runner.js` (превью аргументов, `PostToolUse`), `agent.js` (заголовок,
+урок, субагент, хук Stop, проверка ответа).
+
 ## Альтернативы
 
 | Вариант | Плюсы | Минусы | Почему не выбран |
@@ -58,13 +86,17 @@ UTF-8. Шлюз на protobuf отвергает всю строку, а ист�
   не страдают.
 - Старые испорченные сессии чинятся сами при следующей отправке; файл на диске
   остаётся как был (история не переписывается).
-- Проверки: `node scripts/test-text-safe.mjs` (26 проверок: границы, хвост,
-  санитайз, JSON-escape, сообщения API, `spillOutput`); тест входит в `npm test`.
+- Проверки: `node scripts/test-text-safe.mjs` (36 проверок: границы, хвост,
+  санитайз, JSON-escape, сообщения API, `spillOutput`, обёртка клиента для
+  `chat.completions` и `responses`); `node scripts/test-sessions.mjs` (24
+  проверки, включая загрузку сессии с обрывком с диска); оба входят в `npm test`.
 
 ## Ссылки
 
 - `electron/lib/text-safe.js`
+- `electron/lib/safe-client.js` (`withTextSafety`)
 - `electron/lib/agent.js` (`buildRequest`)
+- `electron/lib/session-store.js` (`getSession`)
 - `electron/lib/tool-runner.js` (`spillOutput`)
 - `electron/lib/browser-agent.js` (`SNAPSHOT_SCRIPT`, `ELEMENT_SCRIPT`)
-- `scripts/test-text-safe.mjs`
+- `scripts/test-text-safe.mjs`, `scripts/test-sessions.mjs`

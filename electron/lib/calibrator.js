@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import OpenAI from 'openai';
+import { withTextSafety } from './safe-client.js';
+import { safeSlice } from './text-safe.js';
 
 /**
  * Калибратор архитектуры и PRD (F15, ADR 0090) — «второй взгляд» на PRD,
@@ -36,7 +38,7 @@ export const MAX_CONTEXT = 60_000;
 export function buildContext({ prd = '', model = {}, views = {}, adrs = [], openspec = [] } = {}) {
   const cut = (text, n) => {
     const s = String(text || '');
-    return s.length > n ? `${s.slice(0, n)}\n…[обрезано ${s.length - n} симв.]` : s;
+    return s.length > n ? `${safeSlice(s, n)}\n…[обрезано ${s.length - n} симв.]` : s;
   };
   const parts = [
     `## PRD\n${cut(prd, 16_000) || '(нет docs/PRD.md)'}`,
@@ -171,11 +173,11 @@ export async function calibrate({
 }) {
   if (!provider?.baseURL) throw new Error('У выбранного провайдера не задан Base URL');
   if (!provider?.apiKey) throw new Error(`Не задан API-ключ провайдера «${provider.name || 'unknown'}»`);
-  const client = (clientFactory || ((o) => new OpenAI(o)))({
+  const client = withTextSafety((clientFactory || ((o) => new OpenAI(o)))({
     apiKey: provider.apiKey,
     baseURL: provider.baseURL,
     maxRetries: 1,
-  });
+  }));
   const baseline = contextHash(context);
   // Свой таймер, а не AbortSignal.timeout: тот не держит процесс и не виден в тестах.
   const controller = new AbortController();

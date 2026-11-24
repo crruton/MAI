@@ -1,4 +1,5 @@
 import { createSecretFilter, maskMessages } from './secret-filter.js';
+import { safeSlice } from './text-safe.js';
 /**
  * Ревизор: вторая модель проверяет финальный ответ агента.
  *
@@ -64,7 +65,7 @@ export async function reviewAnswer({ client, model, task, answer, signal, temper
     { role: 'system', content: context ? `${REVIEW_PROMPT}\n\n${context}` : REVIEW_PROMPT },
     {
       role: 'user',
-      content: `Задача пользователя:\n${String(task || '').slice(0, 8000)}\n\nОтвет агента:\n${String(answer || '').slice(0, 24000)}`,
+      content: `Задача пользователя:\n${safeSlice(task, 8000)}\n\nОтвет агента:\n${safeSlice(answer, 24000)}`,
     },
   ];
   const response = await client.chat.completions.create(

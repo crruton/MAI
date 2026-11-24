@@ -91,7 +91,7 @@ export function spillOutput(ctx, tool, content) {
 
 function preview(args) {
   const json = JSON.stringify(args ?? {}, null, 2);
-  return json.length > ARGS_PREVIEW ? `${json.slice(0, ARGS_PREVIEW)}\n…` : json;
+  return json.length > ARGS_PREVIEW ? `${safeSlice(json, ARGS_PREVIEW)}\n…` : json;
 }
 
 function deniedText(entry, decision, answer) {
@@ -281,7 +281,7 @@ export async function runToolCall({ entry, args, ctx, policy = {}, approve, audi
     if (hookNote) content = `${content}\n\n[Хук PreToolUse]\n${hookNote}`;
     // PostToolUse: контекст от хука дописывается к результату; block — замечание агенту.
     if (hooks?.has('PostToolUse', entry.name)) {
-      const post = await hooks.run('PostToolUse', { tool_name: entry.name, tool_input: args, tool_response: content.slice(0, 20000) });
+      const post = await hooks.run('PostToolUse', { tool_name: entry.name, tool_input: args, tool_response: safeSlice(content, 20000) });
       if (post.context.length) content = `${content}\n\n[Хук PostToolUse]\n${post.context.join('\n')}`;
       if (post.decision === 'block') content = `${content}\n\n[Хук PostToolUse: ${post.reason || 'результат не принят'}. Исправь и проверь снова.]`;
     }

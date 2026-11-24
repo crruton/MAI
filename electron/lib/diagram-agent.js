@@ -2,6 +2,8 @@ import OpenAI from 'openai';
 import crypto from 'node:crypto';
 import { loadBoards, saveBoards, generateViews } from './boards.js';
 import { unifiedDiff } from './diff.js';
+import { withTextSafety } from './safe-client.js';
+import { safeSlice } from './text-safe.js';
 
 /** Отпечаток модели: применение отказывает, если модель изменилась после предложения (F10). */
 export const modelHash = (model) => crypto.createHash('sha256').update(JSON.stringify(model || {})).digest('hex').slice(0, 16);
@@ -109,13 +111,13 @@ export async function editDiagram({ provider, model, settings, projectDir, view,
     .filter(Boolean)
     .join('\n\n');
 
-  const client = new OpenAI({ apiKey: provider.apiKey, baseURL: provider.baseURL, maxRetries: 1 });
+  const client = withTextSafety(new OpenAI({ apiKey: provider.apiKey, baseURL: provider.baseURL, maxRetries: 1 }));
   const messages = [
     { role: 'system', content: SYSTEM },
     ...history
       .filter((item) => item && (item.role === 'user' || item.role === 'assistant') && item.content)
       .slice(-10)
-      .map((item) => ({ role: item.role, content: String(item.content).slice(0, 8000) })),
+      .map((item) => ({ role: item.role, content: safeSlice(item.content, 8000) })),
     { role: 'user', content: context },
   ];
 

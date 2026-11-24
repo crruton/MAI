@@ -4,6 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { createOAuthProvider, startCallbackServer, DEFAULT_CALLBACK_PORT, NeedsLoginError } from './mcp-oauth.js';
+import { safeSlice } from './text-safe.js';
 
 /**
  * Держит подключения к MCP-серверам из настроек.
@@ -369,7 +370,7 @@ export class McpManager {
     const text = (result.contents || [])
       .map((c) => (typeof c.text === 'string' ? c.text : `[двоичные данные ${c.mimeType || ''}, ${Buffer.byteLength(String(c.blob || ''), 'base64')} байт]`))
       .join('\n');
-    return text.length > maxChars ? `${text.slice(0, maxChars)}\n… обрезано (${text.length} символов)` : text;
+    return text.length > maxChars ? `${safeSlice(text, maxChars)}\n… обрезано (${text.length} символов)` : text;
   }
 
   /** Промпты: [{ server, name, command, description, arguments: [{ name, description, required }] }]. */

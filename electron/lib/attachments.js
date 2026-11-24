@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { isSecretPath } from './guardrails.js';
 import { ocrImage } from './ocr.js';
 import { removeTree } from './remove-tree.js';
+import { safeSlice } from './text-safe.js';
 
 /**
  * Вложения сессии.
@@ -480,7 +481,7 @@ function listTree(root, depth = 0, out = []) {
 /* ---------- извлечение текста ---------- */
 
 function writeTextFile(target, text) {
-  const clipped = text.length > MAX_TEXT_BYTES ? text.slice(0, MAX_TEXT_BYTES) : text;
+  const clipped = text.length > MAX_TEXT_BYTES ? safeSlice(text, MAX_TEXT_BYTES) : text;
   fs.writeFileSync(target, clipped, 'utf8');
   return { bytes: Buffer.byteLength(clipped, 'utf8'), truncated: text.length > MAX_TEXT_BYTES };
 }

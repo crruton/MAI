@@ -8,6 +8,7 @@
  *
  * Модуль не зависит от Electron.
  */
+import { safeSlice } from './text-safe.js';
 
 export const DEFAULT_CONTEXT = 128_000;
 export const AUTO_COMPACT_AT = 0.8;
@@ -99,12 +100,12 @@ export function compactionCut(history, { keepTokens = 20_000 } = {}) {
 export function compactionPrompt(messages, instructions = '') {
   const lines = messages.map((m) => {
     if (m.role === 'compaction') return `## Ранняя сводка\n${m.content}`;
-    if (m.role === 'tool') return `## Результат ${m.name || 'инструмента'}\n${String(m.content || '').slice(0, 4000)}`;
+    if (m.role === 'tool') return `## Результат ${m.name || 'инструмента'}\n${safeSlice(m.content, 4000)}`;
     if (m.role === 'assistant') {
-      const calls = (m.tool_calls || []).map((c) => `вызов ${c.function?.name}(${String(c.function?.arguments || '').slice(0, 400)})`).join('\n');
+      const calls = (m.tool_calls || []).map((c) => `вызов ${c.function?.name}(${safeSlice(c.function?.arguments, 400)})`).join('\n');
       return `## Агент\n${m.content || ''}${calls ? `\n${calls}` : ''}`;
     }
-    return `## ${m.role === 'user' ? 'Пользователь' : m.role}\n${String(m.display || m.content || '').slice(0, 8000)}`;
+    return `## ${m.role === 'user' ? 'Пользователь' : m.role}\n${safeSlice(m.display || m.content, 8000)}`;
   });
   return [
     'Сожми эту часть диалога агента с пользователем в сводку, которой хватит, чтобы продолжить работу без исходных сообщений.',
