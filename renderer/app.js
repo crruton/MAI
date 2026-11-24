@@ -1448,6 +1448,23 @@ function renderSessions() {
     node.append(
       el('span', { class: 'del session-rename', text: '✎', title: 'Переименовать', 'aria-label': 'Переименовать чат', onclick: (event) => { event.stopPropagation(); renameChat(session.id, session.title); } }),
       el('span', { class: 'del session-fork', text: '⑂', title: 'Копия чата — попробовать другой подход', 'aria-label': 'Копия чата', onclick: (event) => { event.stopPropagation(); forkChat(session.id); } }),
+      // Скачать чат (N9): из строки чата, а не отдельной кнопкой панели.
+      el('span', {
+        class: 'del session-export',
+        text: '⤓',
+        title: 'Скачать чат',
+        'aria-label': 'Скачать чат',
+        onclick: async (event) => {
+          event.stopPropagation();
+          let anchor = event.currentTarget;
+          // Загрузка чата перерисовывает список: меню — у новой строки активного чата.
+          if (session.id !== state.sessionId) {
+            await loadSession(session.id);
+            anchor = document.querySelector('#sessions .session.active .session-export') || $('#export-chat');
+          }
+          exportChat(anchor);
+        },
+      }),
     );
     const del = el('span', {
       class: 'del',
@@ -5254,10 +5271,11 @@ function applyRoleGuard() {
     newProject.disabled = !admin;
     newProject.title = admin ? 'Создать проект в отдельной папке (это не изоляция: агент работает с вашими правами)' : 'Создание проектов доступно роли admin';
   }
-  const projectButton = $('#project-btn');
-  if (projectButton) {
-    projectButton.disabled = !admin;
-    projectButton.title = admin ? 'Сменить папку проекта' : 'Смена проекта доступна роли admin';
+  // Смена папки — только admin; меню проекта открывается всем (N9).
+  const projectPick = $('#project-pick');
+  if (projectPick) {
+    projectPick.disabled = !admin;
+    projectPick.title = admin ? 'Сменить папку проекта' : 'Смена проекта доступна роли admin';
   }
   const authButton = $('#auth-btn');
   if (authButton) {
@@ -6851,6 +6869,29 @@ function watchSession() {
   }, 60_000);
 }
 
+/** Скачать текущий чат (кнопка «⤓» у строки чата, /export). */
+async function exportChat(button) {
+  const messages = state.messages.filter((m) => m.role === 'user' || m.role === 'assistant');
+  if (!messages.length) {
+    toast('В диалоге пока нет сообщений');
+    return;
+  }
+  const format = await pickExportFormat(button, { chatFile: Boolean(state.sessionId) });
+  if (!format) return;
+  // Файл чата (CC6.9): вся история, открывается через /import.
+  if (format === 'json') {
+    const r = await api.sessions.exportFile(state.sessionId);
+    if (r?.ok) toast(`Сохранено: ${r.path}`);
+    else if (r?.error) toast(r.error, 'err');
+    return;
+  }
+  button.disabled = true;
+  const result = await api.export.chat({ messages, format, title: 'Диалог MAI Code' });
+  button.disabled = false;
+  if (result?.ok) toast(`Сохранено: ${result.file}`);
+  else if (result?.error) toast(result.error);
+}
+
 async function init() {
   // Корпоративный режим (F21): без входа — только экран входа, до любых других вызовов.
   const auth0 = await api.auth.status().catch(() => null);
@@ -6909,29 +6950,11 @@ async function init() {
   });
 
 // Экспорт всего диалога: меню форматов открывается по клику.
-$('#export-chat').addEventListener('click', async (event) => {
-  const button = event.currentTarget;
-  const messages = state.messages.filter((m) => m.role === 'user' || m.role === 'assistant');
-  if (!messages.length) {
-    toast('В диалоге пока нет сообщений');
-    return;
-  }
-  const format = await pickExportFormat(button, { chatFile: Boolean(state.sessionId) });
-  if (!format) return;
-  // Файл чата (CC6.9): вся история, открывается через /import.
-  if (format === 'json') {
-    const r = await api.sessions.exportFile(state.sessionId);
-    if (r?.ok) toast(`Сохранено: ${r.path}`);
-    else if (r?.error) toast(r.error, 'err');
-    return;
-  }
-  button.disabled = true;
-  const result = await api.export.chat({ messages, format, title: 'Диалог MAI Code' });
-  button.disabled = false;
-  if (result?.ok) toast(`Сохранено: ${result.file}`);
-  else if (result?.error) toast(result.error);
-});
-  $('#project-btn').addEventListener('click', pickProject);
+$('#export-chat').addEventListener('click', (event) => exportChat(event.currentTarget));
+
+  // Кнопка проекта (N9) открывает меню; смена папки — его первый пункт.
+  $('#project-pick')?.addEventListener('click', pickProject);
+  $('#project-trust-item')?.addEventListener('click', () => openSettings('Безопасность'));
   $('#new-project-btn').addEventListener('click', newProjectModal);
   $('#projects-btn')?.addEventListener('click', openProjects);
   // Точка на ⚙ (N9): сразу вкладка «Обслуживание», где написано, что требует внимания.

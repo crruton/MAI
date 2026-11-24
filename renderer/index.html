@@ -23,7 +23,8 @@
         </div>
 
         <button class="btn primary new-chat" id="new-chat">＋ Новый чат</button>
-        <button class="btn export-chat" id="export-chat" title="Скачать весь диалог">⤓ Скачать чат</button>
+        <!-- «Скачать чат» — у строки чата (⤓), кнопка — для /export и прежних вызовов (N9). -->
+        <button class="btn export-chat" id="export-chat" title="Скачать весь диалог" hidden>⤓ Скачать чат</button>
 
         <div class="sidebar-section sessions-head">
           <span>Чаты</span>
@@ -34,13 +35,22 @@
         <div class="sessions" id="sessions"></div>
 
         <div class="sidebar-footer">
-          <button class="project-btn" id="project-btn" title="Сменить папку проекта">
-            <span class="project-icon">📁</span>
-            <span class="project-name" id="project-name">Папка не выбрана</span>
-            <span class="project-trust" id="project-trust" hidden></span>
-          </button>
-          <button class="btn ghost small projects-btn" id="projects-btn" title="Проекты: папки, инструкции и коннекторы вместе">🗂 Проекты</button>
-          <button class="btn ghost small new-project" id="new-project-btn" title="Создать проект в отдельной папке (это не изоляция: агент работает с вашими правами)">＋ Новый проект</button>
+          <!-- Проект (N9): одна кнопка, остальное — в её меню. -->
+          <div class="menu-wrap project-wrap">
+            <button class="project-btn menu-btn" id="project-btn" type="button" title="Проект: сменить папку, проекты, новый проект, доверие" aria-haspopup="menu" aria-expanded="false" aria-controls="sidebar-project-menu">
+              <span class="project-icon">📁</span>
+              <span class="project-name" id="project-name">Папка не выбрана</span>
+              <span class="project-trust" id="project-trust" hidden></span>
+              <span class="project-caret" aria-hidden="true">▾</span>
+            </button>
+            <div class="menu-pop project-pop" id="sidebar-project-menu" role="menu" aria-label="Проект" hidden>
+              <button class="menu-item" role="menuitem" type="button" id="project-pick">Сменить папку…</button>
+              <button class="menu-item projects-btn" role="menuitem" type="button" id="projects-btn" title="Проекты: папки, инструкции и коннекторы вместе">Проекты</button>
+              <button class="menu-item new-project" role="menuitem" type="button" id="new-project-btn" title="Создать проект в отдельной папке (это не изоляция: агент работает с вашими правами)">＋ Новый проект в отдельной папке</button>
+              <div class="menu-sep"></div>
+              <button class="menu-item" role="menuitem" type="button" id="project-trust-item">Доверие к папкам…</button>
+            </div>
+          </div>
           <div class="conn" id="conn"><i></i><span>MAI</span></div>
         </div>
       </aside>

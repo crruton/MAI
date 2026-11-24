@@ -396,7 +396,10 @@ ADR 0105. Строка ввода: `#turn-chip` и окно `#turn-pop` (вну�
 `#project-menu`, `#connections-menu` — пункты с `data-panel`; `bindMenus`,
 `closeMenus` (одно окно за раз), `renderRunnerChip`, `refreshAttention` (точка
 `#settings-dot`). Настройки: метки `.settings-tab-mark` в теле `openSettings`,
-`tabifySettings(modal, tab)` раскладывает по `.settings-pane`.
+`tabifySettings(modal, tab)` раскладывает по `.settings-pane`. Боковая панель:
+`#project-btn` открывает `#sidebar-project-menu` (`#project-pick`, `#projects-btn`,
+`#new-project-btn`, `#project-trust-item`); `exportChat(anchor)` — «⤓» у строки
+чата и скрытая `#export-chat`.
 
 ### Удаление папок
 

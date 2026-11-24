@@ -662,7 +662,7 @@ app.whenReady().then(async () => {
       await new Promise((r) => setTimeout(r, 300));
       fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, 'turn-pop.png'), (await win.webContents.capturePage()).toPNG());
       await win.webContents.executeJavaScript(`document.querySelector('#turn-chip')?.click()`);
-      for (const [id, file] of [['#runner-chip', 'runner.png'], ['#project-menu-btn', 'project-menu.png'], ['#connections-menu-btn', 'connections-menu.png']]) {
+      for (const [id, file] of [['#runner-chip', 'runner.png'], ['#project-menu-btn', 'project-menu.png'], ['#connections-menu-btn', 'connections-menu.png'], ['#project-btn', 'sidebar-menu.png']]) {
         await win.webContents.executeJavaScript(`document.querySelector('${id}')?.click()`);
         await new Promise((r) => setTimeout(r, 300));
         fs.writeFileSync(path.join(process.env.MAI_UI_SHOT, file), (await win.webContents.capturePage()).toPNG());
@@ -1219,7 +1219,8 @@ app.whenReady().then(async () => {
     check('Bash с командой', titles.some((t) => t === 'Bash npm test'), JSON.stringify(titles));
 
     console.log('\n[15] Доверие к папке при выборе проекта (ADR 0028)');
-    await win.webContents.executeJavaScript(`document.querySelector('#project-btn').click()`);
+    // С N9 смена папки — пункт меню кнопки проекта.
+    await win.webContents.executeJavaScript(`document.querySelector('#project-btn').click(); document.querySelector('#project-pick').click()`);
     await new Promise((r) => setTimeout(r, 600));
     const trustModal = await win.webContents.executeJavaScript(`(() => {
       const m = document.querySelector('.trust-modal');
@@ -2329,6 +2330,25 @@ app.whenReady().then(async () => {
     await wait(500);
     check('«Сохранить» с другой вкладки сохраняет поля всех вкладок', savedSettings.length === saved0 + 1 && 'secretFilter' in savedSettings.at(-1) && 'shell' in savedSettings.at(-1) && 'voice' in savedSettings.at(-1), JSON.stringify(Object.keys(savedSettings.at(-1) || {})));
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+
+    console.log('\n[64] Боковая панель: проект одной кнопкой, «⤓» у чата (N9)');
+    const sb0 = await ui(`({ visible: [...document.querySelectorAll('.sidebar button')].filter((b) => b.offsetParent && !b.closest('#sessions')).map((b) => b.id || b.className).join(','), exportRow: Boolean(document.querySelector('#sessions .session .session-export')) })`);
+    check('в панели видны: новый чат, «этот проект», кнопка проекта; «Скачать чат» — у строки чата', sb0.visible === 'new-chat,sessions-scope,project-btn' && sb0.exportRow, JSON.stringify(sb0));
+    await ui(`document.querySelector('#project-btn').click()`);
+    await wait(200);
+    const sb1 = await ui(`({ open: getComputedStyle(document.querySelector('#sidebar-project-menu')).display !== 'none', items: [...document.querySelectorAll('#sidebar-project-menu .menu-item')].map((b) => b.id).join(',') })`);
+    check('меню проекта: сменить папку, проекты, новый проект, доверие', sb1.open && sb1.items === 'project-pick,projects-btn,new-project-btn,project-trust-item', JSON.stringify(sb1));
+    await ui(`document.querySelector('#project-trust-item').click()`);
+    await wait(600);
+    const sb2 = await ui(`({ closed: getComputedStyle(document.querySelector('#sidebar-project-menu')).display === 'none', tab: document.querySelector('.settings-tab.on')?.dataset.tab })`);
+    check('«Доверие к папкам…» — настройки на вкладке «Безопасность»', sb2.closed && sb2.tab === 'Безопасность', JSON.stringify(sb2));
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await wait(200);
+    await ui(`document.querySelector('#sessions .session .session-export').click()`);
+    await wait(700);
+    const sb3 = await ui(`[...document.querySelectorAll('.export-picker button')].map((b) => b.textContent.trim()).length`);
+    check('«⤓» у строки чата — меню форматов', sb3 >= 2, sb3);
+    await ui(`document.querySelector('.export-picker') && document.body.click(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
 
     check('кнопка нового проекта — «в отдельной папке», не изоляция; панель — «Docker»', /отдельной папке/.test(names.btn) && /не изоляция/.test(names.btn) && !/песочниц/i.test(names.btn) && names.docker === 'Docker', JSON.stringify(names));
   } catch (err) {

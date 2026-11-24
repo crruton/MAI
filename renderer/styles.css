@@ -966,3 +966,9 @@ button { cursor: pointer; }
 .settings-pane .row > .field { flex: 1 1 200px; min-width: 0; }
 .settings-pane .row > .btn { flex: 0 0 auto; }
 .settings-panes { overflow-x: hidden; }
+
+/* Боковая панель (N9): одна кнопка проекта, меню открывается вверх. */
+.project-wrap { width: 100%; }
+.project-wrap .project-btn { width: 100%; }
+.project-caret { margin-left: auto; color: var(--text-faint); }
+.sidebar .menu-pop.project-pop { top: auto; bottom: calc(100% + 6px); left: 0; right: 0; min-width: 0; }
