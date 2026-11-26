@@ -131,3 +131,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0113](0113-navyki-kataloga-v-multica.md) | Навыки каталога → Multica MAI | accepted | 2026-11-26 |
 | [0114](0114-eksport-navykov-v-drugie-agenty.md) | Экспорт навыков каталога в Claude Code, OpenCode и Codex | accepted | 2026-11-26 |
 | [0115](0115-nabory-navykov-po-rolyam.md) | Наборы навыков каталога по ролям | accepted | 2026-11-26 |
+| [0116](0116-atribuciya-kommitov-agenta.md) | Атрибуция коммитов агента: трейлеры Agent-Model и Agent-User | accepted | 2026-11-26 |

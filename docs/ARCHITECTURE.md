@@ -379,6 +379,14 @@ ADR 0115. `catalog-roles.js` (без Electron) — `catalogRoles`, `roleSkillNam
 роли в `roles:install` (поле ответа `catalogSkills`). Опция `role` у `pushSkills` и
 `exportSkills`, ключ `--role` у скриптов.
 
+### Атрибуция коммитов агента
+
+ADR 0116. `attribution.js` (без Electron) — `attributeCommit` (простой `git commit` → трейлеры
+`Agent-Model`, `Agent-User`), `userLine`, `cleanTrailerValue`, проверка git ≥ 2.32. Вызывается
+в `effectiveCommand` (`tools/shell.js`) — итоговая строка и для подтверждения, и для запуска.
+В main.js — `attributionFor(resolved)` во всех `runAgent`; в agent.js — `toolCtx.attribution`,
+передаётся субагенту.
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,

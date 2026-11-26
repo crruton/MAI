@@ -422,6 +422,7 @@ export async function runAgent(options) {
 
 async function runAgentInner({
   settings,
+  attribution = null,
   provider,
   projectDir,
   model,
@@ -596,6 +597,7 @@ async function runAgentInner({
       provider,
       projectDir: subDir,
       model,
+      attribution,
       messages: [{ role: 'user', content: String(args.prompt) }],
       emit: subEmit,
       approve,
@@ -1214,6 +1216,8 @@ async function runAgentInner({
 
     const toolCtx = {
       projectDir,
+      // Кто и какой моделью делает коммит (E2.7, ADR 0116).
+      attribution,
       // Папка длинных выводов (CC1.13) — тоже рабочая: агент дочитывает её read_file/grep.
       roots: normalizeRoots(projectDir, [...extraDirs, ...(settings.outputDir ? [{ dir: settings.outputDir, name: 'вывод' }] : [])]),
       outputDir: settings.outputDir || null,

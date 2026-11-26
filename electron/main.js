@@ -33,6 +33,7 @@ import { createAgentBrowser } from './lib/browser-agent.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace, catalogDir, CATALOG } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
+import { userLine } from './lib/attribution.js';
 import { listRoles, installRole } from './lib/roles.js';
 import { installRoleSkills, catalogRoles } from './lib/catalog-roles.js';
 import { skillConflicts } from './lib/skills.js';
@@ -274,6 +275,14 @@ function plannerFor(settings, activeKey) {
   } catch {
     return null;
   }
+}
+
+/** Атрибуция коммитов агента (E2.7, ADR 0116): модель и вошедший пользователь Keycloak. */
+function attributionFor(resolved) {
+  const settings = loadSettings();
+  const auth = authStatus();
+  const user = auth.mode === 'keycloak' && auth.loggedIn ? auth.user : null;
+  return { enabled: settings.attribution?.enabled !== false, model: `${resolved.providerId}/${resolved.modelId}`, user: userLine(user) };
 }
 
 function agentSettings(settings) {
@@ -1715,6 +1724,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
         provider: resolved.provider,
         projectDir,
         model: resolved.modelId,
+        attribution: attributionFor(resolved),
         messages: session.messages,
         signal: controller.signal,
         mcp,
@@ -1894,6 +1904,7 @@ async function runScheduled(task, { reason = 'schedule' } = {}) {
       provider: resolved.provider,
       projectDir,
       model: resolved.modelId,
+      attribution: attributionFor(resolved),
       messages: session.messages,
       signal: controller.signal,
       mcp,
@@ -2021,6 +2032,7 @@ async function runCli(opts) {
       provider: resolved.provider,
       projectDir,
       model: resolved.modelId,
+      attribution: attributionFor(resolved),
       messages: session.messages,
       signal: controller.signal,
       mcp,
@@ -3625,6 +3637,7 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         provider: resolved.provider,
         projectDir,
         model: resolved.modelId,
+        attribution: attributionFor(resolved),
         messages: session.messages,
         signal: controller.signal,
         mcp,

@@ -1,3 +1,4 @@
+import { attributeCommit } from '../attribution.js';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { checkCommand } from '../guardrails.js';
@@ -35,7 +36,8 @@ function hasRepowise() {
  * команды, и пользователь должен подтверждать именно итоговую строку (ADR 0027).
  */
 export function effectiveCommand(ctx, args) {
-  const command = String(args?.command || '');
+  // Трейлеры Agent-Model / Agent-User у простого git commit (E2.7, ADR 0116).
+  const command = attributeCommit(String(args?.command || ''), ctx?.attribution);
   if (ctx?.repowise?.distill && command && !/^\s*repowise\b/.test(command) && !/[|&<>]/.test(command) && hasRepowise()) {
     return `repowise distill ${command}`;
   }

@@ -10,6 +10,10 @@
 
 ### Added
 
+- Атрибуция коммитов агента (ADR 0116): простой `git commit` в `run_shell` получает трейлеры
+  `Agent-Model: <провайдер>/<модель>` и `Agent-User: <имя> <email>` пользователя Keycloak;
+  подтверждение показывает итоговую команду; субагенты — тоже. Выключение —
+  `attribution.enabled: false`. Модуль `electron/lib/attribution.js`, тест `test-attribution` (25).
 - Каталог: 15 devops-навыков (CI, Docker, Helm, Flux, Kubernetes, Terraform, Ansible,
   Harbor) и роль `devops`. Корпоративный профиль сети и зеркал в публичный каталог не
   входит: ссылки на него заменены отсылкой к приватному каталогу организации, внутренние
