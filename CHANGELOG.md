@@ -10,6 +10,10 @@
 
 ### Added
 
+- Экспорт навыков каталога в Claude Code, OpenCode и Codex (ADR 0114):
+  `npm.cmd run skills:export -- --target claude,opencode,codex` (`--dry-run`, `--prune`,
+  `--project`, имена). Метка `.mai-catalog.json`; чужие папки не перезаписываются; запись
+  через временную папку. Модуль `electron/lib/skills-export.js`, тест `test-skills-export` (18).
 - Навыки каталога → Multica MAI (ADR 0113): кнопка «Навыки → Multica» в панели и
   `npm.cmd run multica:skills` (`--dry-run`, `--prune`, имена). Свои навыки помечаются
   `config.managed_by: mai-code` с версией и хэшем; повтор ничего не меняет; навык,

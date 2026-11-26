@@ -33,6 +33,7 @@
 | 26.11.2026 | E1.1–E1.3: каталог, проверка, 18 навыков | ADR 0111, `catalog/`, `docs/CATALOG.md`, `test-catalog` (31 проверка) | `create-gitlab-mr` не перенесён — канон `to-mr` (S2); общие навыки оказались без внутренних адресов |
 | 26.11.2026 | E2.3: workspace и проект Multica для репозитория | ADR 0112, `multica-target.js`, панель «Multica», `test-multica-target` (25), `test-ui` [51] | значение из `settings.json` чужого репозитория могло стать флагом CLI — id проверяется; личный файл теперь всегда в `.gitignore` |
 | 26.11.2026 | E1.8: навыки каталога → Multica MAI | ADR 0113, `multica-skills.js`, `npm run multica:skills`, кнопка в панели, `test-multica-skills` (23) | хэш зависел от CRLF/LF — checkout на Windows и Linux гонял бы навыки по кругу; теперь нормализация в LF |
+| 26.11.2026 | E1.9: экспорт в Claude Code, OpenCode, Codex | ADR 0114, `skills-export.js`, `npm run skills:export`, `test-skills-export` (18) | — |
 | 26.11.2026 | прогон `npm test` | — | вне этой работы: `test-web` и `test-local-models` иногда падают на выходе (`UV_HANDLE_CLOSING`, Node 24.19 на Windows); `test-shell` падает, если на машине установлен `repowise`. Оба дефекта есть на чистом `dev` — пункт Q8 |
 
 ---
@@ -173,7 +174,7 @@
 | E1.6 | Перенести devops-скиллы без внутренних адресов; общий пакет справочников (S11) | P1 | 2 | 0 одинаковых файлов в разных скиллах | E1.2 |
 | E1.7 | Наборы по ролям (developer, analyst, pm, devops, presale) в каталоге и в `/onboarding` (ADR 0070) | P1 | 1 | набор роли ставится одной кнопкой | E1.3 |
 | E1.8 ✓ | Отдача скиллов в Multica MAI: назначенные агенту скиллы создаются и обновляются в workspace с меткой `managed_by: mai-code`, ручные не трогаются | P1 | 3 | повторная отдача идемпотентна; удалённый из каталога скилл удаляется только с `--prune` | E1.3, E2.3 |
-| E1.9 | Экспорт: `mai skills export --target claude\|opencode\|codex` в их каталоги скиллов | P1 | 2 | Claude Code видит скилл из каталога MAI | E1.3 |
+| E1.9 ✓ | Экспорт: `mai skills export --target claude\|opencode\|codex` в их каталоги скиллов | P1 | 2 | Claude Code видит скилл из каталога MAI | E1.3 |
 | E1.10 | Eval-сценарии: 3 на скилл из наборов ролей; прогон при изменении каталога | P2 | 5 | падение eval блокирует слияние | E1.7 |
 | E1.11 | Разбить длинные скиллы (S10) | P2 | 1 | eval не хуже | E1.10 |
 | E1.12 | Метрики использования скиллов: загрузки, исход, «мёртвые» скиллы (OTel, ADR 0094) | P2 | 2 | панель на доске «Качество» | E1.3 |

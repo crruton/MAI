@@ -365,6 +365,13 @@ IPC `multica:pushSkills` (ADMIN); каталог — подключённый в
 (`skillCatalogRoot`). Скрипт `scripts/multica-skills.mjs`. В app.js — кнопка
 `.multica-skills` в панели Multica.
 
+### Экспорт навыков в другие агенты
+
+ADR 0114. `skills-export.js` (без Electron) — `TARGETS` (claude, opencode, codex),
+`targetDir`, `planExport` (метка `.mai-catalog.json`), `exportSkills` (временная папка и
+подмена). Навыки — `collectCatalogSkills` из `multica-skills.js`. Скрипт
+`scripts/skills-export.mjs` (`npm run skills:export`).
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,

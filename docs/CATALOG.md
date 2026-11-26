@@ -69,6 +69,20 @@ npm.cmd run multica:skills -- grilling tdd
 вручную, не перезаписывается. `--prune` удаляет из Multica навыки каталога, которых
 больше нет в каталоге ([ADR 0113](adr/0113-navyki-kataloga-v-multica.md)).
 
+## Экспорт в Claude Code, OpenCode и Codex
+
+```powershell
+npm.cmd run skills:export -- --target claude --dry-run
+npm.cmd run skills:export -- --target claude,opencode,codex
+npm.cmd run skills:export -- --target claude --project C:workapp grilling tdd
+```
+
+Без `--project` навыки идут в папку пользователя (`~/.claude/skills`,
+`~/.config/opencode/skills`, `~/.codex/skills`), с ним — в папку проекта. В каждой папке
+навыка — метка `.mai-catalog.json`; папку без метки экспорт не трогает. Повтор меняет только
+новые версии, `--prune` удаляет навыки, которых больше нет в каталоге
+([ADR 0114](adr/0114-eksport-navykov-v-drugie-agenty.md)).
+
 ## Что не попадает в каталог
 
 Репозиторий публичный. Проверка не пропускает токены, приватные ключи, хосты из
@@ -78,5 +92,5 @@ npm.cmd run multica:skills -- grilling tdd
 
 ## Ограничения
 
-- Экспорт в Claude Code и OpenCode — ещё не сделан ([бэклог](BACKLOG-TEAM.md), E1.9).
+- Правка навыка в папке другого агента перезапишется при экспорте новой версии: править нужно в каталоге.
 - Наборов по ролям пока нет (E1.7): навыки ставятся по одному.
