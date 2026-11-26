@@ -88,7 +88,7 @@ import { editDiagram, applyDiagram } from './lib/diagram-agent.js';
 import { buildContext as calibrationContext, calibrate, renderMarkdown as calibrationMarkdown } from './lib/calibrator.js';
 import { listChanges as openspecChanges } from './lib/openspec.js';
 import { createWorkspace, listWorkspaces, sandboxRoot } from './lib/workspace.js';
-import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin, sessionGateFor, ensureSession } from './lib/auth.js';
+import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin, requireRole, sessionGateFor, ensureSession } from './lib/auth.js';
 import { listDocs, readDoc, searchDocs } from './lib/docs.js';
 import * as multica from './lib/multica.js';
 import * as sandbox from './lib/container.js';
@@ -163,7 +163,7 @@ let mainWindow = null;
 
 // Матрица прав IPC (ADR 0028): роль проверяется до любого обработчика.
 // Канал без записи в матрице считается admin-only.
-guardIpc(ipcMain, requireAdmin, {
+guardIpc(ipcMain, requireRole, {
   onUnknown: (channel) => console.warn(`[ipc] канал ${channel} не внесён в матрицу прав — доступен только admin`),
   sessionGate: sessionGateFor,
 });
@@ -1049,7 +1049,7 @@ ipcMain.handle('runtimes:stop', (event) => {
 // ---------- проект ----------
 
 ipcMain.handle('project:pick', async () => {
-  requireAdmin();
+  requireRole('developer');
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (result.canceled || !result.filePaths[0]) return null;
   // Процесс плагинов старого проекта держит его папку (cwd): останавливаем после текущих вызовов.
@@ -1389,7 +1389,7 @@ ipcMain.handle('attachments:open', async (_e, payload) => {
 ipcMain.handle('workspace:root', () => sandboxRoot());
 ipcMain.handle('workspace:list', () => listWorkspaces());
 ipcMain.handle('workspace:create', async (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   try {
     const result = createWorkspace(payload || {});
     saveSettings({ projectDir: result.projectDir });
@@ -2803,7 +2803,7 @@ ipcMain.handle('agents:read', (_e, projectDir) => {
 });
 
 ipcMain.handle('agents:write', (_e, { file, content }) => {
-  requireAdmin();
+  requireRole('lead');
   return writeAgents(file, content);
 });
 
@@ -2811,7 +2811,7 @@ ipcMain.handle('agents:write', (_e, { file, content }) => {
 
 ipcMain.handle('memory:read', (_e, projectDir) => readMemoryState(projectDir));
 ipcMain.handle('memory:write', (_e, { file, content, projectDir }) => {
-  requireAdmin();
+  requireRole('developer');
   return saveMemoryFile(projectOf({ projectDir }), file, content);
 });
 
@@ -2831,7 +2831,7 @@ ipcMain.handle('memory:append', (_e, payload = {}) => {
 });
 
 ipcMain.handle('memory:save', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   return saveMemory(projectOf(payload), { scope: payload.scope, content: payload.content, note: payload.note });
 });
 
@@ -2840,7 +2840,7 @@ ipcMain.handle('memory:version', (_e, payload) =>
 );
 
 ipcMain.handle('memory:restore', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   return restoreMemory(projectOf(payload), payload.scope, payload.version);
 });
 
@@ -2857,11 +2857,11 @@ ipcMain.handle('skills:list', (_e, projectDir) => {
   });
 });
 ipcMain.handle('skills:create', (_e, { projectDir, ...data }) => {
-  requireAdmin();
+  requireRole('lead');
   return createSkill(projectDir, data);
 });
 ipcMain.handle('skills:delete', (_e, file) => {
-  requireAdmin();
+  requireRole('lead');
   return deleteSkill(file);
 });
 
@@ -3109,7 +3109,7 @@ ipcMain.handle('multica:target', (_e, projectDir) => multicaTarget(projectDir));
 ipcMain.handle('multica:workspaces', () => multica.listWorkspaces());
 ipcMain.handle('multica:projects', (_e, workspaceId) => multica.listProjects({ workspaceId: workspaceId || multicaTarget().workspaceId }));
 ipcMain.handle('multica:setTarget', (_e, payload) => {
-  requireAdmin();
+  requireRole('lead');
   const dir = payload?.projectDir || loadSettings().projectDir;
   if (!dir) throw new Error('Не выбрана папка проекта');
   if (!isTrusted(dir)) return needTrust(dir) || { ok: false, error: 'Папка проекта не доверена: настройки Multica в неё не записываются' };
@@ -3130,18 +3130,18 @@ function skillCatalogRoot(name) {
 }
 // Навыки каталога → Multica MAI (E1.8, ADR 0113).
 ipcMain.handle('multica:pushSkills', (_e, payload) => {
-  requireAdmin();
+  requireRole('lead');
   const names = Array.isArray(payload?.names) ? payload.names.map(String) : [];
   return multica.pushCatalogSkills(skillCatalogRoot(payload?.market), multicaTarget(payload?.projectDir), { names, prune: Boolean(payload?.prune), dryRun: Boolean(payload?.dryRun) });
 });
 ipcMain.handle('multica:syncDocs', (_e, projectDir) => {
-  requireAdmin();
+  requireRole('developer');
   const dir = projectDir || loadSettings().projectDir;
   return multica.syncOpenSpec(dir, multicaTarget(dir));
 });
 // Статусы Multica → галочки в openspec/changes/*/tasks.md (F14, ADR 0089).
 ipcMain.handle('multica:pullStatuses', (_e, projectDir) => {
-  requireAdmin();
+  requireRole('developer');
   const dir = projectDir || loadSettings().projectDir;
   return multica.pullStatuses(dir, { target: multicaTarget(dir) });
 });
@@ -3344,7 +3344,7 @@ ipcMain.handle('artifacts:list', (_e, payload) =>
 ipcMain.handle('artifacts:get', (_e, payload) => readArtifact(projectOf(payload), payload.id));
 
 ipcMain.handle('artifacts:save', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const projectDir = projectOf(payload);
   const artifact = writeArtifact(projectDir, payload.artifact || {});
   return { ok: true, artifact, stats: artifactStats(projectDir) };
@@ -3357,12 +3357,12 @@ ipcMain.handle('artifacts:version', (_e, payload) =>
 );
 
 ipcMain.handle('artifacts:restore', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   return restoreArtifact(projectOf(payload), payload.id, payload.version);
 });
 
 ipcMain.handle('artifacts:delete', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   return deleteArtifact(projectOf(payload), payload.id);
 });
 
@@ -3375,7 +3375,7 @@ ipcMain.handle('artifacts:search', (_e, payload) =>
 );
 
 ipcMain.handle('artifacts:import', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   return importExisting(projectOf(payload));
 });
 
@@ -3449,7 +3449,7 @@ ipcMain.handle('export:chat', async (event, payload) => {
 });
 
 ipcMain.handle('artifacts:applyToFile', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const projectDir = projectOf(payload);
   const artifact = readArtifact(projectDir, payload.id);
   const target = artifact.meta?.file;
@@ -3469,7 +3469,7 @@ ipcMain.handle('boards:load', (_e, payload) => {
 });
 
 ipcMain.handle('boards:save', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   // Версия секции (F9, ADR 0062): правка поверх чужого сохранения — конфликт, а не потеря.
   return saveBoardSection(projectOf(payload), payload.section, payload.data, payload.rev);
 });
@@ -3480,7 +3480,7 @@ ipcMain.handle('boards:views', async (_e, payload) => {
 });
 
 ipcMain.handle('boards:baseline', async (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const projectDir = projectOf(payload);
   return saveBaseline(projectDir, await gitHead(projectDir));
 });
@@ -3580,7 +3580,7 @@ ipcMain.handle('boards:clearErrors', () => {
 });
 
 ipcMain.handle('boards:correction', async (event, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const window = BrowserWindow.fromWebContents(event.sender);
   const state = runState(window);
   if (state.correction) return { ok: false, error: 'Самокоррекция уже выполняется' };
@@ -3842,7 +3842,7 @@ ipcMain.handle('boards:rasterize', async (_e, payload) => {
 });
 
 ipcMain.handle('boards:diagramChat', async (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const settings = loadSettings();
   let resolved;
   try {
@@ -3905,7 +3905,7 @@ const CALIBRATION_ID = 'calibration:architecture';
 
 /** Калибровка архитектуры и PRD (F15, ADR 0090): отчёт → артефакт note с версиями. */
 ipcMain.handle('boards:calibrate', async (_e, payload = {}) => {
-  requireAdmin();
+  requireRole('developer');
   const log = [];
   const settings = loadSettings();
   try {
@@ -3946,7 +3946,7 @@ ipcMain.handle('boards:calibrate', async (_e, payload = {}) => {
 
 /** Применить предложение агента схем (F10, ADR 0086). Только admin. */
 ipcMain.handle('boards:diagramApply', (_e, payload = {}) => {
-  requireAdmin();
+  requireRole('developer');
   try {
     return applyDiagram({ projectDir: projectOf(payload), proposal: payload.proposal, baseHash: String(payload.baseHash || '') });
   } catch (err) {
@@ -3955,7 +3955,7 @@ ipcMain.handle('boards:diagramApply', (_e, payload = {}) => {
 });
 
 ipcMain.handle('boards:saveView', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const projectDir = projectOf(payload);
   const { views } = generateViews(projectDir, '');
   const view = views[payload.view];
@@ -4001,7 +4001,7 @@ app.on('before-quit', () => syncQueue.stop());
 app.on('before-quit', () => void flushMetrics());
 ipcMain.handle('infra:syncStatus', (_e, payload) => ({ enabled: autoSyncEnabled(), ...syncQueue.status(projectOf(payload)) }));
 ipcMain.handle('infra:syncNow', async (_e, payload) => {
-  requireAdmin();
+  requireRole('lead');
   return { enabled: autoSyncEnabled(), ...(await syncQueue.flush(projectOf(payload))) };
 });
 ipcMain.handle('infra:sync', (_e, payload) =>
@@ -4045,7 +4045,7 @@ ipcMain.handle('repowise:status', async (_e, payload) => {
   return { ...base, mcp: configured ? mcp.status().find((s) => s.name === 'repowise') || { name: 'repowise', status: 'disconnected', restarts: 0 } : null };
 });
 ipcMain.handle('repowise:restartMcp', async () => {
-  requireAdmin();
+  requireRole('developer');
   const config = loadSettings().mcpServers?.repowise;
   if (!config) return { ok: false, error: 'MCP repowise не подключён — нажмите «Подключить MCP»' };
   const res = mcp.servers.has('repowise') ? await mcp.restart('repowise') : await mcp.connect('repowise', config);

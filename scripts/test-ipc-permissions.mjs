@@ -36,7 +36,10 @@ const stale = [...matrix].filter((c) => !handled.has(c));
 check('в матрице нет несуществующих каналов', stale.length === 0, stale.join(', '));
 const orphan = [...invoked].filter((c) => !handled.has(c));
 check('каждый канал preload обработан в main', orphan.length === 0, orphan.join(', '));
-check('значения только any / admin / self', Object.values(IPC_PERMISSIONS).every((v) => ['any', 'admin', 'self'].includes(v)));
+check('значения только any / developer / lead / admin / self', Object.values(IPC_PERMISSIONS).every((v) => ['any', 'developer', 'lead', 'admin', 'self'].includes(v)));
+check('developer: задачи Multica, память, артефакты, worktree (ADR 0117)', ['multica:syncDocs', 'memory:save', 'artifacts:save', 'worktree:create'].every((c) => IPC_PERMISSIONS[c] === 'developer'));
+check('lead: цель Multica, навыки проекта, плановые задачи', ['multica:setTarget', 'multica:pushSkills', 'skills:create', 'schedule:save'].every((c) => IPC_PERMISSIONS[c] === 'lead'));
+check('запуск процессов из окна — только admin (ADR 0028)', ['runtimes:run', 'sandbox:exec', 'sandbox:start', 'repowise:serve', 'repowise:distill', 'boards:stageRun', 'signoff:run', 'shell:direct'].every((c) => IPC_PERMISSIONS[c] === 'admin'));
 
 console.log('\n[2] Опасные каналы закрыты');
 for (const channel of [
@@ -80,8 +83,9 @@ const handlers = new Map();
 const fakeIpc = { handle: (channel, fn) => handlers.set(channel, fn) };
 let role = 'guest';
 const unknown = [];
-guardIpc(fakeIpc, () => {
-  if (role !== 'admin') throw new Error('Недостаточно прав: требуется роль admin');
+const ORDER = ['guest', 'developer', 'lead', 'admin'];
+guardIpc(fakeIpc, (level) => {
+  if (ORDER.indexOf(role) < ORDER.indexOf(level)) throw new Error(`Недостаточно прав: требуется роль ${level}`);
 }, { onUnknown: (c) => unknown.push(c) });
 fakeIpc.handle('runtimes:run', () => ({ ok: true, ran: true }));
 fakeIpc.handle('chat:start', () => ({ ok: true }));
@@ -97,6 +101,17 @@ check('__proto__ в данных — отказ', polluted.invalid === true && /
 const newDenied = await handlers.get('secret:new')({});
 check('канал вне матрицы закрыт для гостя', newDenied.forbidden === true);
 check('о канале вне матрицы сообщено', unknown.includes('secret:new'));
+fakeIpc.handle('multica:syncDocs', () => ({ ok: true, ran: true }));
+fakeIpc.handle('multica:setTarget', () => ({ ok: true, ran: true }));
+check('гостю developer-канал отказан', (await handlers.get('multica:syncDocs')({})).forbidden === true);
+role = 'developer';
+check('developer: developer-канал открыт', (await handlers.get('multica:syncDocs')({})).ran === true);
+const devDenied = await handlers.get('multica:setTarget')({}, {});
+check('developer: lead-канал закрыт с понятной причиной', devDenied.forbidden === true && /требуется роль lead/.test(devDenied.error), JSON.stringify(devDenied));
+check('developer: admin-канал закрыт', (await handlers.get('runtimes:run')({})).forbidden === true);
+role = 'lead';
+check('lead: lead-канал открыт', (await handlers.get('multica:setTarget')({}, {})).ran === true);
+check('lead: admin-канал закрыт', (await handlers.get('runtimes:run')({})).forbidden === true);
 role = 'admin';
 check('admin проходит', (await handlers.get('runtimes:run')({})).ran === true);
 

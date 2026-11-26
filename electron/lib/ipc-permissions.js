@@ -5,8 +5,12 @@
  * `scripts/test-ipc-permissions.mjs`. Канал, которого нет в таблице, считается
  * `admin`: ошибка в матрице закрывает доступ, а не открывает.
  *
- * - `any`   — доступно всем ролям: чтение, чат в рамках режима разрешений, экспорт;
- * - `admin` — меняет настройки, запускает процессы, трогает секреты или чужой код;
+ * - `any`       — доступно всем ролям: чтение, чат в рамках режима разрешений, экспорт;
+ * - `developer` — повседневная работа в проекте: память, артефакты, доски, worktree,
+ *                 задачи Multica, signoff, рантаймы и песочница (E2.8, ADR 0117);
+ * - `lead`      — конфигурация команды и работа без человека: цель Multica, навыки и агенты
+ *                 проекта, плановые задачи, стадии деплоя, синхронизация хранилища;
+ * - `admin`     — машина целиком: настройки, ключи, доверие, установка исполняемого, секреты;
  * - `self`  — обработчик проверяет роль сам, потому что право зависит от аргументов
  *             (например, «ограниченно» может выбрать гость, «доверяю» — только admin).
  *
@@ -17,6 +21,8 @@
 import { validateIpc } from './ipc-schemas.js';
 
 const ANY = 'any';
+const DEVELOPER = 'developer';
+const LEAD = 'lead';
 const ADMIN = 'admin';
 const SELF = 'self';
 
@@ -60,9 +66,9 @@ export const IPC_PERMISSIONS = {
   'runtimes:export': ANY,
   'runtimes:import': ADMIN,
   // Агент схем: применение предложения (F10).
-  'boards:diagramApply': ADMIN,
+  'boards:diagramApply': DEVELOPER,
   // Калибратор архитектуры и PRD (F15).
-  'boards:calibrate': ADMIN,
+  'boards:calibrate': DEVELOPER,
   'runtimes:runMany': ADMIN,
   'runtimes:stop': ANY,
 
@@ -72,7 +78,7 @@ export const IPC_PERMISSIONS = {
   'files:search': ANY,
 
   // проект, доверие, разрешения
-  'project:pick': ADMIN,
+  'project:pick': DEVELOPER,
   'trust:get': ANY,
   'trust:set': SELF,
   'trust:list': ANY,
@@ -93,7 +99,7 @@ export const IPC_PERMISSIONS = {
   // песочницы проектов
   'workspace:root': ANY,
   'workspace:list': ANY,
-  'workspace:create': ADMIN,
+  'workspace:create': DEVELOPER,
 
   // сессии и чат (режим разрешений ограничивает агента отдельно)
   'sessions:list': ANY,
@@ -114,19 +120,19 @@ export const IPC_PERMISSIONS = {
   'packages:install': ADMIN,
   // Наборы ролей и онбординг (CW6.1, CW6.2).
   'roles:list': ANY,
-  'roles:install': ADMIN,
+  'roles:install': DEVELOPER,
   'marketplace:list': ANY,
   'trash:list': ANY,
   'projects:list': ANY,
-  'projects:pickDir': ADMIN,
-  'projects:save': ADMIN,
-  'projects:remove': ADMIN,
-  'projects:activate': ADMIN,
+  'projects:pickDir': DEVELOPER,
+  'projects:save': DEVELOPER,
+  'projects:remove': DEVELOPER,
+  'projects:activate': DEVELOPER,
   'schedule:list': ANY,
   'schedule:runs': ANY,
-  'schedule:save': ADMIN,
-  'schedule:remove': ADMIN,
-  'schedule:runNow': ADMIN,
+  'schedule:save': LEAD,
+  'schedule:remove': LEAD,
+  'schedule:runNow': LEAD,
   'results:list': ANY,
   'results:preview': ANY,
   'results:open': ANY,
@@ -135,7 +141,7 @@ export const IPC_PERMISSIONS = {
   'models:caps': ANY,
   'session:kind': ANY,
   'session:setKind': ANY,
-  'session:addDir': ADMIN,
+  'session:addDir': DEVELOPER,
   'session:removeDir': ANY,
   'trash:restore': SELF,
   'trash:purge': ADMIN,
@@ -153,30 +159,30 @@ export const IPC_PERMISSIONS = {
 
   // инструкции, память, навыки
   'agents:read': ANY,
-  'agents:write': ADMIN,
+  'agents:write': LEAD,
   'memory:read': ANY,
-  'memory:write': ADMIN,
-  'memory:save': ADMIN,
-  'memory:append': ADMIN,
+  'memory:write': DEVELOPER,
+  'memory:save': DEVELOPER,
+  'memory:append': DEVELOPER,
   'memory:version': ANY,
-  'memory:restore': ADMIN,
+  'memory:restore': DEVELOPER,
   'skills:list': ANY,
-  'skills:create': ADMIN,
-  'skills:delete': ADMIN,
+  'skills:create': LEAD,
+  'skills:delete': LEAD,
 
   // Multica
   'multica:status': ANY,
   'multica:install': ADMIN,
-  'multica:auth': ADMIN,
+  'multica:auth': DEVELOPER,
   'multica:issues': ANY,
   'multica:target': ANY,
   'multica:workspaces': ANY,
   'multica:projects': ANY,
-  'multica:setTarget': ADMIN,
-  'multica:pushSkills': ADMIN,
-  'multica:syncDocs': ADMIN,
+  'multica:setTarget': LEAD,
+  'multica:pushSkills': LEAD,
+  'multica:syncDocs': DEVELOPER,
   // Статусы Multica → tasks.md (F14).
-  'multica:pullStatuses': ADMIN,
+  'multica:pullStatuses': DEVELOPER,
   // Signoff: тесты и статус коммита в GitHub (N1).
   'signoff:run': ADMIN,
   // Отчёт «куда уходят данные» (N2): только чтение.
@@ -221,12 +227,12 @@ export const IPC_PERMISSIONS = {
   'shell:direct': ADMIN,
   'git:branch': ANY,
   // Уведомления (CW5.4).
-  'notify:test': ADMIN,
+  'notify:test': DEVELOPER,
   // Рабочие копии для чатов (CC11.5).
   'worktree:list': ANY,
-  'worktree:create': ADMIN,
-  'worktree:open': ADMIN,
-  'worktree:remove': ADMIN,
+  'worktree:create': DEVELOPER,
+  'worktree:open': DEVELOPER,
+  'worktree:remove': DEVELOPER,
   'sessions:fork': ANY,
   'sessions:exportFile': ANY,
   'sessions:importFile': ANY,
@@ -243,18 +249,18 @@ export const IPC_PERMISSIONS = {
   // хранилище артефактов
   'artifacts:list': ANY,
   'artifacts:get': ANY,
-  'artifacts:save': ADMIN,
+  'artifacts:save': DEVELOPER,
   'artifacts:history': ANY,
   'artifacts:version': ANY,
-  'artifacts:restore': ADMIN,
-  'artifacts:delete': ADMIN,
+  'artifacts:restore': DEVELOPER,
+  'artifacts:delete': DEVELOPER,
   'artifacts:diff': ANY,
   'artifacts:search': ANY,
-  'artifacts:import': ADMIN,
+  'artifacts:import': DEVELOPER,
   'artifacts:stats': ANY,
   'artifacts:openFolder': ANY,
   'artifacts:export': ANY,
-  'artifacts:applyToFile': ADMIN,
+  'artifacts:applyToFile': DEVELOPER,
 
   // экспорт ответа
   'export:message': ANY,
@@ -263,9 +269,9 @@ export const IPC_PERMISSIONS = {
   // доски
   'boards:open': ANY,
   'boards:load': ANY,
-  'boards:save': ADMIN,
+  'boards:save': DEVELOPER,
   'boards:views': ANY,
-  'boards:baseline': ADMIN,
+  'boards:baseline': DEVELOPER,
   'boards:scan': ANY,
   'boards:git': ANY,
   'boards:diff': ANY,
@@ -273,43 +279,43 @@ export const IPC_PERMISSIONS = {
   'boards:stageStop': ANY,
   'boards:runtimeStatus': ANY,
   'boards:errors': ANY,
-  'boards:clearErrors': ADMIN,
-  'boards:correction': ADMIN,
+  'boards:clearErrors': DEVELOPER,
+  'boards:correction': DEVELOPER,
   'boards:correctionStop': ANY,
   'boards:exportView': ANY,
   'boards:exportDiagram': ANY,
   'boards:rasterize': ANY,
-  'boards:diagramChat': ADMIN,
-  'boards:saveView': ADMIN,
+  'boards:diagramChat': DEVELOPER,
+  'boards:saveView': DEVELOPER,
 
   // инфраструктура: секреты и загрузка файлов
   'infra:status': ANY,
   // Автосинхронизация хранилища (F12).
   'infra:syncStatus': ANY,
-  'infra:syncNow': ADMIN,
-  'infra:sync': ADMIN,
+  'infra:syncNow': LEAD,
+  'infra:sync': LEAD,
   'infra:pushSecrets': ADMIN,
   'infra:pullSecrets': ADMIN,
   'infra:search': ANY,
-  'infra:upload': ADMIN,
-  'infra:download': ADMIN,
+  'infra:upload': LEAD,
+  'infra:download': LEAD,
 
   // Repowise: установка, индексация и запуск команд
   'repowise:status': ANY,
   'repowise:install': ADMIN,
-  'repowise:init': ADMIN,
-  'repowise:update': ADMIN,
+  'repowise:init': DEVELOPER,
+  'repowise:update': DEVELOPER,
   'repowise:doctor': ANY,
   'repowise:ask': ANY,
   'repowise:search': ANY,
   'repowise:context': ANY,
   'repowise:risk': ANY,
   'repowise:distill': ADMIN,
-  'repowise:connectMcp': ADMIN,
+  'repowise:connectMcp': DEVELOPER,
   // Перезапуск MCP-сервера repowise (F13).
-  'repowise:restartMcp': ADMIN,
+  'repowise:restartMcp': DEVELOPER,
   'repowise:serve': ADMIN,
-  'repowise:stopServe': ADMIN,
+  'repowise:stopServe': DEVELOPER,
 
   // окно и система
   'app:openPath': ANY,
@@ -327,11 +333,11 @@ export function permissionOf(channel) {
 /**
  * Оборачивает `ipcMain.handle`: проверка роли до вызова обработчика.
  * @param ipcMain   объект Electron
- * @param requireAdmin функция, которая бросает ошибку, если роль не admin
+ * @param requireRole (level) => бросает ошибку, если роль ниже уровня (developer, lead, admin)
  * @param onUnknown вызывается для канала без записи в матрице
  * @param sessionGate (channel) => '' | текст отказа — корпоративный режим без входа (F21)
  */
-export function guardIpc(ipcMain, requireAdmin, { onUnknown, onInvalid, sessionGate = null } = {}) {
+export function guardIpc(ipcMain, requireRole, { onUnknown, onInvalid, sessionGate = null } = {}) {
   const original = ipcMain.handle.bind(ipcMain);
   ipcMain.handle = (channel, handler) => {
     if (!Object.hasOwn(IPC_PERMISSIONS, channel)) onUnknown?.(channel);
@@ -341,9 +347,9 @@ export function guardIpc(ipcMain, requireAdmin, { onUnknown, onInvalid, sessionG
       const gate = sessionGate?.(channel);
       if (gate) return { ok: false, forbidden: true, needsLogin: true, error: gate };
       // Право зависит только от канала, поэтому проверяется до разбора данных.
-      if (permission === ADMIN) {
+      if (permission !== ANY && permission !== SELF) {
         try {
-          requireAdmin();
+          requireRole(permission);
         } catch (err) {
           // Структурированный отказ вместо исключения: окно показывает ошибку
           // и не остаётся в состоянии «выполняется».

@@ -52,12 +52,29 @@ export function decodeJwt(token) {
   }
 }
 
-/** Роль и пользователь из access token: admin, если роль admin в realm или клиенте. */
+/** Роли по возрастанию прав (E2.8, ADR 0117). Каждая следующая включает права предыдущих. */
+export const ROLE_ORDER = ['guest', 'developer', 'lead', 'admin'];
+
+/** Старшая роль из набора ролей токена; ничего знакомого — guest. */
+export function roleFromClaims(roles) {
+  let best = 'guest';
+  for (const role of ROLE_ORDER) if (roles.has(role)) best = role;
+  return best;
+}
+
+/** Роль не ниже уровня. Неизвестная роль (в том числе none) — ниже всех. */
+export function roleAtLeast(role, level) {
+  const have = ROLE_ORDER.indexOf(role);
+  const need = ROLE_ORDER.indexOf(level);
+  return have >= 0 && need >= 0 && have >= need;
+}
+
+/** Роль и пользователь из access token: старшая из ролей realm и клиента (guest, developer, lead, admin). */
 export function identityFromToken(accessToken, clientId) {
   const payload = decodeJwt(accessToken);
   const roles = new Set([...(payload.realm_access?.roles || []), ...(payload.resource_access?.[clientId]?.roles || [])]);
   return {
-    role: roles.has('admin') ? 'admin' : 'guest',
+    role: roleFromClaims(roles),
     user: { name: payload.name || payload.preferred_username || payload.email || 'Пользователь Keycloak', email: payload.email || '', sub: payload.sub || '' },
   };
 }

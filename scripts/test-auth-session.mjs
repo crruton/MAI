@@ -2,7 +2,7 @@
  * Сессия Keycloak и корпоративный режим (F21, ADR 0093): сроки токенов,
  * refresh, роли из токена и матрица IPC с гейтом входа (Q2).
  */
-import { corporatePolicy, tokenState, stampTokens, refreshTokens, identityFromToken, sessionGate, LOGIN_CHANNELS } from '../electron/lib/auth-session.js';
+import { corporatePolicy, tokenState, stampTokens, refreshTokens, identityFromToken, sessionGate, LOGIN_CHANNELS, roleAtLeast, roleFromClaims } from '../electron/lib/auth-session.js';
 import { IPC_PERMISSIONS, guardIpc } from '../electron/lib/ipc-permissions.js';
 
 let pass = 0;
@@ -51,6 +51,9 @@ check('без refresh_token — ошибка no_refresh', err?.code === 'no_refr
 console.log('[4] роли из токена');
 check('admin в realm', identityFromToken(jwt({ realm_access: { roles: ['admin'] }, preferred_username: 'ivan' }), 'mai').role === 'admin');
 check('admin в клиенте', identityFromToken(jwt({ resource_access: { mai: { roles: ['admin'] } } }), 'mai').role === 'admin');
+check('developer и lead из токена: берётся старшая', identityFromToken(jwt({ realm_access: { roles: ['developer'] }, resource_access: { mai: { roles: ['lead'] } } }), 'mai').role === 'lead' && identityFromToken(jwt({ realm_access: { roles: ['developer', 'offline_access'] } }), 'mai').role === 'developer');
+check('чужие роли → guest', roleFromClaims(new Set(['offline_access', 'uma_authorization'])) === 'guest');
+check('порядок ролей', roleAtLeast('admin', 'lead') && roleAtLeast('lead', 'developer') && !roleAtLeast('developer', 'lead') && !roleAtLeast('guest', 'developer') && !roleAtLeast('none', 'guest') && !roleAtLeast('admin', 'root'));
 check('admin другого клиента — guest', identityFromToken(jwt({ resource_access: { other: { roles: ['admin'] } } }), 'mai').role === 'guest');
 const who = identityFromToken(jwt({ name: 'Иван', email: 'i@x', sub: 's1' }), 'mai');
 check('пользователь: имя, почта, sub', who.user.name === 'Иван' && who.user.email === 'i@x' && who.user.sub === 's1');
@@ -60,8 +63,8 @@ console.log('[5] матрица IPC с гейтом входа (Q2)');
 const handlers = new Map();
 const fakeIpc = { handle: (ch, fn) => handlers.set(ch, fn) };
 let session = { required: true, loggedIn: false, role: 'none' };
-guardIpc(fakeIpc, () => {
-  if (session.role !== 'admin') throw new Error('Недостаточно прав');
+guardIpc(fakeIpc, (level) => {
+  if (!roleAtLeast(session.role, level)) throw new Error('Недостаточно прав');
 }, { sessionGate: (ch) => sessionGate(ch, session) });
 for (const ch of Object.keys(IPC_PERMISSIONS)) fakeIpc.handle(ch, () => 'ran');
 const call = (ch) => handlers.get(ch)({}, ...(ch === 'auth:setRole' ? ['admin'] : []));
@@ -75,7 +78,13 @@ check('отказ без входа — needsLogin', r.filter(([, v]) => !passed
 session = { required: true, loggedIn: true, role: 'guest' };
 r = results();
 const guestOpen = r.filter(([, v]) => passed(v)).map(([ch]) => ch);
-check('guest: открыты ровно не-admin каналы', guestOpen.length === Object.values(IPC_PERMISSIONS).filter((p) => p !== 'admin').length && guestOpen.every((ch) => IPC_PERMISSIONS[ch] !== 'admin'), guestOpen.length);
+const openFor = (levels) => Object.keys(IPC_PERMISSIONS).filter((ch) => levels.includes(IPC_PERMISSIONS[ch])).sort().join();
+check('guest: открыты ровно any и self', guestOpen.sort().join() === openFor(['any', 'self']), guestOpen.length);
+session = { required: true, loggedIn: true, role: 'developer' };
+check('developer: any, self и developer (ADR 0117)', results().filter(([, v]) => passed(v)).map(([ch]) => ch).sort().join() === openFor(['any', 'self', 'developer']));
+session = { required: true, loggedIn: true, role: 'lead' };
+check('lead: плюс lead, без admin', results().filter(([, v]) => passed(v)).map(([ch]) => ch).sort().join() === openFor(['any', 'self', 'developer', 'lead']));
+session = { required: true, loggedIn: true, role: 'guest' };
 check('guest: admin-каналы — forbidden без needsLogin', r.filter(([ch]) => IPC_PERMISSIONS[ch] === 'admin').every(([, v]) => v?.forbidden && !v.needsLogin));
 session = { required: true, loggedIn: true, role: 'admin' };
 check('admin: открыто всё', results().every(([, v]) => passed(v)));

@@ -825,8 +825,10 @@ IPC: `trust:get(projectDir)`, `trust:set({ projectDir, state })` (`trusted` —
 только admin), `trust:list`, `trust:remove(projectDir)` (admin).
 
 Матрица прав (`electron/lib/ipc-permissions.js`): `guardIpc` оборачивает
-`ipcMain.handle` до регистрации обработчиков; канал `admin` отказывает гостю
-ответом `{ ok: false, forbidden: true }`. Канал вне матрицы считается `admin`.
+`ipcMain.handle` до регистрации обработчиков и вызывает `requireRole(уровень)` для
+уровней `developer`, `lead`, `admin` (ADR 0117); при нехватке роли — ответ
+`{ ok: false, forbidden: true }`. Канал вне матрицы считается `admin`. Роли — `ROLE_ORDER`,
+`roleAtLeast`, `roleFromClaims` в `auth-session.js`, `requireRole` в `auth.js`.
 `scripts/test-ipc-permissions.mjs` падает, если канал не внесён в матрицу.
 
 Блокировка проекта (`electron/lib/project-lock.js`): чат, самокоррекция и

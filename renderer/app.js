@@ -5287,25 +5287,37 @@ async function openMemory() {
 
 /* ---------- доступ и роли ---------- */
 
+/** Роли по возрастанию прав (ADR 0117): каждая следующая включает предыдущие. */
+const ROLE_ORDER = ['guest', 'developer', 'lead', 'admin'];
+/** Без данных о входе — локальный admin (D1). */
+function roleAtLeast(level) {
+  const role = state.auth?.role || 'admin';
+  return ROLE_ORDER.indexOf(role) >= ROLE_ORDER.indexOf(level);
+}
+
+/** Какая роль нужна панели: та же раскладка, что у каналов IPC (ADR 0117). */
+const PANEL_LEVEL = { multica: 'developer', memory: 'developer', sandbox: 'developer', skills: 'lead', agents: 'lead', providers: 'admin', runtimes: 'admin', plugins: 'admin' };
+
 function applyRoleGuard() {
-  const admin = !state.auth || state.auth.role === 'admin';
-  document.body.classList.toggle('role-guest', !admin);
-  for (const panel of ['providers', 'runtimes', 'skills', 'agents', 'memory', 'plugins', 'multica', 'sandbox']) {
+  const developer = roleAtLeast('developer');
+  document.body.classList.toggle('role-guest', !developer);
+  for (const [panel, level] of Object.entries(PANEL_LEVEL)) {
     const button = document.querySelector(`[data-panel="${panel}"]`);
     if (!button) continue;
-    button.disabled = !admin;
-    button.title = admin ? '' : 'Недоступно для роли guest';
+    const allowed = roleAtLeast(level);
+    button.disabled = !allowed;
+    button.title = allowed ? '' : `Нужна роль ${level}`;
   }
   const newProject = $('#new-project-btn');
   if (newProject) {
-    newProject.disabled = !admin;
-    newProject.title = admin ? 'Создать проект в отдельной папке (это не изоляция: агент работает с вашими правами)' : 'Создание проектов доступно роли admin';
+    newProject.disabled = !developer;
+    newProject.title = developer ? 'Создать проект в отдельной папке (это не изоляция: агент работает с вашими правами)' : 'Создание проектов доступно роли developer и выше';
   }
-  // Смена папки — только admin; меню проекта открывается всем (N9).
+  // Смена папки — от developer; меню проекта открывается всем (N9).
   const projectPick = $('#project-pick');
   if (projectPick) {
-    projectPick.disabled = !admin;
-    projectPick.title = admin ? 'Сменить папку проекта' : 'Смена проекта доступна роли admin';
+    projectPick.disabled = !developer;
+    projectPick.title = developer ? 'Сменить папку проекта' : 'Смена проекта доступна роли developer и выше';
   }
   const authButton = $('#auth-btn');
   if (authButton) {
