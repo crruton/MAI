@@ -412,6 +412,12 @@ ADR 0120. `ship/review.js` — `runReview` (контекст, `lensesFor`, на�
 метка `ship::blocking`), `createReviewModel`. В `ship/approve.js` — `pipelineStatusFromJobs`:
 статус своего pipeline без джоб `ship:*`. В `ship/gitlab.js` — discussions и джобы pipeline.
 
+### MAI Ship: журнал и согласие
+
+ADR 0121. `ship/report.js` — `decisionRecord`, `decisionMarker`, `parseDecision`, `humanOutcome`,
+`agrees`, `agreementReport` (по правилам, кандидаты в enforce), `formatReport`, `collectDecisions`.
+Запись пишет `runApprove` в комментарий; `approve --journal` — JSONL; `report` — CLI.
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,

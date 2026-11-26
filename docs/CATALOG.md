@@ -13,7 +13,7 @@
 
 ## Что в каталоге
 
-42 навыка.
+43 навыка.
 
 | Навык | Для чего | Источник |
 |---|---|---|
@@ -111,6 +111,7 @@ DevOps (`devops-context` — с чего начинать; корпоратив�
 | `k8s-pod-triage`, `k8s-rightsizing` | разбор подов, ресурсы по метрикам |
 | `tf-module-author`, `tf-plan-review`, `tf-drift-check` | Terraform: модуль, ревью плана, дрейф |
 | `ansible-role-author`, `harbor-cli` | роли Ansible, Harbor через CLI |
+| `ship-setup` | подключить MAI Ship: шаблоны политик апрува для четырёх типов репозиториев |
 
 ## Наборы по ролям
 

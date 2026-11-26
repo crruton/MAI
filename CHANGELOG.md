@@ -10,6 +10,11 @@
 
 ### Added
 
+- MAI Ship: журнал решений и согласие с людьми (ADR 0121) — запись решения в комментарии
+  approver'а, `approve --journal` (артефакт `ship-journal.jsonl`), `mai-ship report`: согласие по
+  правилам и кандидаты в `enforce_classes`; джоба `ship:report` по расписанию. Навык каталога
+  `ship-setup` с шаблонами политик для документации, библиотеки, сервиса и инфраструктуры.
+  Тесты `test-ship-report` (18), `test-ship-templates` (24).
 - Команда `/ship [ключ]` (E3.C1, MAI Ship): проверки проекта до push, коммит отдельной
   командой (трейлеры `Agent-Model`/`Agent-User`), ветка, push, Draft MR через `glab` или Draft
   PR через `gh` с описанием по навыку `to-mr`; без снятия Draft и merge. Группа «Git» в «/».

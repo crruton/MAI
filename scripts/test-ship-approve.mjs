@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createGitlab, diffFacts, NOTE_MARKER } from '../electron/lib/ship/gitlab.js';
+import { parseDecision } from '../electron/lib/ship/report.js';
 import { runApprove, createClassifier, parseClassifierAnswer, gateExitCode, pipelineStatusFromJobs, LABELS } from '../electron/lib/ship/approve.js';
 
 let pass = 0;
@@ -118,6 +119,7 @@ check('комментарий с маркером и правилом', g.state.
 check('метка ship::observe, апрува нет', g.state.mr.labels.includes(LABELS.comment) && g.state.approvals.length === 0);
 await runApprove({ gitlab: g.gitlab, project, iid: 7, classify: no });
 check('повтор обновляет свой комментарий, а не плодит', g.state.notes.length === 1);
+check('в комментарии — запись журнала решений (E3.F6)', parseDecision(g.state.notes[0].body)?.rule === 'docs' && parseDecision(g.state.notes[0].body)?.sha === 'abc123def456' && parseDecision(g.state.notes[0].body)?.mode === 'observe');
 
 console.log('[2] enforce: approve с SHA');
 g = fakeGitlab({ mode: 'enforce' });

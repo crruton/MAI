@@ -10,6 +10,7 @@ import { evaluate } from './policy.js';
 import { agentModelsFromCommits } from '../model-families.js';
 import { diffFacts, diffText, upsertNote } from './gitlab.js';
 import { createSecretFilter } from '../secret-filter.js';
+import { decisionRecord, decisionMarker } from './report.js';
 
 export const SHIP_FILE = '.mai-code/ship.yaml';
 export const POLICY_FILE = '.mai-code/approval-policy.yaml';
@@ -188,9 +189,11 @@ export async function runApprove({ gitlab, project, iid, classify = null, makeCl
   }
   if (result.action === 'skip') return { status: 'skipped', reason: result.reason, result, actions };
 
-  const body = noteBody({ result, sha, policyMode: policy?.mode, dryRun });
   const policyMode = policyFile.data?.mode;
-  if (dryRun) return { status: 'planned', result, note: body, actions, policyMode };
+  // Журнал решений (E3.F6): машиночитаемая запись в комментарии — по ней считается согласие с людьми.
+  const record = decisionRecord({ result, sha, mode: policyMode, project, iid });
+  const body = `${noteBody({ result, sha, policyMode: policy?.mode, dryRun })}\n\n${decisionMarker(record)}`;
+  if (dryRun) return { status: 'planned', result, note: body, actions, policyMode, record };
 
   await upsertNote(gitlab, project, iid, 'approve', body);
   actions.push('note');
@@ -200,9 +203,9 @@ export async function runApprove({ gitlab, project, iid, classify = null, makeCl
   if (result.action === 'approve') {
     // Апрув — только на тот SHA, который оценивали (ADR 0109, спека «Апрув привязан к SHA»).
     const fresh = await gitlab.getMr(project, iid);
-    if (fresh.sha !== sha) return { status: 'stale', reason: `пришёл новый коммит ${String(fresh.sha).slice(0, 12)}`, result, actions, policyMode };
+    if (fresh.sha !== sha) return { status: 'stale', reason: `пришёл новый коммит ${String(fresh.sha).slice(0, 12)}`, result, actions, policyMode, record };
     await gitlab.approve(project, iid, sha);
     actions.push(`approve:${sha}`);
   }
-  return { status: 'done', result, actions, policyMode };
+  return { status: 'done', result, actions, policyMode, record };
 }

@@ -1,0 +1,25 @@
+# Инфраструктура (Terraform, Helm, Flux, Ansible): почти всё — человек, approve только документации.
+version: 1
+mode: observe
+enforce_classes: [docs]
+gates:
+  pipeline: success
+  max_blocking_findings: 0
+  max_changed_lines: 300
+rules:
+  - name: secrets
+    match: { any_path: ["**/.env*", "**/*.key", "**/*.pem", "**/*secret*"] }
+    decision: block
+    reason: Секреты в MR
+  - name: production
+    match: { any_path: ["**/prod/**", "**/production/**", "**/*prod*.tfvars"] }
+    decision: require_human
+    reason: Прод-окружение
+  - name: docs
+    match: { paths: ["**/*.md", "docs/**"] }
+    decision: approve
+classifiers:
+  - name: destructive
+    question: Изменение удаляет или пересоздаёт ресурсы, данные, тома или сети?
+    when_true: block
+default: require_human

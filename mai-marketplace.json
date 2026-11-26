@@ -253,6 +253,12 @@
       "version": "1.0.0",
       "description": "Review Terraform plans for replacements, data loss, security exposure, dependency impact, and cost changes.",
       "source": "catalog/tf-plan-review"
+    },
+    {
+      "name": "ship-setup",
+      "version": "1.0.0",
+      "description": "Подключить MAI Ship к GitLab-проекту — выбрать шаблон политики апрува под тип репозитория.",
+      "source": "catalog/ship-setup"
     }
   ],
   "roles": {
@@ -308,7 +314,8 @@
       "tech-debt",
       "standup",
       "grilling",
-      "incident-response"
+      "incident-response",
+      "ship-setup"
     ],
     "devops": [
       "ansible-role-author",
@@ -326,7 +333,8 @@
       "tf-drift-check",
       "tf-module-author",
       "tf-plan-review",
-      "incident-response"
+      "incident-response",
+      "ship-setup"
     ]
   }
 }

@@ -1,0 +1,8 @@
+{
+  "name": "ship-setup",
+  "version": "1.0.0",
+  "description": "Подключить MAI Ship к GitLab-проекту — выбрать шаблон политики апрува под тип репозитория.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

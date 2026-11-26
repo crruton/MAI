@@ -48,4 +48,18 @@ ship:approval:
     # --gate: на GitLab Free джоба — гейт «Pipelines must succeed» (ADR 0108). Код 2 — блок,
     # 3 — нужен апрув человека: апрувните MR и перезапустите джобу. В режиме observe — всегда 0.
     # На Premium уберите --gate и включите approval rule для бота.
-    - node /tmp/mai/scripts/mai-ship.mjs approve --gate
+    - node /tmp/mai/scripts/mai-ship.mjs approve --gate --journal "$CI_PROJECT_DIR/ship-journal.jsonl"
+  artifacts:
+    when: always
+    expire_in: 90 days
+    paths: [ship-journal.jsonl]
+
+# Согласие approver ↔ человек за 30 дней — вручную или по расписанию (E3.G2):
+# node /tmp/mai/scripts/mai-ship.mjs report --days 30
+ship:report:
+  extends: .mai-ship
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $MAI_SHIP_REPORT == "true"
+  needs: []
+  script:
+    - node /tmp/mai/scripts/mai-ship.mjs report --days "${MAI_SHIP_REPORT_DAYS:-30}"

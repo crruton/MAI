@@ -136,3 +136,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0118](0118-profil-komandy.md) | Профиль команды: каталоги, MCP, AGENTS.md и workspace из одного репозитория | accepted | 2026-11-26 |
 | [0119](0119-ship-approver-bez-okna.md) | MAI Ship: approver без окна, парсер YAML и гейт для GitLab Free | accepted | 2026-11-26 |
 | [0120](0120-ship-revyuer.md) | MAI Ship: ревьюер с состязательной проверкой и статус своего pipeline | accepted | 2026-11-26 |
+| [0121](0121-ship-zhurnal-i-soglasie.md) | MAI Ship: журнал решений в MR и согласие approver ↔ человек | accepted | 2026-11-27 |

@@ -3,7 +3,8 @@
  * MAI Ship без окна (ADR 0108): роли агентов для GitLab CI.
  *
  *   node scripts/mai-ship.mjs review  [--project <id|путь>] [--mr <iid>] [--dry-run]
- *   node scripts/mai-ship.mjs approve [--project <id|путь>] [--mr <iid>] [--dry-run] [--gate]
+ *   node scripts/mai-ship.mjs approve [--project <id|путь>] [--mr <iid>] [--dry-run] [--gate] [--journal <файл.jsonl>]
+ *   node scripts/mai-ship.mjs report  [--project <id|путь>] [--days 30] [--json]
  *
  * В CI проект и MR берутся из CI_PROJECT_ID и CI_MERGE_REQUEST_IID, адрес — из CI_SERVER_URL.
  * Переменные:
@@ -22,6 +23,8 @@ import OpenAI from 'openai';
 import { createGitlab } from '../electron/lib/ship/gitlab.js';
 import { runApprove, createClassifier, gateExitCode } from '../electron/lib/ship/approve.js';
 import { runReview, createReviewModel } from '../electron/lib/ship/review.js';
+import { collectDecisions, agreementReport, formatReport } from '../electron/lib/ship/report.js';
+import fs from 'node:fs';
 
 const args = process.argv.slice(2);
 const role = args[0];
@@ -32,8 +35,16 @@ const option = (name) => {
 const env = process.env;
 
 async function main() {
-  if (role !== 'approve' && role !== 'review') throw new Error('роль: review или approve (steward — следующий шаг, E3.E)');
+  if (!['approve', 'review', 'report'].includes(role)) throw new Error('роль: review, approve или report (steward — следующий шаг, E3.E)');
   const project = option('--project') || env.CI_PROJECT_ID;
+  if (role === 'report') {
+    if (!project) throw new Error('нужен --project (или CI_PROJECT_ID)');
+    const gitlab = createGitlab({ url: env.GITLAB_URL || env.CI_SERVER_URL, token: env.GITLAB_TOKEN });
+    const days = Number(option('--days') || 30);
+    const report = agreementReport(await collectDecisions(gitlab, project, { days }));
+    console.log(args.includes('--json') ? JSON.stringify(report, null, 2) : formatReport(report, { days }));
+    return 0;
+  }
   const iid = option('--mr') || env.CI_MERGE_REQUEST_IID;
   if (!project || !iid) throw new Error('нужны --project и --mr (или CI_PROJECT_ID и CI_MERGE_REQUEST_IID)');
   const gitlab = createGitlab({ url: env.GITLAB_URL || env.CI_SERVER_URL, token: env.GITLAB_TOKEN });
@@ -67,6 +78,9 @@ ${out.summary}`);
   }
   const r = out.result;
   console.log(`MAI Ship approver: ${r.decision} (${r.action}) — правило ${r.rule}: ${r.reason}`);
+  // JSONL-журнал для артефакта CI (E3.F6).
+  const journal = option('--journal');
+  if (journal && out.record) fs.appendFileSync(journal, `${JSON.stringify(out.record)}\n`);
   if (out.note && args.includes('--dry-run')) console.log(`\n${out.note}`);
   if (out.status === 'stale') console.log(`Апрув не поставлен: ${out.reason}`);
   if (args.includes('--gate')) {

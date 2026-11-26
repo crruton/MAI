@@ -1,0 +1,11 @@
+# .mai-code/ship.yaml — настройки MAI Ship (схема: openspec/changes/mai-ship-gitlab/schemas/ship.schema.json)
+version: 1
+enabled: true
+review:
+  level: standard        # quick | standard | deep
+providers:
+  reviewer: agentrouter/claude-opus-5-5
+  approver: openai/gpt-5.1   # другое семейство моделей, чем исполнитель и ревьюер (ADR 0110)
+budget:
+  per_mr_usd: 3
+  monthly_usd: 300

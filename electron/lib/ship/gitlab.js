@@ -45,6 +45,8 @@ export function createGitlab({ url, token, fetch: fetchImpl = globalThis.fetch, 
 
   return {
     getMr: (project, iid) => call('GET', mrPath(project, iid)),
+    /** MR проекта, обновлённые после даты (для отчёта о согласии). */
+    listMrs: (project, { updatedAfter } = {}) => all(`/projects/${p(project)}/merge_requests?state=all&order_by=updated_at${updatedAfter ? `&updated_after=${encodeURIComponent(updatedAfter)}` : ''}`),
     getDiffs: (project, iid) => all(`${mrPath(project, iid)}/diffs`),
     getCommits: (project, iid) => all(`${mrPath(project, iid)}/commits`),
     getNotes: (project, iid) => all(`${mrPath(project, iid)}/notes?sort=desc`),
