@@ -397,6 +397,14 @@ ADR 0118. `team-profile.js` (без Electron) — `profileSource` (органи�
 `multicaTarget`. `readAgents` возвращает `team`, `systemPrompt` ставит его перед глобальным.
 IPC `team:status` (ANY), `team:refresh` (DEVELOPER).
 
+### MAI Ship: approver
+
+ADR 0119. `ship/gitlab.js` — `createGitlab({ url, token, fetch })` (MR, diffs, commits, notes,
+файл из ветки, approve с `sha`, approvals, метки), `diffFacts`, `diffText`, `upsertNote` (маркер
+роли). `ship/approve.js` — `runApprove` (политика из target branch, факты, `evaluate`,
+классификаторы при необходимости, комментарий, метки, approve), `createClassifier` (маска
+секретов), `gateExitCode` (GitLab Free). CLI — `scripts/mai-ship.mjs`; CI — `ci/mai-ship.gitlab-ci.yml`.
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,

@@ -10,6 +10,11 @@
 
 ### Added
 
+- MAI Ship: роль approver без окна (ADR 0119) — `node scripts/mai-ship.mjs approve` читает MR и
+  политику из target branch GitLab, зовёт модель-классификатор только когда нужно, пишет
+  решение комментарием и меткой, в enforce ставит approve на оценённый SHA; `--gate` для
+  GitLab Free. CI-шаблон `ci/mai-ship.gitlab-ci.yml`, документация `docs/SHIP.md`, тест
+  `test-ship-approve` (37). Зависимость `yaml` 2.9.1.
 - Профиль команды (ADR 0118): `teamProfile` в настройках организации указывает на репозиторий
   с `mai-team.json` — каталоги, MCP-серверы (без секретов), `AGENTS.md` команды и workspace
   Multica приходят участнику нижним слоем при запуске и после входа. Окно «Доступ» показывает

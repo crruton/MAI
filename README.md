@@ -601,6 +601,7 @@ OAuth, в окне «MCP» появится «нужен вход» и кноп�
 - [ADR](docs/adr/README.md) — архитектурные решения.
 - [Changelog](CHANGELOG.md) — что изменилось.
 - [Бэклог выравнивания](docs/BACKLOG-NEXT.md) — текущая работа: вехи M1–M6, ход работ.
+- [MAI Ship для GitLab](docs/SHIP.md) — approver MR по политике-файлу, гейт для GitLab Free.
 - [Профиль команды](docs/TEAM.md) — каталоги, MCP, AGENTS.md и workspace команды из одного репозитория.
 - [Каталог навыков команды](docs/CATALOG.md) — 42 навыка, подключение по адресу репозитория.
 - [Бэклог командной работы](docs/BACKLOG-TEAM.md) — хранилище скиллов, команда, MAI Ship, маркетплейс.

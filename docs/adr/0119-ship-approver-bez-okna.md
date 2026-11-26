@@ -1,0 +1,61 @@
+# 0119. MAI Ship: approver без окна, парсер YAML и гейт для GitLab Free
+
+- **Статус:** accepted
+- **Дата:** 2026-11-26
+- **Контекст:** [бэклог командной работы](../BACKLOG-TEAM.md) E3.A1, E3.A5, E3.F1–F5; ADR 0108–0110
+
+## Контекст
+
+Модуль политики (ADR 0109) решал, но некому было читать MR, политику из target branch и
+ставить апрув. ADR 0108 предполагал безголовый движок MAI. Полный `AgentLoop` зависит от
+Electron через настройки и нужен только steward-агенту, который правит код. Approver'у
+достаточно REST GitLab, политики и вызова модели для классификаторов. Политика лежит в YAML,
+парсера в зависимостях MAI не было.
+
+## Решение
+
+- **Approver на чистом Node:** `electron/lib/ship/gitlab.js` (клиент REST: MR, diff, коммиты,
+  файл из ветки, комментарии, метки, approve с `sha`, список апрувов; `fetch` — параметр) и
+  `electron/lib/ship/approve.js` (`runApprove`, `createClassifier`, `gateExitCode`). Команда —
+  `node scripts/mai-ship.mjs approve`. Electron не нужен.
+- **Зависимость `yaml` 2.9.1** (ISC, без зависимостей, YAML 1.2: ключ `on` — строка, а не
+  `true`). Версия закреплена точно.
+- **Порядок:** настройки и политика из target branch → факты (файлы и строки из diff, pipeline,
+  метки, Draft, модели исполнителя из трейлеров `Agent-Model`, ADR 0116) → `evaluate` с
+  классификаторами «нет» → модель зовётся, только если так выходит approve или если нужен
+  человек, а классификатор может ужесточить до block → итоговое `evaluate`. Ошибка модели —
+  «не посчитан» → человек. Diff уходит модели с замаскированными секретами (ADR 0099).
+- **Запись:** один комментарий роли с маркером `<!-- mai-ship:approve -->` (обновляется, а не
+  плодится), метки `ship::observe` / `ship::needs-human` / `ship::blocked` / `ship::approved`
+  (одна за раз), approve — только если head MR не сменился с начала оценки.
+- **Пропуск:** MR не открыт, нет `ship.yaml` или политики в target branch, `MAI_SHIP_DISABLED`,
+  `enabled: false`, метка `ship::paused`. Битый YAML — block с текстом ошибки.
+- **Гейт GitLab Free (`--gate`):** коды выхода — observe 0 всегда; enforce: approve 0, нужен
+  человек 0 только при апруве человека (не бота), иначе 3; block 2; апрув устарел 3; ошибка 1.
+  На Premium `--gate` не нужен: approval rule бота.
+- **CI-шаблон** `ci/mai-ship.gitlab-ci.yml`: джоба `ship:approval` на `merge_request_event`.
+  Пока нет образа (E3.A5), джоба берёт MAI из git по закреплённому `MAI_SHIP_REF` и ставит
+  только рабочие зависимости (`npm ci --omit=dev --ignore-scripts`).
+
+## Альтернативы
+
+| Вариант | Плюсы | Минусы | Почему не выбран |
+|---|---|---|---|
+| Вынести весь `AgentLoop` из Electron сейчас | один движок на все роли | большой рефакторинг, approver'у не нужен | сделать для steward (E3.E) |
+| Политика в JSON вместо YAML | без зависимости | неудобно писать людям, расходится со спекой | одна маленькая зависимость |
+| `js-yaml` | популярен | YAML 1.1 по умолчанию: `on`/`yes` → boolean | `yaml` — YAML 1.2 |
+| Классификаторы всегда | проще | платный вызов модели на каждый MR | модель — только когда ответ меняет итог |
+| Гейт на Free: зелёная джоба при «нужен человек» | не мешает | MR вливается без человека | код 3 до апрува человека |
+
+## Последствия
+
+- Проще: approver подключается одним `include` и тремя переменными.
+- Сложнее: на Free после апрува человека джобу нужно перезапустить.
+- Проверено: поддельный GitLab (`test-ship-approve`, 37 проверок): observe, enforce, устаревший
+  SHA, классификаторы, самозащита, независимость, пропуски, битый YAML, dry-run, гейт.
+  Не проверено: живой GitLab, pipeline trigger из вебхука (E3.A1), живая модель.
+
+## Ссылки
+
+- [SHIP.md](../SHIP.md), `ci/mai-ship.gitlab-ci.yml`
+- [ADR 0108](0108-mai-ship-gitlab-ispolnenie-v-ci.md), [ADR 0109](0109-politika-apruva-v-repozitorii.md), [ADR 0110](0110-razdelenie-provayderov-v-ship.md), [ADR 0116](0116-atribuciya-kommitov-agenta.md)

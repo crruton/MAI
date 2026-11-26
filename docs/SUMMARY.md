@@ -19,6 +19,7 @@
 - [Память и навыки](MEMORY.md)
 - [Каталог навыков команды](CATALOG.md)
 - [Профиль команды](TEAM.md)
+- [MAI Ship для GitLab](SHIP.md)
 - [Песочницы](SANDBOXES.md)
 - [Guardrails](GUARDRAILS.md)
 - [Repowise](REPOWISE.md)
