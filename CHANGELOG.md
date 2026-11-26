@@ -10,6 +10,11 @@
 
 ### Added
 
+- Профиль команды (ADR 0118): `teamProfile` в настройках организации указывает на репозиторий
+  с `mai-team.json` — каталоги, MCP-серверы (без секретов), `AGENTS.md` команды и workspace
+  Multica приходят участнику нижним слоем при запуске и после входа. Окно «Доступ» показывает
+  профиль. Модуль `electron/lib/team-profile.js`, тест `test-team-profile` (26), пример
+  `examples/team-profile/`, документация `docs/TEAM.md`.
 - Роли `developer` и `lead` (ADR 0117): guest < developer < lead < admin, роль — старшая из
   токена Keycloak. developer — память, артефакты, доски, worktree, задачи Multica; lead —
   ещё цель Multica, навыки и агенты проекта, плановые задачи. Запуск процессов из окна и

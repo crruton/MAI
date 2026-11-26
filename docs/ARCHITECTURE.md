@@ -387,6 +387,16 @@ ADR 0116. `attribution.js` (без Electron) — `attributeCommit` (просто
 В main.js — `attributionFor(resolved)` во всех `runAgent`; в agent.js — `toolCtx.attribution`,
 передаётся субагенту.
 
+### Профиль команды
+
+ADR 0118. `team-profile.js` (без Electron) — `profileSource` (организация → настройки),
+`refreshProfile` (git во временную папку), `readProfile` и `validateProfile` (без секретов),
+`mergeMarketplaces`. В main.js — `teamProfile()`, `applyTeamProfile()` (пишет `AGENTS.team.md`),
+`refreshTeamProfile()` при запуске и после `auth:login`; `ownMarketplaces()` — только личные
+каталоги, `marketplaces()` — с профилем; слой `team` в `mcpSources`; workspace профиля в
+`multicaTarget`. `readAgents` возвращает `team`, `systemPrompt` ставит его перед глобальным.
+IPC `team:status` (ANY), `team:refresh` (DEVELOPER).
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,

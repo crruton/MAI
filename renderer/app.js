@@ -5328,6 +5328,8 @@ function applyRoleGuard() {
 
 async function openAuth() {
   const auth = await api.auth.status();
+  // Профиль команды (ADR 0118): что пришло от организации.
+  const team = await api.team.status().catch(() => ({ configured: false }));
   state.auth = auth;
   applyRoleGuard();
 
@@ -5367,6 +5369,11 @@ async function openAuth() {
         el('dd', { text: auth.loggedIn ? 'активна' : 'нет' }),
       ]),
       auth.required ? el('p', { class: 'hint-text auth-corporate', text: `Корпоративный режим: вход обязателен, адрес Keycloak задан организацией (${auth.issuer || '—'}). Локальной роли нет.` }) : null,
+      team.configured
+        ? el('p', { class: `hint-text auth-team${team.ok ? '' : ' error-text'}`, text: team.ok
+          ? `Профиль команды «${team.name}» (${team.from === 'managed' ? 'задан организацией' : 'из настроек'}): каталоги ${team.marketplaces.join(', ') || '—'}, MCP ${team.mcpServers.join(', ') || '—'}${team.agents ? ', AGENTS.md команды' : ''}${team.workspaceId ? `, workspace Multica ${team.workspaceId}` : ''}.`
+          : `Профиль команды не применён: ${team.error || 'нет данных'}` })
+        : null,
       auth.required ? null : el('div', { class: 'row' }, [field('Issuer Keycloak', issuer), field('Client ID', clientId)]),
       el('div', { class: 'row' }, [
         auth.required ? null : el('button', {

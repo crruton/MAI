@@ -180,6 +180,9 @@ export const IPC_PERMISSIONS = {
   'multica:projects': ANY,
   'multica:setTarget': LEAD,
   'multica:pushSkills': LEAD,
+  // Профиль команды (E2.2, ADR 0118): адрес задаёт организация, обновить может developer.
+  'team:status': ANY,
+  'team:refresh': DEVELOPER,
   'multica:syncDocs': DEVELOPER,
   // Статусы Multica → tasks.md (F14).
   'multica:pullStatuses': DEVELOPER,

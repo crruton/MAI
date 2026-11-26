@@ -133,3 +133,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0115](0115-nabory-navykov-po-rolyam.md) | Наборы навыков каталога по ролям | accepted | 2026-11-26 |
 | [0116](0116-atribuciya-kommitov-agenta.md) | Атрибуция коммитов агента: трейлеры Agent-Model и Agent-User | accepted | 2026-11-26 |
 | [0117](0117-roli-developer-i-lead.md) | Роли developer и lead в матрице прав IPC | accepted | 2026-11-26 |
+| [0118](0118-profil-komandy.md) | Профиль команды: каталоги, MCP, AGENTS.md и workspace из одного репозитория | accepted | 2026-11-26 |

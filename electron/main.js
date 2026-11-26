@@ -34,6 +34,7 @@ import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalize
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { userLine } from './lib/attribution.js';
+import { profileSource, profileDir, refreshProfile, readProfile, mergeMarketplaces } from './lib/team-profile.js';
 import { listRoles, installRole } from './lib/roles.js';
 import { installRoleSkills, catalogRoles } from './lib/catalog-roles.js';
 import { skillConflicts } from './lib/skills.js';
@@ -42,7 +43,7 @@ import { localConnectors } from './lib/local-connectors.js';
 import { createNotifier } from './lib/notify.js';
 import { currentBranch } from './lib/git-guard.js';
 import { repoRoot, realPath, createWorktree, listWorktrees, removeWorktree, worktreeId } from './lib/worktree.js';
-import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills, skillVersion } from './lib/skills.js';
+import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, teamAgentsFile, installBundledSkills, skillVersion } from './lib/skills.js';
 import { scanUpdates, scanDue, installArgs } from './lib/update-scan.js';
 import { trackVersion, planCleanup, applyCleanup, formatBytes } from './lib/cleaner.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
@@ -225,6 +226,7 @@ function mcpSources(projectDir) {
   const dir = projectDir || settings.projectDir;
   const trusted = isTrusted(dir);
   const layers = [
+    ['team', teamProfile().mcpServers],
     ['global', settings.mcpServers || {}],
     ['package', packageMcpServers(packagesFor(dir))],
     ['project', trusted ? projectMcpConfig(dir) : {}],
@@ -243,6 +245,79 @@ function mcpSources(projectDir) {
 function managed() {
   return readManaged();
 }
+
+/* ---------- Профиль команды (E2.2, ADR 0118) ---------- */
+
+let teamProfileState = { at: 0, profile: readProfile(''), source: null, error: '' };
+
+/** Текущий профиль из кэша. Без настройки или с ошибками — пустой профиль. */
+function teamProfile() {
+  return teamProfileState.profile.ok ? teamProfileState.profile : { marketplaces: [], mcpServers: {}, agents: '', multica: {} };
+}
+
+/** Читает профиль из кэша и пишет AGENTS.md команды. Сеть не трогает. */
+function applyTeamProfile() {
+  let source = null;
+  try {
+    source = profileSource({ managed: managed(), settings: loadSettings() });
+  } catch (err) {
+    teamProfileState = { at: Date.now(), profile: readProfile(''), source: null, error: err?.message || String(err) };
+    return teamProfileState;
+  }
+  const profile = source ? readProfile(profileDir(source, dataDir())) : readProfile('');
+  try {
+    if (profile.ok && profile.agents.trim()) fs.writeFileSync(teamAgentsFile(), profile.agents, 'utf8');
+    else fs.rmSync(teamAgentsFile(), { force: true });
+  } catch (err) {
+    console.error('[team] AGENTS.md команды не записан:', err?.message || err);
+  }
+  teamProfileState = { at: Date.now(), profile, source, error: source && !profile.ok ? profile.errors.join('; ') : '' };
+  return teamProfileState;
+}
+
+/** Скачивает профиль (git) и применяет. Ошибка сети не стирает прежний кэш. */
+async function refreshTeamProfile() {
+  let source = null;
+  try {
+    source = profileSource({ managed: managed(), settings: loadSettings() });
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+  if (!source) {
+    applyTeamProfile();
+    return { ok: true, configured: false };
+  }
+  const fetched = refreshProfile(source, dataDir());
+  const state = applyTeamProfile();
+  if (state.profile.ok) {
+    await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
+    audit({ at: new Date().toISOString(), tool: 'team:apply', source: 'system', cls: 'external', subject: `${state.profile.name} ← ${source.url.slice(0, 200)}`, decision: 'allow' });
+  }
+  return { ok: state.profile.ok, configured: true, fetched: fetched.ok, fetchError: fetched.error || '', ...teamStatus() };
+}
+
+function teamStatus() {
+  const { profile, source, error, at } = teamProfileState;
+  return {
+    configured: Boolean(source),
+    from: source?.from || '',
+    url: source?.url || '',
+    name: profile.name || '',
+    ok: profile.ok,
+    error,
+    appliedAt: at,
+    marketplaces: profile.marketplaces.map((m) => m.name),
+    mcpServers: Object.keys(profile.mcpServers),
+    agents: Boolean(profile.agents),
+    workspaceId: profile.multica.workspaceId || '',
+  };
+}
+
+ipcMain.handle('team:status', () => teamStatus());
+ipcMain.handle('team:refresh', async () => {
+  requireRole('developer');
+  return refreshTeamProfile();
+});
 
 function managedHooks() {
   const org = managed();
@@ -491,6 +566,9 @@ app.whenReady().then(async () => {
     app.exit(await runCli(CLI));
     return;
   }
+  // Профиль команды (ADR 0118): кэш — сразу, свежая версия — в фоне.
+  applyTeamProfile();
+  refreshTeamProfile().catch((err) => console.error('[team] профиль не обновлён:', err?.message || err));
   try {
     installBundledSkills(path.join(app.getAppPath(), 'skills'));
   } catch (err) {
@@ -681,7 +759,9 @@ ipcMain.handle('auth:configure', (_e, payload) => {
 
 ipcMain.handle('auth:login', async () => {
   try {
-    return { ok: true, ...(await loginKeycloak()) };
+    const result = await loginKeycloak();
+    const team = await refreshTeamProfile().catch((err) => ({ ok: false, error: err?.message || String(err) }));
+    return { ok: true, ...result, team };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }
@@ -2599,9 +2679,15 @@ ipcMain.handle('trash:purge', (_e, payload = {}) => ({ ok: true, removed: purgeT
 
 /* ---------- маркетплейс пакетов (CC10.2, ADR 0042) ---------- */
 
-function marketplaces() {
+/** Каталоги, подключённые пользователем: их меняют marketplace:add и marketplace:remove. */
+function ownMarketplaces() {
   const list = loadSettings().marketplaces;
   return Array.isArray(list) ? list.filter((m) => m && m.name && m.url) : [];
+}
+
+/** Каталоги с учётом профиля команды (ADR 0118): личный сильнее при совпадении имени. */
+function marketplaces() {
+  return mergeMarketplaces(ownMarketplaces(), teamProfile().marketplaces);
 }
 
 function marketplaceView() {
@@ -2615,7 +2701,7 @@ ipcMain.handle('marketplace:list', () => marketplaceView());
 ipcMain.handle('marketplace:add', (_e, payload = {}) => {
   try {
     const market = normalizeMarketplace(payload);
-    const list = marketplaces().filter((m) => m.name !== market.name);
+    const list = ownMarketplaces().filter((m) => m.name !== market.name);
     refreshMarketplace(market, dataDir());
     saveSettings({ marketplaces: [...list, market] });
     audit({ at: new Date().toISOString(), tool: 'marketplace:add', source: 'user', cls: 'external', subject: `${market.name} ← ${market.url.slice(0, 300)}`, decision: 'allow' });
@@ -2626,7 +2712,7 @@ ipcMain.handle('marketplace:add', (_e, payload = {}) => {
 });
 
 ipcMain.handle('marketplace:remove', (_e, name) => {
-  saveSettings({ marketplaces: marketplaces().filter((m) => m.name !== name) });
+  saveSettings({ marketplaces: ownMarketplaces().filter((m) => m.name !== name) });
   removeTree(path.join(dataDir(), 'marketplaces', String(name).replace(/[^a-z0-9._-]/gi, '')));
   return { ok: true, ...marketplaceView() };
 });
@@ -3101,7 +3187,8 @@ ipcMain.handle('multica:install', () => {
 /** Workspace и проект Multica для папки: личное → проект (git) → настройки MAI (E2.3, ADR 0112). */
 function multicaTarget(projectDir) {
   const dir = projectDir || loadSettings().projectDir;
-  return multica.resolveTarget({ projectDir: dir, trusted: Boolean(dir) && isTrusted(dir), user: loadSettings().multica || {} });
+  const user = { workspaceId: loadSettings().multica?.workspaceId || teamProfile().multica.workspaceId || '' };
+  return multica.resolveTarget({ projectDir: dir, trusted: Boolean(dir) && isTrusted(dir), user });
 }
 ipcMain.handle('multica:auth', () => multica.authStatus(multicaTarget()));
 ipcMain.handle('multica:issues', (_e, limit) => multica.listIssues(limit || 30, multicaTarget()));

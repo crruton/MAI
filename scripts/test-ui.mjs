@@ -555,6 +555,8 @@ ipcMain.handle('repowise:restartMcp', () => {
 const multicaPulls = [];
 ipcMain.handle('multica:status', () => ({ available: true, version: 'multica 0.4', config: {} }));
 ipcMain.handle('multica:issues', () => ({ ok: true, issues: [] }));
+// Профиль команды (E2.2, ADR 0118).
+ipcMain.handle('team:status', () => ({ configured: true, from: 'managed', url: 'https://git.example/profile.git', name: 'acme-team', ok: true, error: '', marketplaces: ['mai-team'], mcpServers: ['docs'], agents: true, workspaceId: 'ws-team' }));
 // Workspace и проект Multica для папки (E2.3, ADR 0112).
 const multicaTargets = [];
 const multicaProjectCalls = [];
@@ -2203,6 +2205,15 @@ app.whenReady().then(async () => {
     await wait(400);
     const ownProjects = await ui(`[...document.querySelector('.modal-backdrop .multica-project').options].map((o) => o.value).join(',')`);
     check('смена workspace перезагружает проекты', ownProjects === '' && multicaProjectCalls.includes('ws-own'), ownProjects);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`document.querySelector('#auth-btn')?.click()`);
+    await wait(500);
+    const teamLine = await ui(`document.querySelector('.modal-backdrop .auth-team')?.textContent || ''`);
+    check('«Доступ»: профиль команды от организации — каталоги, MCP, AGENTS.md, workspace (E2.2)', teamLine.includes('Профиль команды «acme-team» (задан организацией): каталоги mai-team, MCP docs, AGENTS.md команды, workspace Multica ws-team'), teamLine);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await wait(200);
+    await ui(`document.querySelector('[data-panel=multica]').click()`);
+    await wait(600);
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
 
     console.log('\n[52] Калибратор архитектуры и PRD (F15, ADR 0090)');
