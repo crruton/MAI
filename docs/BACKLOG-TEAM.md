@@ -43,6 +43,7 @@
 | 26.11.2026 | E2.2: профиль команды | ADR 0118, `team-profile.js`, `docs/TEAM.md`, `test-team-profile` (26), `test-ui` | путь `agents: ../x.md` проходил проверку формата — запрещены `..` и абсолютные пути; окно «Добавить каталог» сохраняло бы каталоги профиля в личные настройки — разведено `ownMarketplaces` |
 | 26.11.2026 | E3: approver без окна, CI-шаблон, гейт GitLab Free | ADR 0119, `ship/gitlab.js`, `ship/approve.js`, `scripts/mai-ship.mjs`, `ci/mai-ship.gitlab-ci.yml`, `docs/SHIP.md`, `test-ship-approve` (37) | предварительная оценка без ответов классификаторов никогда не давала approve — модель не звалась вовсе; на Free «нужен человек» давал зелёную джобу — MR вливался без человека; гейт пропускал устаревший апрув |
 | 26.11.2026 | E3.D1–D4: ревьюер; статус своего pipeline | ADR 0120, `ship/review.js`, джоба `ship:review`, `test-ship-review` (21), `test-ship-approve` (40) | approver внутри своего pipeline видел `running` и блокировал бы каждый MR |
+| 26.11.2026 | TODO E3.H0: боевая проверка ревьюера и approver | бэклог, `tasks.md` | ждёт тестовый GitLab-проект, бот-учётку и ключи моделей |
 | 26.11.2026 | прогон `npm test` | — | вне этой работы: `test-web` и `test-local-models` иногда падают на выходе (`UV_HANDLE_CLOSING`, Node 24.19 на Windows); `test-shell` падает, если на машине установлен `repowise`. Оба дефекта есть на чистом `dev` — пункт Q8 |
 
 ---
@@ -302,6 +303,7 @@
 
 | ID | Задача | P | Дн | Критерий приёмки | Зав. |
 |---|---|---|---|---|---|
+| E3.H0 | **TODO — проверить на бою** ревьюера и approver. Нужно от владельца: тестовый GitLab-проект (gitlab.com или self-hosted), бот-учётка `mai-ship-approver` (право апрува, без push) и её токен, ключи моделей ревьюера (`SHIP_REVIEWER_*`) и approver'а другого семейства (`SHIP_APPROVER_*`). Проверить: обсуждения на строках diff, сводку, метки, гейт `--gate` на Free, approve с SHA на Premium, статус своего pipeline | P0 | 1 | прогон на живом MR в observe и enforce; расхождения — в бэклог | владелец: проект, бот, ключи |
 | E3.H1 | Пилот: тестовый GitLab-проект, review + steward + approver в observe, 4 недели | P1 | 1 + время | отчёт: согласие, lead time, revert, стоимость | E3.F6, E3.G1 |
 | E3.H2 | Эталон на GitHub: Claude Ship на `crruton/MAI` в те же 4 недели; сравнение находок и решений | P2 | 1 | таблица «Claude Ship ↔ MAI Ship» | — |
 | E3.H3 | Переход в enforce для класса «рутина» (docs, тесты, patch-зависимости) при согласии ≥ 95% | P2 | 0.5 | branch protection требует approver'а только для рутины | E3.H1 |
