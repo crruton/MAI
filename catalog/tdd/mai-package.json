@@ -1,0 +1,8 @@
+{
+  "name": "tdd",
+  "version": "1.0.0",
+  "description": "Test-driven development.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "upstream, см. skills/tdd/UPSTREAM.md"
+}

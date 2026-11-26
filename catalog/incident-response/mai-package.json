@@ -1,0 +1,8 @@
+{
+  "name": "incident-response",
+  "version": "1.0.0",
+  "description": "Run an incident response workflow — triage, communicate, and write postmortem.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

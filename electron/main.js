@@ -30,7 +30,7 @@ import { createTracer, NO_TRACER } from './lib/tracer.js';
 import { createProjectStore } from './lib/projects.js';
 import { renderPdf, renderPng } from './lib/pdf-render.js';
 import { createAgentBrowser } from './lib/browser-agent.js';
-import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
+import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace, catalogDir, CATALOG } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { listRoles, installRole } from './lib/roles.js';
@@ -3065,16 +3065,52 @@ ipcMain.handle('multica:install', () => {
   requireAdmin();
   return multica.installCli();
 });
-ipcMain.handle('multica:auth', () => multica.authStatus());
-ipcMain.handle('multica:issues', (_e, limit) => multica.listIssues(limit || 30));
+/** Workspace и проект Multica для папки: личное → проект (git) → настройки MAI (E2.3, ADR 0112). */
+function multicaTarget(projectDir) {
+  const dir = projectDir || loadSettings().projectDir;
+  return multica.resolveTarget({ projectDir: dir, trusted: Boolean(dir) && isTrusted(dir), user: loadSettings().multica || {} });
+}
+ipcMain.handle('multica:auth', () => multica.authStatus(multicaTarget()));
+ipcMain.handle('multica:issues', (_e, limit) => multica.listIssues(limit || 30, multicaTarget()));
+ipcMain.handle('multica:target', (_e, projectDir) => multicaTarget(projectDir));
+ipcMain.handle('multica:workspaces', () => multica.listWorkspaces());
+ipcMain.handle('multica:projects', (_e, workspaceId) => multica.listProjects({ workspaceId: workspaceId || multicaTarget().workspaceId }));
+ipcMain.handle('multica:setTarget', (_e, payload) => {
+  requireAdmin();
+  const dir = payload?.projectDir || loadSettings().projectDir;
+  if (!dir) throw new Error('Не выбрана папка проекта');
+  if (!isTrusted(dir)) return needTrust(dir) || { ok: false, error: 'Папка проекта не доверена: настройки Multica в неё не записываются' };
+  return multica.saveProjectTarget(dir, { workspaceId: payload?.workspaceId, projectId: payload?.projectId }, { scope: payload?.scope || 'project' });
+});
+/** Каталог для отдачи навыков: подключённый в /packages по имени или корень MAI из исходников. */
+function skillCatalogRoot(name) {
+  if (name) {
+    const market = marketplaces().find((m) => m.name === name);
+    if (!market) throw new Error(`Каталог «${name}» не подключён в /packages`);
+    return catalogDir(market, dataDir());
+  }
+  const own = path.join(__dirname, '..');
+  if (fs.existsSync(path.join(own, CATALOG))) return own;
+  const first = marketplaces()[0];
+  if (!first) throw new Error('Нет каталога: подключите его в /packages → «Каталоги»');
+  return catalogDir(first, dataDir());
+}
+// Навыки каталога → Multica MAI (E1.8, ADR 0113).
+ipcMain.handle('multica:pushSkills', (_e, payload) => {
+  requireAdmin();
+  const names = Array.isArray(payload?.names) ? payload.names.map(String) : [];
+  return multica.pushCatalogSkills(skillCatalogRoot(payload?.market), multicaTarget(payload?.projectDir), { names, prune: Boolean(payload?.prune), dryRun: Boolean(payload?.dryRun) });
+});
 ipcMain.handle('multica:syncDocs', (_e, projectDir) => {
   requireAdmin();
-  return multica.syncOpenSpec(projectDir || loadSettings().projectDir);
+  const dir = projectDir || loadSettings().projectDir;
+  return multica.syncOpenSpec(dir, multicaTarget(dir));
 });
 // Статусы Multica → галочки в openspec/changes/*/tasks.md (F14, ADR 0089).
 ipcMain.handle('multica:pullStatuses', (_e, projectDir) => {
   requireAdmin();
-  return multica.pullStatuses(projectDir || loadSettings().projectDir);
+  const dir = projectDir || loadSettings().projectDir;
+  return multica.pullStatuses(dir, { target: multicaTarget(dir) });
 });
 
 // ---------- Docker-песочницы ----------

@@ -4,6 +4,15 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadSettings } from './config.js';
 import { listChanges, taskMarker, statusUpdatesFromIssues, applyTaskStatuses } from './openspec.js';
+import { targetArgs, issueListArgs, issueCreateArgs, issueUpdateArgs, normalizeWorkspaces, normalizeProjects } from './multica-target.js';
+
+export { resolveTarget, saveProjectTarget } from './multica-target.js';
+import { pushSkills } from './multica-skills.js';
+
+/** Навыки каталога → Multica (E1.8, ADR 0113). `root` — корень каталога. */
+export function pushCatalogSkills(root, target = {}, { names = [], prune = false, dryRun = false } = {}) {
+  return pushSkills({ root, target, names, prune, dryRun, run: (args, options = {}) => run(args, { timeout: 60_000, ...options }) });
+}
 
 /**
  * Синхронизация OpenSpec → Multica через официальный CLI.
@@ -175,17 +184,33 @@ export function installCli() {
   return { ok: true, output: output.slice(-8000), note: 'CLI установлен в %USERPROFILE%\\.multica\\bin. Перезапустите приложение, если PATH ещё не обновился.' };
 }
 
-export function authStatus() {
+export function authStatus(target = {}) {
   try {
-    return { ok: true, output: run(['auth', 'status'], { timeout: 20_000 }) };
+    return { ok: true, output: run([...targetArgs(target), 'auth', 'status'], { timeout: 20_000 }) };
   } catch (err) {
     return { ok: false, error: err.message };
   }
 }
 
-export function listIssues(limit = 30) {
+export function listWorkspaces() {
   try {
-    const data = json(['issue', 'list', '--output', 'json', '--limit', String(limit)]);
+    return { ok: true, workspaces: normalizeWorkspaces(json(['workspace', 'list', '--output', 'json'], { timeout: 20_000 })) };
+  } catch (err) {
+    return { ok: false, error: err.message, workspaces: [] };
+  }
+}
+
+export function listProjects(target = {}) {
+  try {
+    return { ok: true, projects: normalizeProjects(json([...targetArgs(target), 'project', 'list', '--output', 'json'], { timeout: 20_000 })) };
+  } catch (err) {
+    return { ok: false, error: err.message, projects: [] };
+  }
+}
+
+export function listIssues(limit = 30, target = {}) {
+  try {
+    const data = json(issueListArgs(limit, target));
     const issues = Array.isArray(data) ? data : data?.issues || [];
     return {
       ok: true,
@@ -207,14 +232,14 @@ function findIssue(issues, marker) {
   return issues.find((issue) => String(issue.description || '').includes(marker));
 }
 
-export function syncOpenSpec(projectDir) {
+export function syncOpenSpec(projectDir, target = {}) {
   if (!projectDir) throw new Error('Не выбрана папка проекта');
   const changes = listChanges(projectDir);
   if (!changes.length) {
     return { ok: true, created: 0, updated: 0, skipped: 0, changes: 0, message: 'В openspec/changes нет изменений' };
   }
 
-  const listing = listIssues(100);
+  const listing = listIssues(100, target);
   if (!listing.ok) throw new Error(listing.error);
   const issues = [...listing.issues];
 
@@ -246,11 +271,11 @@ export function syncOpenSpec(projectDir) {
       const existing = findIssue(issues, marker);
       try {
         if (existing) {
-          run(['issue', 'update', existing.id, '--title', title, '--description', description]);
+          run(issueUpdateArgs(existing.id, { title, description }, target));
           updated += 1;
           details.push({ action: 'updated', id: existing.id, title });
         } else {
-          const output = run(['issue', 'create', '--title', title, '--description', description]);
+          const output = run(issueCreateArgs({ title, description }, target));
           created += 1;
           details.push({ action: 'created', title, output: output.slice(0, 200) });
           // Добавляем в локальный список, чтобы не создать дубль внутри одного запуска.
@@ -277,9 +302,9 @@ export function syncOpenSpec(projectDir) {
  * Multica → OpenSpec (F14, ADR 0089): задачи «готово» в Multica ставят [x] в
  * tasks.md. Обратно галочку не снимаем: локальная отметка важнее.
  */
-export function pullStatuses(projectDir, { dryRun = false } = {}) {
+export function pullStatuses(projectDir, { dryRun = false, target = {} } = {}) {
   if (!projectDir) throw new Error('Не выбрана папка проекта');
-  const listing = listIssues(200);
+  const listing = listIssues(200, target);
   if (!listing.ok) throw new Error(listing.error);
   const { updates, cancelled } = statusUpdatesFromIssues(listing.issues);
   const report = applyTaskStatuses(projectDir, updates, { dryRun });

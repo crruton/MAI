@@ -121,3 +121,12 @@ ADR фиксируют решения, которые дорого менять:
 | [0103](0103-chistilshchik-staryh-versiy.md) | Чистильщик старых версий | accepted | 2026-11-23 |
 | [0104](0104-electron-45-openai-7.md) | Electron 45, openai 7 и устранение уязвимостей зависимостей | accepted | 2026-11-23 |
 | [0105](0105-novyy-interfeys-glavnogo-okna.md) | Новый интерфейс главного окна (N9) | accepted | 2026-11-24 |
+| [0106](0106-hook-post-commit-ne-blokiruet-kommit.md) | Хук post-commit не блокирует коммит | accepted | 2026-11-24 |
+| [0107](0107-bezopasnaya-obrezka-surogatnyh-par.md) | Безопасная обрезка текста: границы суррогатных пар | accepted | 2026-11-24 |
+| [0108](0108-mai-ship-gitlab-ispolnenie-v-ci.md) | MAI Ship для GitLab: агенты ревью, steward и approver в GitLab CI | proposed | 2026-11-26 |
+| [0109](0109-politika-apruva-v-repozitorii.md) | Политика апрува как файл в репозитории | proposed | 2026-11-26 |
+| [0110](0110-razdelenie-provayderov-v-ship.md) | Разделение провайдеров и учёток в MAI Ship | proposed | 2026-11-26 |
+| [0111](0111-katalog-navykov-komandy.md) | Каталог навыков команды в репозитории MAI | accepted | 2026-11-26 |
+| [0112](0112-multica-workspace-i-proekt-v-nastroykah-proekta.md) | Workspace и проект Multica — в настройках проекта | accepted | 2026-11-26 |
+| [0113](0113-navyki-kataloga-v-multica.md) | Навыки каталога → Multica MAI | accepted | 2026-11-26 |
+| [0114](0114-eksport-navykov-v-drugie-agenty.md) | Экспорт навыков каталога в Claude Code, OpenCode и Codex | accepted | 2026-11-26 |

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mai-code/schemas/ship.schema.json",
+  "title": "MAI Ship: настройки проекта (.mai-code/ship.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "enabled", "providers"],
+  "properties": {
+    "version": { "const": 1 },
+    "enabled": { "type": "boolean", "description": "false выключает всех агентов Ship в проекте" },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": { "enum": ["quick", "standard", "deep"], "default": "standard" },
+        "trigger": {
+          "type": "array",
+          "items": { "enum": ["open", "push", "ready", "manual"] },
+          "uniqueItems": true,
+          "default": ["open", "push"]
+        },
+        "lenses": {
+          "type": "array",
+          "items": { "enum": ["correctness", "security", "adr", "tests", "standards"] },
+          "uniqueItems": true
+        },
+        "skip_draft": { "type": "boolean", "default": false }
+      }
+    },
+    "steward": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "max_rounds": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3 },
+        "fix": {
+          "type": "array",
+          "items": { "enum": ["ci", "conflicts", "findings"] },
+          "uniqueItems": true,
+          "default": ["ci", "conflicts", "findings"]
+        },
+        "branch_prefix": { "type": "string", "pattern": "^[a-z0-9._/-]+$", "default": "mai/" }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewer", "approver"],
+      "properties": {
+        "executor": { "$ref": "#/$defs/model" },
+        "reviewer": { "$ref": "#/$defs/model" },
+        "steward": { "$ref": "#/$defs/model" },
+        "approver": { "$ref": "#/$defs/model" }
+      }
+    },
+    "families": {
+      "type": "object",
+      "description": "Дополнение таблицы семейств моделей (ADR 0110): семейство -> маски provider/model",
+      "additionalProperties": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "per_mr_usd": { "type": "number", "exclusiveMinimum": 0 },
+        "monthly_usd": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "notify": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channel": { "enum": ["none", "rocketchat", "telegram", "webhook"], "default": "none" },
+        "events": {
+          "type": "array",
+          "items": { "enum": ["needs_human", "blocked", "budget", "error"] },
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "model": {
+      "type": "string",
+      "description": "provider/model, как в списке «Кто выполняет»",
+      "pattern": "^[a-z0-9][a-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    }
+  }
+}

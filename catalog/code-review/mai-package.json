@@ -1,0 +1,8 @@
+{
+  "name": "code-review",
+  "version": "1.0.0",
+  "description": "Review code changes for security, performance, and correctness.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

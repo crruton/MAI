@@ -6373,11 +6373,59 @@ async function openMultica() {
     }
   }
 
+  // Куда идут задачи этого проекта (E2.3, ADR 0112): общий settings.json проекта или личный.
+  const target = await api.multica.target(state.projectDir).catch(() => ({ workspaceId: '', projectId: '', source: {} }));
+  const wsSelect = el('select', { class: 'multica-ws' }, [el('option', { value: '', text: 'как в CLI (по умолчанию)' })]);
+  const projSelect = el('select', { class: 'multica-project' }, [el('option', { value: '', text: 'без проекта' })]);
+  const scopeSelect = el('select', { class: 'multica-scope' }, [
+    el('option', { value: 'project', text: 'для команды (.mai-code/settings.json, в git)' }),
+    el('option', { value: 'local', text: 'только у меня (settings.local.json)' }),
+  ]);
+  if (target.source?.workspaceId === 'local') scopeSelect.value = 'local';
+  const setOptions = (select, items, current, empty) => {
+    select.replaceChildren(el('option', { value: '', text: empty }), ...items.map((i) => el('option', { value: i.id, text: i.name ? `${i.name} · ${i.id.slice(0, 8)}` : i.id })));
+    if (current && !items.some((i) => i.id === current)) select.append(el('option', { value: current, text: `${current} (не найден в списке)` }));
+    select.value = current || '';
+  };
+  const loadProjects = async () => {
+    const res = await api.multica.projects(wsSelect.value || '');
+    setOptions(projSelect, res.ok ? res.projects : [], wsSelect.value === target.workspaceId ? target.projectId : '', res.ok ? 'без проекта' : `проекты: ${res.error}`.slice(0, 80));
+  };
+  if (status.available) {
+    const res = await api.multica.workspaces();
+    setOptions(wsSelect, res.ok ? res.workspaces : [], target.workspaceId, res.ok ? 'как в CLI (по умолчанию)' : `workspace: ${res.error}`.slice(0, 80));
+    await loadProjects();
+  }
+  wsSelect.addEventListener('change', loadProjects);
+  const sourceText = { local: 'личные настройки проекта', project: 'настройки проекта (git)', user: 'настройки MAI' };
+
   const modal = openModal({
     title: 'Multica — задачи из OpenSpec',
     body: [
       el('div', { class: 'row' }, [field('CLI', command), field('API', serverUrl)]),
-      el('div', { class: 'row' }, [field('Web UI', appUrl), field('Workspace', workspaceId)]),
+      el('div', { class: 'row' }, [field('Web UI', appUrl), field('Workspace по умолчанию', workspaceId)]),
+      el('div', { class: 'docs-group-title', text: 'Этот проект' }),
+      el('div', { class: 'row' }, [field('Workspace', wsSelect), field('Проект Multica', projSelect)]),
+      el('div', { class: 'row' }, [
+        field('Где хранить', scopeSelect),
+        el('button', {
+          class: 'btn multica-save-target',
+          type: 'button',
+          text: 'Сохранить для проекта',
+          onclick: async () => {
+            try {
+              const res = await api.multica.setTarget({ projectDir: state.projectDir, workspaceId: wsSelect.value, projectId: projSelect.value, scope: scopeSelect.value });
+              if (!res?.ok) return toast(`Multica: ${res?.error || 'не сохранено'}`, 'err');
+              toast(scopeSelect.value === 'project' ? 'Сохранено в .mai-code/settings.json — закоммитьте файл, чтобы команда синхронизировалась туда же' : 'Сохранено только для вас', 'ok');
+            } catch (err) {
+              toast(`Multica: ${err.message}`, 'err');
+            }
+          },
+        }),
+      ]),
+      target.workspaceId
+        ? el('p', { class: 'hint-text', text: `Сейчас: workspace ${target.workspaceId} (${sourceText[target.source.workspaceId] || ''})${target.projectId ? `, проект ${target.projectId}` : ''}.` })
+        : null,
       el('p', { class: 'hint-text' }, [badge, ' Синхронизация идёт через официальный CLI: multica issue create/update/list.']),
       status.available
         ? null
@@ -6445,6 +6493,26 @@ async function openMultica() {
             const res = await api.multica.syncDocs(state.projectDir);
             modal.close();
             toast(res.message || `Создано ${res.created}, обновлено ${res.updated}`, 'ok');
+          } catch (err) {
+            toast(`Multica: ${err.message}`, 'err');
+          }
+        },
+      }),
+      // Навыки каталога → Multica (E1.8, ADR 0113): сначала план, затем запись.
+      el('button', {
+        class: 'btn multica-skills',
+        type: 'button',
+        text: 'Навыки → Multica',
+        title: 'Отдать навыки каталога команды в workspace этого проекта. Навыки, созданные вручную, не меняются',
+        onclick: async () => {
+          try {
+            const plan = await api.multica.pushSkills({ projectDir: state.projectDir, dryRun: true });
+            if (!plan.created && !plan.updated) return toast(plan.message, 'ok');
+            if (!window.confirm(`${plan.message}. Записать в Multica?`)) return;
+            const res = await api.multica.pushSkills({ projectDir: state.projectDir });
+            toast(res.message, 'ok');
+            const conflicts = res.actions.filter((a) => a.action === 'conflict').map((a) => a.name);
+            if (conflicts.length) toast(`Не тронуты (созданы вручную): ${conflicts.join(', ')}`);
           } catch (err) {
             toast(`Multica: ${err.message}`, 'err');
           }

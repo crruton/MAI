@@ -1,0 +1,114 @@
+{
+  "name": "mai-team",
+  "description": "Каталог навыков команды MAI Code (ADR 0111)",
+  "packages": [
+    {
+      "name": "architecture",
+      "version": "1.0.0",
+      "description": "Create or evaluate an architecture decision record (ADR).",
+      "source": "catalog/architecture"
+    },
+    {
+      "name": "code-review",
+      "version": "1.0.0",
+      "description": "Review code changes for security, performance, and correctness.",
+      "source": "catalog/code-review"
+    },
+    {
+      "name": "debug",
+      "version": "1.0.0",
+      "description": "Structured debugging session — reproduce, isolate, diagnose, and fix.",
+      "source": "catalog/debug"
+    },
+    {
+      "name": "diagnosing-bugs",
+      "version": "1.0.0",
+      "description": "Diagnosis loop for hard bugs and performance regressions.",
+      "source": "catalog/diagnosing-bugs"
+    },
+    {
+      "name": "documentation",
+      "version": "1.0.0",
+      "description": "Write and maintain technical documentation.",
+      "source": "catalog/documentation"
+    },
+    {
+      "name": "grilling",
+      "version": "1.0.0",
+      "description": "Grill the user relentlessly about a plan, decision, or idea.",
+      "source": "catalog/grilling"
+    },
+    {
+      "name": "incident-response",
+      "version": "1.0.0",
+      "description": "Run an incident response workflow — triage, communicate, and write postmortem.",
+      "source": "catalog/incident-response"
+    },
+    {
+      "name": "ponytail",
+      "version": "1.0.0",
+      "description": "Lazy senior dev mode: the smallest change that fully solves the task, and a reply a busy human understands in one read.",
+      "source": "catalog/ponytail"
+    },
+    {
+      "name": "ponytail-review",
+      "version": "1.0.0",
+      "description": "Quality review of a change: is the logic right, is it safe, does it hold under real load, is risky code tested, is it fast enough, and is every line needed.",
+      "source": "catalog/ponytail-review"
+    },
+    {
+      "name": "release-notes",
+      "version": "1.0.0",
+      "description": "Summarize project updates over a requested date range in clear, nontechnical customer-facing language.",
+      "source": "catalog/release-notes"
+    },
+    {
+      "name": "standup",
+      "version": "1.0.0",
+      "description": "Generate a standup update from recent activity.",
+      "source": "catalog/standup"
+    },
+    {
+      "name": "stop-slop",
+      "version": "1.0.0",
+      "description": "Remove AI writing patterns from prose.",
+      "source": "catalog/stop-slop"
+    },
+    {
+      "name": "system-design",
+      "version": "1.0.0",
+      "description": "Design systems, services, and architectures.",
+      "source": "catalog/system-design"
+    },
+    {
+      "name": "tdd",
+      "version": "1.0.0",
+      "description": "Test-driven development.",
+      "source": "catalog/tdd"
+    },
+    {
+      "name": "tech-debt",
+      "version": "1.0.0",
+      "description": "Identify, categorize, and prioritize technical debt.",
+      "source": "catalog/tech-debt"
+    },
+    {
+      "name": "testing-strategy",
+      "version": "1.0.0",
+      "description": "Design test strategies and test plans.",
+      "source": "catalog/testing-strategy"
+    },
+    {
+      "name": "to-mr",
+      "version": "1.0.0",
+      "description": "Create or update a GitLab merge request through configured glab, collecting evidence and explaining changes visually in Russian.",
+      "source": "catalog/to-mr"
+    },
+    {
+      "name": "ub-mode",
+      "version": "1.0.0",
+      "description": "Follow the reduced principles when writing or changing code.",
+      "source": "catalog/ub-mode"
+    }
+  ]
+}

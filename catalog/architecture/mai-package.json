@@ -1,0 +1,8 @@
+{
+  "name": "architecture",
+  "version": "1.0.0",
+  "description": "Create or evaluate an architecture decision record (ADR).",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

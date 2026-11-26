@@ -1,0 +1,8 @@
+{
+  "name": "diagnosing-bugs",
+  "version": "1.0.0",
+  "description": "Diagnosis loop for hard bugs and performance regressions.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "upstream, см. skills/diagnosing-bugs/UPSTREAM.md"
+}

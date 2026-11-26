@@ -1,0 +1,8 @@
+{
+  "name": "to-mr",
+  "version": "1.0.0",
+  "description": "Create or update a GitLab merge request through configured glab, collecting evidence and explaining changes visually in Russian.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

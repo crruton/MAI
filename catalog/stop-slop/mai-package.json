@@ -1,0 +1,8 @@
+{
+  "name": "stop-slop",
+  "version": "1.0.0",
+  "description": "Remove AI writing patterns from prose.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "upstream, см. skills/stop-slop/UPSTREAM.md"
+}

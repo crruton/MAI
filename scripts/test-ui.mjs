@@ -555,6 +555,19 @@ ipcMain.handle('repowise:restartMcp', () => {
 const multicaPulls = [];
 ipcMain.handle('multica:status', () => ({ available: true, version: 'multica 0.4', config: {} }));
 ipcMain.handle('multica:issues', () => ({ ok: true, issues: [] }));
+// Workspace и проект Multica для папки (E2.3, ADR 0112).
+const multicaTargets = [];
+const multicaProjectCalls = [];
+ipcMain.handle('multica:target', () => ({ workspaceId: 'ws-team', projectId: '', source: { workspaceId: 'project', projectId: '' } }));
+ipcMain.handle('multica:workspaces', () => ({ ok: true, workspaces: [{ id: 'ws-team', name: 'Команда', slug: 'team' }, { id: 'ws-own', name: 'Личный', slug: 'own' }] }));
+ipcMain.handle('multica:projects', (_e, workspaceId) => {
+  multicaProjectCalls.push(workspaceId);
+  return { ok: true, projects: workspaceId === 'ws-team' ? [{ id: 'pr-mai', name: 'MAI Code', status: 'in_progress' }] : [] };
+});
+ipcMain.handle('multica:setTarget', (_e, payload) => {
+  multicaTargets.push(payload);
+  return { ok: true, file: 'settings.json', multica: { workspaceId: payload.workspaceId, projectId: payload.projectId } };
+});
 ipcMain.handle('multica:pullStatuses', (_e, projectDir) => {
   multicaPulls.push(projectDir);
   return { ok: true, marked: ['auth: Вход (MAI-1)'], already: [], missing: [], cancelled: ['auth:roles (MAI-3)'], message: 'Multica → OpenSpec: отмечено 1, уже отмечено 0, отменено в Multica 1' };
@@ -2178,6 +2191,16 @@ app.whenReady().then(async () => {
     await wait(500);
     const pullToasts = await ui(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ')`);
     check('вызов с папкой проекта и отчёт: отмечено, отменено', multicaPulls.length === 1 && multicaPulls[0] && /отмечено 1/.test(pullToasts) && /Отменены в Multica/.test(pullToasts), `${JSON.stringify(multicaPulls)} ${pullToasts}`);
+    const wsState = await ui(`(() => { const ws = document.querySelector('.modal-backdrop .multica-ws'); const pr = document.querySelector('.modal-backdrop .multica-project'); return { ws: ws?.value, wsCount: ws?.options.length, prOptions: [...(pr?.options || [])].map((o) => o.value).join(',') }; })()`);
+    check('Multica: workspace проекта выбран, проекты workspace загружены (E2.3)', wsState.ws === 'ws-team' && wsState.wsCount === 3 && wsState.prOptions === ',pr-mai' && multicaProjectCalls.includes('ws-team'), JSON.stringify(wsState));
+    await ui(`(() => { const pr = document.querySelector('.modal-backdrop .multica-project'); pr.value = 'pr-mai'; document.querySelector('.modal-backdrop .multica-save-target').click(); })()`);
+    await wait(400);
+    const savedToasts = await ui(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ')`);
+    check('«Сохранить для проекта»: workspace, проект, scope project и подсказка про git', multicaTargets.length === 1 && multicaTargets[0].workspaceId === 'ws-team' && multicaTargets[0].projectId === 'pr-mai' && multicaTargets[0].scope === 'project' && multicaTargets[0].projectDir && /закоммитьте/.test(savedToasts), `${JSON.stringify(multicaTargets)} ${savedToasts}`);
+    await ui(`(() => { const ws = document.querySelector('.modal-backdrop .multica-ws'); ws.value = 'ws-own'; ws.dispatchEvent(new Event('change')); })()`);
+    await wait(400);
+    const ownProjects = await ui(`[...document.querySelector('.modal-backdrop .multica-project').options].map((o) => o.value).join(',')`);
+    check('смена workspace перезагружает проекты', ownProjects === '' && multicaProjectCalls.includes('ws-own'), ownProjects);
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
 
     console.log('\n[52] Калибратор архитектуры и PRD (F15, ADR 0090)');

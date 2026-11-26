@@ -10,6 +10,40 @@
 
 ### Added
 
+- Экспорт навыков каталога в Claude Code, OpenCode и Codex (ADR 0114):
+  `npm.cmd run skills:export -- --target claude,opencode,codex` (`--dry-run`, `--prune`,
+  `--project`, имена). Метка `.mai-catalog.json`; чужие папки не перезаписываются; запись
+  через временную папку. Модуль `electron/lib/skills-export.js`, тест `test-skills-export` (18).
+- Навыки каталога → Multica MAI (ADR 0113): кнопка «Навыки → Multica» в панели и
+  `npm.cmd run multica:skills` (`--dry-run`, `--prune`, имена). Свои навыки помечаются
+  `config.managed_by: mai-code` с версией и хэшем; повтор ничего не меняет; навык,
+  созданный вручную, не перезаписывается. Хэш и загрузка — с LF, чтобы Windows и Linux
+  не гоняли навыки по кругу. IPC `multica:pushSkills`, тест `test-multica-skills` (23).
+- Multica: workspace и проект для репозитория (ADR 0112). Выбор в панели «Multica» →
+  «Этот проект», хранение в `.mai-code/settings.json` (для команды, в git) или
+  `settings.local.json` (личное). CLI получает `--workspace-id` и `--project`; id
+  проверяется, чтобы значение из файла не стало флагом. IPC `multica:target`,
+  `multica:workspaces`, `multica:projects`, `multica:setTarget`; модуль
+  `electron/lib/multica-target.js`, тест `test-multica-target` (25 проверок).
+- Каталог навыков команды (ADR 0111): `mai-marketplace.json` в корне и 18 пакетов
+  в `catalog/` версии 1.0.0 — подключается в `/packages` адресом репозитория.
+  Проверка `electron/lib/catalog-check.js` и `scripts/test-catalog.mjs`: версии,
+  владелец, лицензии upstream, токены, внутренние хосты и email. Документация —
+  `docs/CATALOG.md`.
+- Бэклог командной работы `docs/BACKLOG-TEAM.md`: единое хранилище скиллов на
+  каталоге пакетов MAI, MAI для команды с Multica MAI, MAI Ship (декомпозиция
+  Claude Ship под GitLab), маркетплейс на Authentik; челлендж 73 входных скиллов.
+- MAI Ship: модуль политики апрува `electron/lib/ship/policy.js` (ADR 0109) —
+  чистая функция `evaluate` без модели: самозащита конфигурации, бюджет и
+  выключатель, гейты, правила (строгое решение сильнее), классификаторы только
+  ужесточают, observe никогда не ставит approve; семейства моделей и проверка
+  независимости approver'а `electron/lib/model-families.js` (ADR 0110). Тест
+  `scripts/test-ship-policy.mjs`, 65 проверок. Разбор YAML и вызовы GitLab — дальше.
+- MAI Ship для GitLab — спецификация (ADR 0108, 0109, 0110, статус proposed):
+  ревью, steward и approver MR по образцу Claude Ship на примитивах GitLab;
+  политика апрува `.mai-code/approval-policy.yaml` и настройки `.mai-code/ship.yaml`
+  с JSON-схемами и примерами; approver от другого семейства моделей; старт в
+  observe-only. Изменение `openspec/changes/mai-ship-gitlab/`, кода пока нет.
 - Инструменты (ADR 0054): `glob` — поиск файлов по маске; `edit_file` —
   `replace_all`, несколько правок за вызов (атомарно), файлы с CRLF; длинный
   вывод любого инструмента — целиком в файл, модели — начало, конец и путь;
