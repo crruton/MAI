@@ -2,10 +2,10 @@
 
 Актуально на 26.11.2026. Решения — [ADR 0108](adr/0108-mai-ship-gitlab-ispolnenie-v-ci.md),
 [0109](adr/0109-politika-apruva-v-repozitorii.md), [0110](adr/0110-razdelenie-provayderov-v-ship.md),
-[0119](adr/0119-ship-approver-bez-okna.md), [0120](adr/0120-ship-revyuer.md). Спека — `openspec/changes/mai-ship-gitlab/`.
+[0119](adr/0119-ship-approver-bez-okna.md), [0120](adr/0120-ship-revyuer.md), [0122](adr/0122-ship-steward-i-agent-bez-electron.md). Спека — `openspec/changes/mai-ship-gitlab/`.
 
 MAI Ship — механика Claude Ship на GitLab: ревью, steward и approver по политике-файлу.
-Готовы **ревьюер** и **approver**. Steward — следующий шаг.
+Готовы **ревьюер**, **steward** и **approver**.
 
 ## /ship в MAI
 
@@ -25,6 +25,22 @@ PR через `gh`) с описанием по навыку `to-mr`. Draft не 
    `ship::blocking`, если есть blocking-находка. Approver по этой метке блокирует MR.
 
 Модель — `providers.reviewer`; переменные `SHIP_REVIEWER_BASE_URL`, `SHIP_REVIEWER_API_KEY`.
+
+## Как работает steward
+
+Включается `steward.enabled: true` в `ship.yaml`; джоба `ship:steward` запускается, когда в pipeline
+что-то упало. Steward собирает упавшие джобы с логами, нерешённые blocking-находки ревью и
+указания `@mai …` (от участников с ролью Developer и выше) и запускает цикл агента MAI:
+правка файлов и команды проверки из `steward.commands`, без `git push` и без загрузки
+`AGENTS.md`, навыков и MCP из ветки MR. Потом коммитит от бота `mai-ship-steward` с трейлером
+`Agent-Model`, пушит в ветку MR и пишет комментарий: файлы и `git revert <sha>`.
+
+- `@mai <указание>` — задание steward'у; `@mai stop` / `@mai resume` — пауза.
+- Не больше `steward.max_rounds` раундов (по умолчанию 3), дальше — `ship::needs-human`.
+- Правки конфигурации Ship, CI, `CODEOWNERS` и путей, где политика требует человека, steward не
+  коммитит — ставит `ship::needs-human`.
+- Переменные: `MAI_SHIP_STEWARD_TOKEN` (бот: push в ветки MR, без апрува), `SHIP_STEWARD_BASE_URL`,
+  `SHIP_STEWARD_API_KEY`; модель — `providers.steward`.
 
 ## Как работает approver
 
@@ -92,5 +108,6 @@ node scripts/mai-ship.mjs report --project group/app --days 30
 - Не проверено на живом GitLab и с живой моделью; проверено на поддельном GitLab.
 - Образа MAI Ship нет: джоба клонирует MAI и ставит зависимости на каждом запуске.
 - Затраты на модель пока не считаются: поле `budget` проверяется, но расход не копится.
-- Ревьюер видит только diff и `AGENTS.md`, без чтения остального кода (инструменты — вместе со steward).
+- Ревьюер видит только diff и `AGENTS.md`, без чтения остального кода.
+- Steward не разбирает flaky-падения, не разрешает конфликты с target и не отвечает в обсуждениях находок.
 - Качество находок не измерено эталонным набором (E3.D5).

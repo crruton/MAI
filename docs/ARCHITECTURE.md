@@ -418,6 +418,14 @@ ADR 0121. `ship/report.js` — `decisionRecord`, `decisionMarker`, `parseDecisio
 `agrees`, `agreementReport` (по правилам, кандидаты в enforce), `formatReport`, `collectDecisions`.
 Запись пишет `runApprove` в комментарий; `approve --journal` — JSONL; `report` — CLI.
 
+### Без Electron: прослойка и steward
+
+ADR 0122. `electron-shim.js` — `app`, `safeStorage`, `utilityProcess`: настоящие в Electron,
+заглушки в Node (`MAI_DATA_DIR`). Её импортируют `config.js` и `plugin-host.js`, поэтому
+`agent.js` грузится в Node. `ship/steward.js` — `runSteward` (задания, `@mai`, лимит раундов,
+запретные пути, коммит и push), `stewardRules`, `stewardTask`, `parseCommand`, `forbiddenMatchers`,
+`createAgentRunner` (тот же вызов `runAgent` в CLI и тестах). CLI — `mai-ship.mjs steward`.
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,

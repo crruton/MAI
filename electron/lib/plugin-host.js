@@ -8,7 +8,7 @@
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { utilityProcess } from 'electron';
+import { utilityProcess } from './electron-shim.js';
 
 const WORKER = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'plugin-host', 'worker.mjs');
 

@@ -38,6 +38,18 @@ ship:review:
   script:
     - node /tmp/mai/scripts/mai-ship.mjs review
 
+# Steward: чинит упавшие джобы и blocking-находки, выполняет @mai (ADR 0122). Запускается,
+# когда в pipeline что-то упало; steward.enabled: true в ship.yaml и бот mai-ship-steward
+# (MAI_SHIP_STEWARD_TOKEN: push в ветки MR, без апрува). Свои джобы ship:* не чинит.
+ship:steward:
+  extends: .mai-ship
+  # Без needs: on_failure смотрит на все джобы предыдущих стадий.
+  when: on_failure
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - node /tmp/mai/scripts/mai-ship.mjs steward
+
 ship:approval:
   extends: .mai-ship
   # После ревью: approver видит метку ship::blocking.

@@ -10,6 +10,12 @@
 
 ### Added
 
+- MAI Ship: steward (ADR 0122) — `node scripts/mai-ship.mjs steward` и джоба `ship:steward`
+  (`when: on_failure`): упавшие джобы, blocking-находки и `@mai` → цикл агента MAI в режиме
+  «только разрешённое» → коммит с `Agent-Model`, push в ветку MR, комментарий с откатом;
+  `@mai stop/resume`, лимит раундов, запретные пути, только участники от Developer.
+- Цикл агента MAI работает без Electron: прослойка `electron/lib/electron-shim.js`
+  (`MAI_DATA_DIR`); `test-agent-loop` проходит и в Node. Тест `test-ship-steward` (22).
 - MAI Ship: журнал решений и согласие с людьми (ADR 0121) — запись решения в комментарии
   approver'а, `approve --journal` (артефакт `ship-journal.jsonl`), `mai-ship report`: согласие по
   правилам и кандидаты в `enforce_classes`; джоба `ship:report` по расписанию. Навык каталога

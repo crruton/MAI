@@ -5,6 +5,10 @@
  *   node scripts/mai-ship.mjs review  [--project <id|путь>] [--mr <iid>] [--dry-run]
  *   node scripts/mai-ship.mjs approve [--project <id|путь>] [--mr <iid>] [--dry-run] [--gate] [--journal <файл.jsonl>]
  *   node scripts/mai-ship.mjs report  [--project <id|путь>] [--days 30] [--json]
+ *   node scripts/mai-ship.mjs steward [--project <id|путь>] [--mr <iid>] [--dry-run]
+ *     MAI_SHIP_STEWARD_TOKEN — токен бота mai-ship-steward (push в ветки MR, без апрува);
+ *     SHIP_STEWARD_BASE_URL, SHIP_STEWARD_API_KEY — шлюз модели providers.steward;
+ *     рабочая копия — CI_PROJECT_DIR (ветка MR), push — в source branch MR.
  *
  * В CI проект и MR берутся из CI_PROJECT_ID и CI_MERGE_REQUEST_IID, адрес — из CI_SERVER_URL.
  * Переменные:
@@ -25,6 +29,8 @@ import { runApprove, createClassifier, gateExitCode } from '../electron/lib/ship
 import { runReview, createReviewModel } from '../electron/lib/ship/review.js';
 import { collectDecisions, agreementReport, formatReport } from '../electron/lib/ship/report.js';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { runSteward, createAgentRunner } from '../electron/lib/ship/steward.js';
 
 const args = process.argv.slice(2);
 const role = args[0];
@@ -35,7 +41,7 @@ const option = (name) => {
 const env = process.env;
 
 async function main() {
-  if (!['approve', 'review', 'report'].includes(role)) throw new Error('роль: review, approve или report (steward — следующий шаг, E3.E)');
+  if (!['approve', 'review', 'report', 'steward'].includes(role)) throw new Error('роль: review, approve, steward или report');
   const project = option('--project') || env.CI_PROJECT_ID;
   if (role === 'report') {
     if (!project) throw new Error('нужен --project (или CI_PROJECT_ID)');
@@ -49,6 +55,42 @@ async function main() {
   if (!project || !iid) throw new Error('нужны --project и --mr (или CI_PROJECT_ID и CI_MERGE_REQUEST_IID)');
   const gitlab = createGitlab({ url: env.GITLAB_URL || env.CI_SERVER_URL, token: env.GITLAB_TOKEN });
   const modelId = (value) => (String(value || '').includes('/') ? String(value).slice(String(value).indexOf('/') + 1) : String(value || ''));
+  if (role === 'steward') {
+    const stewardToken = env.MAI_SHIP_STEWARD_TOKEN || env.GITLAB_TOKEN;
+    const stewardGitlab = createGitlab({ url: env.GITLAB_URL || env.CI_SERVER_URL, token: stewardToken });
+    const cwd = env.CI_PROJECT_DIR || process.cwd();
+    const git = (gitArgs) => execFileSync('git', gitArgs, { cwd, encoding: 'utf8' });
+    const push = (branch) => {
+      const server = new URL(env.CI_SERVER_URL || env.GITLAB_URL);
+      const repoPath = env.CI_MERGE_REQUEST_SOURCE_PROJECT_PATH || env.CI_PROJECT_PATH;
+      if (!repoPath) throw new Error('не известен путь проекта (CI_PROJECT_PATH)');
+      const remote = `${server.protocol}//oauth2:${encodeURIComponent(stewardToken)}@${server.host}/${repoPath}.git`;
+      execFileSync('git', ['push', remote, `HEAD:refs/heads/${branch}`], { cwd, stdio: ['ignore', 'ignore', 'pipe'] });
+    };
+    const runAgentTask = async (task, { rules }) => {
+      const { runAgent } = await import('../electron/lib/agent.js');
+      const mr = await stewardGitlab.getMr(project, iid);
+      const shipCfg = (await import('yaml')).parse((await stewardGitlab.getFile(project, '.mai-code/ship.yaml', mr.target_branch)) || '') || {};
+      const model = modelId(shipCfg.providers?.steward || shipCfg.providers?.executor);
+      if (!env.SHIP_STEWARD_BASE_URL || !env.SHIP_STEWARD_API_KEY || !model) throw new Error('модель steward не настроена: providers.steward, SHIP_STEWARD_BASE_URL, SHIP_STEWARD_API_KEY');
+      const runner = createAgentRunner({
+        runAgent,
+        provider: { baseURL: env.SHIP_STEWARD_BASE_URL, apiKey: env.SHIP_STEWARD_API_KEY, name: 'steward' },
+        model,
+        projectDir: cwd,
+        maxIterations: Number(shipCfg.steward?.max_iterations || 30),
+        log: (name) => console.log(`  · ${name}`),
+      });
+      return runner(task, { rules });
+    };
+    const mrForModel = await stewardGitlab.getMr(project, iid);
+    const cfg = (await import('yaml')).parse((await stewardGitlab.getFile(project, '.mai-code/ship.yaml', mrForModel.target_branch)) || '') || {};
+    const out = await runSteward({ gitlab: stewardGitlab, project, iid, git, runAgentTask, push, model: String(cfg.providers?.steward || cfg.providers?.executor || ''), env, dryRun: args.includes('--dry-run') });
+    for (const r of out.replies || []) console.log(`MAI Ship steward: ${r}`);
+    console.log(`MAI Ship steward: ${out.status}${out.reason ? ` — ${out.reason}` : ''}${out.sha ? ` — коммит ${out.sha.slice(0, 12)}` : ''}`);
+    if (out.task && args.includes('--dry-run')) console.log(`\n${out.task}`);
+    return 0;
+  }
   if (role === 'review') {
     const makeModel = (shipCfg) => {
       const model = modelId(shipCfg.providers?.reviewer);

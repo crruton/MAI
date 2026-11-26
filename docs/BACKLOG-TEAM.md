@@ -46,6 +46,7 @@
 | 26.11.2026 | TODO E3.H0: боевая проверка ревьюера и approver | бэклог, `tasks.md` | ждёт тестовый GitLab-проект, бот-учётку и ключи моделей |
 | 26.11.2026 | E3.C1: команда `/ship` | `renderer/app.js`, `commands.js`, `docs/SHIP.md`, `test-ui` (338) | коммит через `&&` остался бы без трейлера `Agent-Model` — в промпте явно отдельной командой |
 | 27.11.2026 | E3.F6, E3.G2, E3.B6: журнал решений, согласие, шаблоны политик | ADR 0121, `ship/report.js`, `mai-ship report`, навык `ship-setup`, `test-ship-report` (18), `test-ship-templates` (24) | — |
+| 27.11.2026 | E3.A5, E3.E1, E3.E5–E7: steward и цикл агента без Electron | ADR 0122, `electron-shim.js`, `ship/steward.js`, джоба `ship:steward`, `test-ship-steward` (22), `test-agent-loop` в Node (177) | `git status` показывал новую папку целиком — миграция проходила мимо запретных путей; CLI не передавал MCP — steward упал бы на первом запуске; `needs: []` с `on_failure` не запускал бы джобу никогда |
 | 26.11.2026 | прогон `npm test` | — | вне этой работы: `test-web` и `test-local-models` иногда падают на выходе (`UV_HANDLE_CLOSING`, Node 24.19 на Windows); `test-shell` падает, если на машине установлен `repowise`. Оба дефекта есть на чистом `dev` — пункт Q8 |
 
 ---
@@ -237,7 +238,7 @@
 | E3.A2 ✓ | ADR «Approval policy as code»: формат `.mai-code/approval-policy.yaml`, чтение только из target branch, приоритет над `ship.yaml` | P1 | 1 | ADR + JSON Schema | — |
 | E3.A3 ✓ | ADR «Разделение провайдеров»: исполнитель, ревьюер и approver — разные провайдеры или модели; проверка до запуска | P1 | 0.5 | ADR APPROVED | — |
 | E3.A4 | Бот-учётки GitLab: `mai-ship-steward` (Developer, push в feature-ветки) и `mai-ship-approver` (право апрува, без push). Токены — в CI/CD variables группы, protected, masked | P1 | 0.5 | approver не может пушить, steward не может апрувить | E3.A1 |
-| E3.A5 | Headless-движок: вынести `AgentLoop` и PolicyEngine MAI в пакет без Electron, запуск `mai ship <role>` в контейнере. Образ — в Harbor | P1 | 4 | `mai ship review --mr <url>` работает в Docker без окна | E3.A1 |
+| E3.A5 ✓ | Headless-движок: вынести `AgentLoop` и PolicyEngine MAI в пакет без Electron, запуск `mai ship <role>` в контейнере. Образ — в Harbor | P1 | 4 | `mai ship review --mr <url>` работает в Docker без окна | E3.A1 |
 | E3.A6 ✓ | Модель угроз: diff, описание MR и комментарии — данные, а не инструкции; `@mai` принимается только от участников с ролью ≥ Developer | P1 | 1 | раздел в ADR, тесты injection | E3.A2 |
 
 ### E3.B. Конфигурация и политика
@@ -274,13 +275,13 @@
 
 | ID | Задача | P | Дн | Критерий приёмки | Зав. |
 |---|---|---|---|---|---|
-| E3.E1 | Триггеры: pipeline failed, конфликт с target, новые blocking-находки, комментарий `@mai <указание>` | P1 | 2 | каждый триггер запускает steward ровно один раз (идемпотентность по событию) | E3.A1 |
+| E3.E1 ✓ | Триггеры: pipeline failed, конфликт с target, новые blocking-находки, комментарий `@mai <указание>` | P1 | 2 | каждый триггер запускает steward ровно один раз (идемпотентность по событию) | E3.A1 |
 | E3.E2 | Починка CI: классификация падения (devops-скилл `ci-job-triage` из каталога, E1.6): flaky → retry, код → фикс, инфраструктура → эскалация | P1 | 3 | инфраструктурные падения не «чинятся» кодом | E3.E1 |
 | E3.E3 | Конфликты: rebase через API или локальный merge target; при неоднозначности — комментарий человеку | P1 | 2 | неоднозначный конфликт не разрешается молча | E3.E1 |
 | E3.E4 | Ответ на находки: правка, ответ в discussion, resolve только своих исправленных | P1 | 2 | чужие discussion steward не закрывает | E3.D4 |
-| E3.E5 | После каждого push — комментарий: что изменено, SHA, команда отката (`git revert <sha>`) | P1 | 0.5 | у каждого push steward есть комментарий | E3.E2 |
-| E3.E6 | Ограничения: steward не апрувит, не мержит, не снимает Draft, не трогает пути из `require_human`, лимит раундов на MR (по умолчанию 3) | P1 | 1 | тесты на каждый запрет | E3.B3 |
-| E3.E7 | `@mai stop` и `@mai resume`: метка `ship::paused`, подтверждающий комментарий | P1 | 0.5 | после stop нет ни одного push | E3.B5 |
+| E3.E5 ✓ | После каждого push — комментарий: что изменено, SHA, команда отката (`git revert <sha>`) | P1 | 0.5 | у каждого push steward есть комментарий | E3.E2 |
+| E3.E6 ✓ | Ограничения: steward не апрувит, не мержит, не снимает Draft, не трогает пути из `require_human`, лимит раундов на MR (по умолчанию 3) | P1 | 1 | тесты на каждый запрет | E3.B3 |
+| E3.E7 ✓ | `@mai stop` и `@mai resume`: метка `ship::paused`, подтверждающий комментарий | P1 | 0.5 | после stop нет ни одного push | E3.B5 |
 
 ### E3.F. Ship Approver
 

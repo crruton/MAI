@@ -222,8 +222,8 @@ check('новый коммит во время оценки → 3', (await gate(
 console.log('[7] CLI');
 const cli = spawnSync(process.execPath, [path.join(repo, 'scripts', 'mai-ship.mjs'), 'approve'], { encoding: 'utf8', env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot || '' } });
 check('без проекта и MR — код 1 и подсказка', cli.status === 1 && /--project и --mr/.test(cli.stderr), cli.stderr);
-const wrong = spawnSync(process.execPath, [path.join(repo, 'scripts', 'mai-ship.mjs'), 'steward'], { encoding: 'utf8' });
-check('неготовая роль — понятная ошибка', wrong.status === 1 && /steward — следующий шаг/.test(wrong.stderr), wrong.stderr);
+const wrong = spawnSync(process.execPath, [path.join(repo, 'scripts', 'mai-ship.mjs'), 'deploy'], { encoding: 'utf8' });
+check('неизвестная роль — список ролей', wrong.status === 1 && /review, approve, steward или report/.test(wrong.stderr), wrong.stderr);
 
 console.log(`\nship-approve: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);
