@@ -2131,6 +2131,8 @@ app.whenReady().then(async () => {
     check('/security-review 7: gh pr diff, только чтение, путь атаки и уверенность', /gh pr diff 7/.test(sec?.text) && /файлы не меняй/.test(sec?.text) && /путь атаки/.test(sec?.text) && /уверенность/.test(sec?.text), sec?.text?.slice(0, 200));
     const pr = await slash('/pr для релиза');
     check('/pr: шаблон репозитория, не пушить в защищённую, без merge', /pull_request_template/.test(pr?.text) && /в защищённую ветку не пушь/.test(pr?.text) && /Не мерджи PR/.test(pr?.text) && /для релиза/.test(pr?.text), pr?.text?.slice(0, 200));
+    const ship = await slash('/ship MAI-42');
+    check('/ship: проверки до push, коммит отдельной командой (атрибуция), Draft, без merge (E3.C1)', /Красное не пушь/.test(ship?.text) && /не склеивай через && или ;/.test(ship?.text) && /glab mr create --draft/.test(ship?.text) && /gh pr create --draft/.test(ship?.text) && /Draft не снимай/.test(ship?.text) && /to-mr/.test(ship?.text) && /MAI-42/.test(ship?.text) && ship?.displayText === '/ship MAI-42', ship?.text?.slice(0, 300));
     await ui(`(() => { const i = document.querySelector('#input'); i.value = '/worktree'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
     await wait(500);
     const wtRows = await ui(`[...document.querySelectorAll('.worktree-row')].map((r) => r.querySelector('b').textContent + ':' + Boolean(r.querySelector('.worktree-remove'))).join('|')`);

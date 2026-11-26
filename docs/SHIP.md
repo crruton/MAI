@@ -7,6 +7,14 @@
 MAI Ship — механика Claude Ship на GitLab: ревью, steward и approver по политике-файлу.
 Готовы **ревьюер** и **approver**. Steward — следующий шаг.
 
+## /ship в MAI
+
+`/ship [ключ задачи]` в чате MAI доводит работу до Draft MR: проверки проекта до push, коммит
+отдельной командой `git commit` (MAI добавит трейлеры `Agent-Model` и `Agent-User`, ADR 0116 —
+по ним approver проверяет независимость модели), ветка, push, Draft MR через `glab` (или Draft
+PR через `gh`) с описанием по навыку `to-mr`. Draft не снимается, merge не делается — дальше
+ревьюер и approver в CI.
+
 ## Как работает ревьюер
 
 1. Берёт diff MR и `AGENTS.md` target branch (секреты маскируются).

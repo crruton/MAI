@@ -44,7 +44,7 @@
 
 ## 6. MAI Code
 
-- [ ] Добавить команду `/ship`: preflight, commit с трейлером `Agent-Model`, push, Draft MR по навыку `to-mr`. (E3.C1)
+- [x] Добавить команду `/ship`: preflight, commit с трейлером `Agent-Model`, push, Draft MR по навыку `to-mr`. (E3.C1)
 - [ ] Показать статус MR в ленте и на доске «Доставка». (E3.C2)
 
 ## 7. Метрики и пилот

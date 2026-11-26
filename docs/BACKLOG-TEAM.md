@@ -44,6 +44,7 @@
 | 26.11.2026 | E3: approver без окна, CI-шаблон, гейт GitLab Free | ADR 0119, `ship/gitlab.js`, `ship/approve.js`, `scripts/mai-ship.mjs`, `ci/mai-ship.gitlab-ci.yml`, `docs/SHIP.md`, `test-ship-approve` (37) | предварительная оценка без ответов классификаторов никогда не давала approve — модель не звалась вовсе; на Free «нужен человек» давал зелёную джобу — MR вливался без человека; гейт пропускал устаревший апрув |
 | 26.11.2026 | E3.D1–D4: ревьюер; статус своего pipeline | ADR 0120, `ship/review.js`, джоба `ship:review`, `test-ship-review` (21), `test-ship-approve` (40) | approver внутри своего pipeline видел `running` и блокировал бы каждый MR |
 | 26.11.2026 | TODO E3.H0: боевая проверка ревьюера и approver | бэклог, `tasks.md` | ждёт тестовый GitLab-проект, бот-учётку и ключи моделей |
+| 26.11.2026 | E3.C1: команда `/ship` | `renderer/app.js`, `commands.js`, `docs/SHIP.md`, `test-ui` (338) | коммит через `&&` остался бы без трейлера `Agent-Model` — в промпте явно отдельной командой |
 | 26.11.2026 | прогон `npm test` | — | вне этой работы: `test-web` и `test-local-models` иногда падают на выходе (`UV_HANDLE_CLOSING`, Node 24.19 на Windows); `test-shell` падает, если на машине установлен `repowise`. Оба дефекта есть на чистом `dev` — пункт Q8 |
 
 ---
@@ -253,7 +254,7 @@
 
 | ID | Задача | P | Дн | Критерий приёмки | Зав. |
 |---|---|---|---|---|---|
-| E3.C1 | Команда `/ship`: проверки локально, commit с трейлером `Agent-Model`, push, `glab mr create --draft` по скиллу `to-mr` | P1 | 2 | из чата MAI создаётся Draft MR с описанием Summary/Evidence/Merge Danger | E1.5 |
+| E3.C1 ✓ | Команда `/ship`: проверки локально, commit с трейлером `Agent-Model`, push, `glab mr create --draft` по скиллу `to-mr` | P1 | 2 | из чата MAI создаётся Draft MR с описанием Summary/Evidence/Merge Danger | E1.5 |
 | E3.C2 | Статус MR в MAI: pipeline, находки ревью, действия steward, решение approver'а; обновление по опросу `glab` | P1 | 2 | карточка MR в ленте и на доске «Доставка» | E3.C1 |
 | E3.C3 | Локальный steward: если CI красный, MAI предлагает починить в том же чате до передачи облачному steward | P2 | 2 | исправление красного CI без ухода из MAI | E3.C2 |
 | E3.C4 | Связь с Multica MAI: ключ issue в заголовке MR, статус issue по состоянию MR | P2 | 1 | merge закрывает issue | E2.3 |

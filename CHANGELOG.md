@@ -10,6 +10,9 @@
 
 ### Added
 
+- Команда `/ship [ключ]` (E3.C1, MAI Ship): проверки проекта до push, коммит отдельной
+  командой (трейлеры `Agent-Model`/`Agent-User`), ветка, push, Draft MR через `glab` или Draft
+  PR через `gh` с описанием по навыку `to-mr`; без снятия Draft и merge. Группа «Git» в «/».
 - MAI Ship: ревьюер (ADR 0120) — `node scripts/mai-ship.mjs review` и джоба `ship:review`:
   находки по направлениям уровня, состязательная проверка каждой, обсуждения на строках diff
   без дублей, сводка и метка `ship::blocking` для approver'а. Тест `test-ship-review` (21).
