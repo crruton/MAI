@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CATALOG } from './marketplace.js';
 import { MANIFEST, NAME_RE } from './packages.js';
+import { validateRoles } from './catalog-roles.js';
 
 export const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 export const POLICY_FILE = 'catalog/catalog-policy.json';
@@ -170,6 +171,7 @@ export function checkCatalog(root) {
   // Ссылки «навык `имя`» — на навык каталога или встроенный навык MAI (`skills/` в корне).
   const builtin = fs.existsSync(path.join(root, 'skills')) ? fs.readdirSync(path.join(root, 'skills')) : [];
   const known = new Set([...seen, ...builtin]);
+  errors.push(...validateRoles(index).map((e) => `${CATALOG}: ${e}`));
   for (const { from, ref } of refs) if (!known.has(ref)) errors.push(`${from}: ссылка на навык «${ref}», которого нет в каталоге`);
   return { errors, warnings, packages: seen.size, skills };
 }

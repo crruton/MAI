@@ -2785,6 +2785,8 @@ async function openOnboarding() {
       return;
     }
     for (const w of result.warnings || []) toast(w, 'err');
+    const fromCatalog = [...(result.catalogSkills?.installed || []), ...(result.catalogSkills?.updated || [])];
+    if (fromCatalog.length) toast(`Навыки команды для роли: ${fromCatalog.join(', ')}`, 'ok');
     connectors(result.package);
   };
 

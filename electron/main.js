@@ -34,6 +34,7 @@ import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalize
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { listRoles, installRole } from './lib/roles.js';
+import { installRoleSkills, catalogRoles } from './lib/catalog-roles.js';
 import { skillConflicts } from './lib/skills.js';
 import { wrapData } from './lib/injection.js';
 import { localConnectors } from './lib/local-connectors.js';
@@ -2353,6 +2354,17 @@ ipcMain.handle('roles:list', () => {
   };
 });
 
+/**
+ * Каталоги команды для навыков роли (E1.7, ADR 0115): подключённые в /packages, у которых
+ * в индексе есть роли, и корень MAI, если приложение запущено из исходников.
+ */
+function teamCatalogs() {
+  const own = path.join(__dirname, '..');
+  const list = marketplaces().filter((m) => Object.keys(catalogRoles(catalogDir(m, dataDir()))).length);
+  if (!list.length && fs.existsSync(path.join(own, CATALOG))) list.push({ name: 'mai-team', url: own });
+  return list;
+}
+
 ipcMain.handle('roles:install', async (_e, id) => {
   try {
     const { role, package: pkg } = installRole({ id, rolesDir: rolesDir(), dataDir: dataDir() });
@@ -2360,8 +2372,17 @@ ipcMain.handle('roles:install', async (_e, id) => {
     const settings = loadSettings();
     saveSettings({ packages: { ...(settings.packages || {}), [pkg.name]: { ...(settings.packages?.[pkg.name] || {}), enabled: true } }, onboarding: { ...(settings.onboarding || {}), role: role.id } });
     audit({ at: new Date().toISOString(), tool: 'role:install', source: 'user', cls: 'external', subject: `${role.id} → ${pkg.name} ${role.version}`, decision: 'allow' });
+    // Навыки роли из каталога команды: новые ставятся, более новые версии обновляются.
+    const catalogSkills = { installed: [], updated: [], skipped: [], errors: [] };
+    for (const market of teamCatalogs()) {
+      const r = installRoleSkills({ market, role: role.id, dataDir: dataDir() });
+      for (const key of Object.keys(catalogSkills)) catalogSkills[key].push(...r[key]);
+    }
+    if (catalogSkills.installed.length || catalogSkills.updated.length) {
+      audit({ at: new Date().toISOString(), tool: 'role:catalog-skills', source: 'user', cls: 'external', subject: `${role.id}: +${catalogSkills.installed.join(',')} ↑${catalogSkills.updated.join(',')}`, decision: 'allow' });
+    }
     const { dir: _dir, ...clean } = role;
-    return { ok: true, role: clean, package: { name: pkg.name, parts: pkg.parts }, warnings: packageSkillWarnings(pkg.name) };
+    return { ok: true, role: clean, package: { name: pkg.name, parts: pkg.parts }, catalogSkills, warnings: [...packageSkillWarnings(pkg.name), ...catalogSkills.errors] };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }

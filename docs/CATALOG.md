@@ -99,6 +99,26 @@ npm.cmd run skills:export -- --target claude --project C:workapp grilling tdd
 новые версии, `--prune` удаляет навыки, которых больше нет в каталоге
 ([ADR 0114](adr/0114-eksport-navykov-v-drugie-agenty.md)).
 
+## Наборы по ролям
+
+Поле `roles` в `mai-marketplace.json` перечисляет навыки роли ([ADR 0115](adr/0115-nabory-navykov-po-rolyam.md)):
+
+| Роль | Навыки |
+|---|---|
+| developer | code-review, debug, diagnosing-bugs, tdd, ponytail, to-mr, documentation, tech-debt, openspec, stop-slop |
+| analyst | request-triage, product-discovery, customer-interview, product-prd, pbc, openspec, change-request, use-cases, grilling, system-design, stop-slop |
+| pm | request-triage, product-discovery, customer-interview, product-prd, task-breakdown, standup, release-notes, grilling, stop-slop |
+| qa | use-cases, testing-strategy, code-review, ponytail-review, diagnosing-bugs, incident-response |
+| lead | architecture, system-design, code-review, task-breakdown, tech-debt, standup, grilling, incident-response |
+
+Мастер первого запуска (`/onboarding`) ставит вместе с набором роли её навыки из каталога.
+Из терминала:
+
+```powershell
+npm.cmd run skills:export -- --target claude --role analyst
+npm.cmd run multica:skills -- --role developer
+```
+
 ## Ссылки между навыками
 
 Фраза «навык `имя`» или «скилл `имя`» в навыке каталога должна вести на навык каталога или
@@ -114,4 +134,3 @@ npm.cmd run skills:export -- --target claude --project C:workapp grilling tdd
 ## Ограничения
 
 - Правка навыка в папке другого агента перезапишется при экспорте новой версии: править нужно в каталоге.
-- Наборов по ролям пока нет (E1.7): навыки ставятся по одному.

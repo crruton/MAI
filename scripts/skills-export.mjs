@@ -6,6 +6,7 @@
  *   npm.cmd run skills:export -- --target claude,opencode,codex
  *   npm.cmd run skills:export -- --target claude --project C:\work\app grilling tdd
  *   npm.cmd run skills:export -- --target codex --prune
+ *   npm.cmd run skills:export -- --target claude --role analyst
  *
  * Без `--project` — в папку пользователя (`~/.claude/skills` и т. д.), с ним — в проект.
  * Каталог — корень этого репозитория или `--root <папка>`.
@@ -31,6 +32,7 @@ const option = (name) => {
 
 const dryRun = flag('--dry-run');
 const prune = flag('--prune');
+const role = option('--role');
 const targets = option('--target').split(',').map((t) => t.trim()).filter(Boolean);
 const projectDir = option('--project');
 const root = path.resolve(option('--root') || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
@@ -38,7 +40,7 @@ const names = args.filter((a) => !a.startsWith('-'));
 
 try {
   if (!targets.length) throw new Error(`укажите --target: ${Object.keys(TARGETS).join(', ')} (через запятую)`);
-  const report = exportSkills({ root, targets, projectDir: projectDir ? path.resolve(projectDir) : '', names, prune, dryRun });
+  const report = exportSkills({ root, targets, projectDir: projectDir ? path.resolve(projectDir) : '', names, role, prune, dryRun });
   for (const r of report.results) {
     console.log(`${dryRun ? 'План' : 'Экспорт'} → ${r.label} (${r.dir}): ${dryRun ? 'создать' : 'создано'} ${r.created}, ${dryRun ? 'обновить' : 'обновлено'} ${r.updated}, без изменений ${r.unchanged}, конфликтов ${r.conflicts}${prune ? `, ${dryRun ? 'удалить' : 'удалено'} ${r.deleted}` : ''}`);
     for (const a of r.actions) if (a.action !== 'unchanged') console.log(`  ${a.action.padEnd(9)} ${a.name}${a.reason ? ` — ${a.reason}` : ''}`);

@@ -10,6 +10,10 @@
 
 ### Added
 
+- Наборы навыков каталога по ролям (ADR 0115): поле `roles` в `mai-marketplace.json`
+  (developer, analyst, pm, qa, lead). Мастер первого запуска ставит навыки роли из
+  каталога команды; `--role` у `skills:export` и `multica:skills`. Проверка каталога
+  проверяет роли. Модуль `electron/lib/catalog-roles.js`, тест `test-catalog-roles` (19).
 - Каталог: навыки `openspec` (change по PBC, delta specs, архив) и `task-breakdown`
   (нарезка PBC на задачи по логике). Проверка каталога не пропускает ссылку на навык,
   которого нет ни в каталоге, ни среди встроенных навыков MAI.

@@ -372,6 +372,13 @@ ADR 0114. `skills-export.js` (без Electron) — `TARGETS` (claude, opencode, 
 подмена). Навыки — `collectCatalogSkills` из `multica-skills.js`. Скрипт
 `scripts/skills-export.mjs` (`npm run skills:export`).
 
+### Наборы навыков каталога по ролям
+
+ADR 0115. `catalog-roles.js` (без Electron) — `catalogRoles`, `roleSkillNames`, `validateRoles`
+(вызывается из `catalog-check.js`), `installRoleSkills`. В main.js — `teamCatalogs()` и навыки
+роли в `roles:install` (поле ответа `catalogSkills`). Опция `role` у `pushSkills` и
+`exportSkills`, ключ `--role` у скриптов.
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,

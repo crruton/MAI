@@ -305,7 +305,7 @@ ipcMain.handle('roles:list', () => ({
 }));
 ipcMain.handle('roles:install', (_e, id) => {
   roleCalls.push(id);
-  return { ok: true, role: { id }, package: { name: `role-${id}`, parts: { skills: 1, commands: 1 } } };
+  return { ok: true, role: { id }, package: { name: `role-${id}`, parts: { skills: 1, commands: 1 } }, catalogSkills: { installed: ['code-review', 'tdd'], updated: [], skipped: [], errors: [] } };
 });
 const localCalls = [];
 const boardOpens = [];
@@ -1976,6 +1976,8 @@ app.whenReady().then(async () => {
     await wait(400);
     const step2 = await ui(`document.querySelector('.onboarding-installed')?.textContent || ''`);
     check('выбор роли ставит набор и показывает, что в нём', roleCalls.join() === 'developer' && /навыков 1, команд 1/.test(step2), step2);
+    const roleToasts = await ui(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ')`);
+    check('мастер сообщает о навыках команды для роли (E1.7)', /Навыки команды для роли: code-review, tdd/.test(roleToasts), roleToasts);
     await ui(`document.querySelector('.onboarding-connect').click()`);
     await wait(500);
     const shown = await ui(`[...document.querySelectorAll('.connector')].map((c) => c.dataset.id).join()`);

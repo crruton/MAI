@@ -164,5 +164,61 @@
       "description": "Нарезка PBC продукта на задачи разработки по логике, а не по дням: законченная часть функциональности — одна задача (API сущности со всеми слоями, CI целиком).",
       "source": "catalog/task-breakdown"
     }
-  ]
+  ],
+  "roles": {
+    "developer": [
+      "code-review",
+      "debug",
+      "diagnosing-bugs",
+      "tdd",
+      "ponytail",
+      "to-mr",
+      "documentation",
+      "tech-debt",
+      "openspec",
+      "stop-slop"
+    ],
+    "analyst": [
+      "request-triage",
+      "product-discovery",
+      "customer-interview",
+      "product-prd",
+      "pbc",
+      "openspec",
+      "change-request",
+      "use-cases",
+      "grilling",
+      "system-design",
+      "stop-slop"
+    ],
+    "pm": [
+      "request-triage",
+      "product-discovery",
+      "customer-interview",
+      "product-prd",
+      "task-breakdown",
+      "standup",
+      "release-notes",
+      "grilling",
+      "stop-slop"
+    ],
+    "qa": [
+      "use-cases",
+      "testing-strategy",
+      "code-review",
+      "ponytail-review",
+      "diagnosing-bugs",
+      "incident-response"
+    ],
+    "lead": [
+      "architecture",
+      "system-design",
+      "code-review",
+      "task-breakdown",
+      "tech-debt",
+      "standup",
+      "grilling",
+      "incident-response"
+    ]
+  }
 }
