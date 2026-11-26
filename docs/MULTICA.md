@@ -132,6 +132,11 @@ npm.cmd run multica:sync
 Не проверено на живом сервере: формат ответа `workspace list` и `project list`.
 Если список пуст или пришла ошибка, id можно вписать в файл вручную.
 
+## Навыки
+
+Навыки каталога команды отдаются в workspace кнопкой **Навыки → Multica** или
+`npm.cmd run multica:skills` — см. [каталог](CATALOG.md) и ADR 0113.
+
 ## Почему CLI, а не REST
 
 Multica — Go-сервер с REST API, но публичная документация описывает CLI

@@ -355,6 +355,16 @@ ADR 0112. `multica-target.js` (без Electron) — `resolveTarget` (личны�
 блок «Этот проект» в панели Multica (`.multica-ws`, `.multica-project`,
 `.multica-save-target`).
 
+### Навыки каталога → Multica
+
+ADR 0113. `multica-skills.js` (без Electron, CLI — параметр `run`) — `collectCatalogSkills`
+(LF, без двоичных), `skillHash`, `planSkillPush` (create / update / unchanged / conflict /
+delete), `remoteSkills` (`skill list`, `config` через `skill get`), `pushSkills`
+(временная копия навыка, `--content-file`, `skill files upsert`). `multica.pushCatalogSkills`,
+IPC `multica:pushSkills` (ADMIN); каталог — подключённый в `/packages` или корень MAI
+(`skillCatalogRoot`). Скрипт `scripts/multica-skills.mjs`. В app.js — кнопка
+`.multica-skills` в панели Multica.
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,

@@ -7,6 +7,12 @@ import { listChanges, taskMarker, statusUpdatesFromIssues, applyTaskStatuses } f
 import { targetArgs, issueListArgs, issueCreateArgs, issueUpdateArgs, normalizeWorkspaces, normalizeProjects } from './multica-target.js';
 
 export { resolveTarget, saveProjectTarget } from './multica-target.js';
+import { pushSkills } from './multica-skills.js';
+
+/** Навыки каталога → Multica (E1.8, ADR 0113). `root` — корень каталога. */
+export function pushCatalogSkills(root, target = {}, { names = [], prune = false, dryRun = false } = {}) {
+  return pushSkills({ root, target, names, prune, dryRun, run: (args, options = {}) => run(args, { timeout: 60_000, ...options }) });
+}
 
 /**
  * Синхронизация OpenSpec → Multica через официальный CLI.

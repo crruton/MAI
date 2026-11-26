@@ -209,6 +209,7 @@ contextBridge.exposeInMainWorld('mai', {
     workspaces: () => invoke('multica:workspaces'),
     projects: (workspaceId) => invoke('multica:projects', workspaceId),
     setTarget: (payload) => invoke('multica:setTarget', payload),
+    pushSkills: (payload) => invoke('multica:pushSkills', payload),
   },
   sandbox: {
     status: () => invoke('sandbox:status'),

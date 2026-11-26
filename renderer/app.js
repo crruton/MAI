@@ -6498,6 +6498,26 @@ async function openMultica() {
           }
         },
       }),
+      // Навыки каталога → Multica (E1.8, ADR 0113): сначала план, затем запись.
+      el('button', {
+        class: 'btn multica-skills',
+        type: 'button',
+        text: 'Навыки → Multica',
+        title: 'Отдать навыки каталога команды в workspace этого проекта. Навыки, созданные вручную, не меняются',
+        onclick: async () => {
+          try {
+            const plan = await api.multica.pushSkills({ projectDir: state.projectDir, dryRun: true });
+            if (!plan.created && !plan.updated) return toast(plan.message, 'ok');
+            if (!window.confirm(`${plan.message}. Записать в Multica?`)) return;
+            const res = await api.multica.pushSkills({ projectDir: state.projectDir });
+            toast(res.message, 'ok');
+            const conflicts = res.actions.filter((a) => a.action === 'conflict').map((a) => a.name);
+            if (conflicts.length) toast(`Не тронуты (созданы вручную): ${conflicts.join(', ')}`);
+          } catch (err) {
+            toast(`Multica: ${err.message}`, 'err');
+          }
+        },
+      }),
       // Обратное направление (F14): «готово» в Multica → [x] в tasks.md.
       el('button', {
         class: 'btn multica-pull',

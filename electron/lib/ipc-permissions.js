@@ -173,6 +173,7 @@ export const IPC_PERMISSIONS = {
   'multica:workspaces': ANY,
   'multica:projects': ANY,
   'multica:setTarget': ADMIN,
+  'multica:pushSkills': ADMIN,
   'multica:syncDocs': ADMIN,
   // Статусы Multica → tasks.md (F14).
   'multica:pullStatuses': ADMIN,

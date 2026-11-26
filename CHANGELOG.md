@@ -10,6 +10,11 @@
 
 ### Added
 
+- Навыки каталога → Multica MAI (ADR 0113): кнопка «Навыки → Multica» в панели и
+  `npm.cmd run multica:skills` (`--dry-run`, `--prune`, имена). Свои навыки помечаются
+  `config.managed_by: mai-code` с версией и хэшем; повтор ничего не меняет; навык,
+  созданный вручную, не перезаписывается. Хэш и загрузка — с LF, чтобы Windows и Linux
+  не гоняли навыки по кругу. IPC `multica:pushSkills`, тест `test-multica-skills` (23).
 - Multica: workspace и проект для репозитория (ADR 0112). Выбор в панели «Multica» →
   «Этот проект», хранение в `.mai-code/settings.json` (для команды, в git) или
   `settings.local.json` (личное). CLI получает `--workspace-id` и `--project`; id

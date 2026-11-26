@@ -53,6 +53,22 @@
    node scripts/test-catalog.mjs
    ```
 
+## Отдать навыки в Multica MAI
+
+Панель «Multica» → **Навыки → Multica**: MAI покажет план и спросит подтверждение. Из
+терминала:
+
+```powershell
+npm.cmd run multica:skills -- --dry-run
+npm.cmd run multica:skills
+npm.cmd run multica:skills -- grilling tdd
+```
+
+Навыки попадают в workspace проекта ([MULTICA.md](MULTICA.md)). Повторный запуск меняет
+только навыки с новой версией или правкой. Навык с тем же именем, созданный в Multica
+вручную, не перезаписывается. `--prune` удаляет из Multica навыки каталога, которых
+больше нет в каталоге ([ADR 0113](adr/0113-navyki-kataloga-v-multica.md)).
+
 ## Что не попадает в каталог
 
 Репозиторий публичный. Проверка не пропускает токены, приватные ключи, хосты из
@@ -62,6 +78,5 @@
 
 ## Ограничения
 
-- Отдача навыков в Multica MAI и экспорт в Claude Code и OpenCode — ещё не сделаны
-  ([бэклог](BACKLOG-TEAM.md), E1.8 и E1.9).
+- Экспорт в Claude Code и OpenCode — ещё не сделан ([бэклог](BACKLOG-TEAM.md), E1.9).
 - Наборов по ролям пока нет (E1.7): навыки ставятся по одному.

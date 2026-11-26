@@ -30,7 +30,7 @@ import { createTracer, NO_TRACER } from './lib/tracer.js';
 import { createProjectStore } from './lib/projects.js';
 import { renderPdf, renderPng } from './lib/pdf-render.js';
 import { createAgentBrowser } from './lib/browser-agent.js';
-import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace } from './lib/marketplace.js';
+import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace, catalogDir, CATALOG } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
 import { listRoles, installRole } from './lib/roles.js';
@@ -3081,6 +3081,25 @@ ipcMain.handle('multica:setTarget', (_e, payload) => {
   if (!dir) throw new Error('Не выбрана папка проекта');
   if (!isTrusted(dir)) return needTrust(dir) || { ok: false, error: 'Папка проекта не доверена: настройки Multica в неё не записываются' };
   return multica.saveProjectTarget(dir, { workspaceId: payload?.workspaceId, projectId: payload?.projectId }, { scope: payload?.scope || 'project' });
+});
+/** Каталог для отдачи навыков: подключённый в /packages по имени или корень MAI из исходников. */
+function skillCatalogRoot(name) {
+  if (name) {
+    const market = marketplaces().find((m) => m.name === name);
+    if (!market) throw new Error(`Каталог «${name}» не подключён в /packages`);
+    return catalogDir(market, dataDir());
+  }
+  const own = path.join(__dirname, '..');
+  if (fs.existsSync(path.join(own, CATALOG))) return own;
+  const first = marketplaces()[0];
+  if (!first) throw new Error('Нет каталога: подключите его в /packages → «Каталоги»');
+  return catalogDir(first, dataDir());
+}
+// Навыки каталога → Multica MAI (E1.8, ADR 0113).
+ipcMain.handle('multica:pushSkills', (_e, payload) => {
+  requireAdmin();
+  const names = Array.isArray(payload?.names) ? payload.names.map(String) : [];
+  return multica.pushCatalogSkills(skillCatalogRoot(payload?.market), multicaTarget(payload?.projectDir), { names, prune: Boolean(payload?.prune), dryRun: Boolean(payload?.dryRun) });
 });
 ipcMain.handle('multica:syncDocs', (_e, projectDir) => {
   requireAdmin();

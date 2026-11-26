@@ -122,6 +122,7 @@ export const IPC_SCHEMAS = {
   'multica:target': [S_],
   'multica:projects': [S_],
   'multica:setTarget': [O],
+  'multica:pushSkills': [O_],
   'sandbox:start': [O_],
   'sandbox:stop': [O_],
   'sandbox:exec': [O_],
