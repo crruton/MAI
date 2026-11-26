@@ -10,6 +10,12 @@
 
 ### Added
 
+- MAI Ship: модуль политики апрува `electron/lib/ship/policy.js` (ADR 0109) —
+  чистая функция `evaluate` без модели: самозащита конфигурации, бюджет и
+  выключатель, гейты, правила (строгое решение сильнее), классификаторы только
+  ужесточают, observe никогда не ставит approve; семейства моделей и проверка
+  независимости approver'а `electron/lib/model-families.js` (ADR 0110). Тест
+  `scripts/test-ship-policy.mjs`, 65 проверок. Разбор YAML и вызовы GitLab — дальше.
 - MAI Ship для GitLab — спецификация (ADR 0108, 0109, 0110, статус proposed):
   ревью, steward и approver MR по образцу Claude Ship на примитивах GitLab;
   политика апрува `.mai-code/approval-policy.yaml` и настройки `.mai-code/ship.yaml`

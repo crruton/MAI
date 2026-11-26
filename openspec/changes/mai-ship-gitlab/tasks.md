@@ -5,8 +5,8 @@
 ## 1. Решения и доступ
 
 - [ ] Согласовать ADR 0108, 0109 и 0110. Перевести их в статус `accepted`. (E3.A1–A3)
-- [ ] Проверить pipeline trigger из вебхука и `TRIGGER_PAYLOAD` на версии GitLab Raft. (E3.A1)
-- [ ] Узнать тариф GitLab: Premium или Free. Выбрать способ апрува. (E3.F3)
+- [ ] Проверить pipeline trigger из вебхука и `TRIGGER_PAYLOAD` на тестовом GitLab (gitlab.com или self-hosted). (E3.A1)
+- [ ] Поддержать оба способа апрува: approve API (Premium) и обязательная джоба (Free). (E3.F3)
 - [ ] Создать бот-учётки `mai-ship-steward` и `mai-ship-approver`. Проверить, что steward не апрувит, а approver не пушит. (E3.A4)
 
 ## 2. Движок без окна
@@ -17,11 +17,14 @@
 
 ## 3. Политика
 
-- [ ] Добавить модуль `electron/lib/ship/policy.js`: разбор YAML, проверка по схемам, функция `evaluate`. (E3.B2, E3.B3)
-- [ ] Добавить правило самозащиты путей. (E3.A2)
-- [ ] Добавить модуль `electron/lib/model-families.js` и проверку семейств. (E3.A3, E3.F2)
-- [ ] Добавить учёт затрат на MR и на месяц. Добавить выключатель `MAI_SHIP_DISABLED`. (E3.B4, E3.B5)
-- [ ] Добавить тест `scripts/test-ship-policy.mjs`: 10 эталонных политик, все сценарии из `specs/ship/spec.md`, injection-кейсы. (E3.A6)
+- [x] Добавить модуль `electron/lib/ship/policy.js`: проверка по схеме, функция `evaluate`. (E3.B2, E3.B3)
+- [ ] Выбрать парсер YAML (новая зависимость — ADR). Читать файлы из target branch. (E3.A2)
+- [x] Добавить правило самозащиты путей. (E3.A2)
+- [x] Добавить модуль `electron/lib/model-families.js` и проверку семейств. (E3.A3, E3.F2)
+- [x] Учитывать бюджет и выключатель в `evaluate`. (E3.B4, E3.B5)
+- [ ] Считать затраты агентов на MR и на месяц. Читать `MAI_SHIP_DISABLED` в CI. (E3.B4, E3.B5)
+- [x] Добавить тест `scripts/test-ship-policy.mjs`: сценарии политики из `specs/ship/spec.md`, injection-кейсы. (E3.A6)
+- [ ] Добавить 10 эталонных политик для типов репозиториев. (E3.B6)
 
 ## 4. GitLab
 

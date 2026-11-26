@@ -8,8 +8,8 @@
 
 Агенты пишут код быстрее, чем люди успевают его апрувить. Узким местом стал ручной апрув.
 Anthropic описывает тот же вывод в Claude Ship (23.11.2026). Claude Ship состоит из трёх
-агентов: Code Review, PR Steward и Claude Approvals. Он работает только с GitHub. Репозитории,
-MR и хаб скиллов Raft живут в GitLab, поэтому Claude Ship нам не подходит.
+агентов: Code Review, PR Steward и Claude Approvals. Он работает только с GitHub. Команды,
+которые работают в MAI с GitLab (облачным или self-hosted), Claude Ship использовать не могут.
 
 В MAI уже есть безголовый режим `mai -p` (ADR 0077), ревизор `approve`/`revise` (ADR 0006),
 PolicyEngine (ADR 0027), субагенты (ADR 0075) и `/signoff` (ADR 0097). Серверного режима у
@@ -27,7 +27,7 @@ MAI Ship — три роли агента на безголовом движке
   `ship:review`, `ship:steward` и `ship:approval` запускаются на `merge_request_event`.
 - **События вне pipeline.** Комментарий `@mai …`, апрув человека и конфликт приходят вебхуком
   в pipeline trigger проекта (`/projects/:id/ref/:ref/trigger/pipeline`). Тело события
-  приходит в джобу как `TRIGGER_PAYLOAD`. Работу этого механизма на нашей версии GitLab
+  приходит в джобу как `TRIGGER_PAYLOAD`. Работу этого механизма на тестовом GitLab
   нужно проверить до реализации.
 - **Учётки.** `mai-ship-steward` — роль Developer, push только в feature-ветки, апрувить не
   может. `mai-ship-approver` — право апрува, push не может. Токены хранятся в CI/CD variables
@@ -51,11 +51,11 @@ MAI Ship — три роли агента на безголовом движке
 ## Последствия
 
 - Проще: нет сервера. Права и секреты берутся из механизмов GitLab. Раскатка идёт через
-  `include` и хаб Multica.
+  `include` и шаблоны проекта MAI (ADR 0091).
 - Сложнее: латентность реакции равна времени старта джобы. Состояние между событиями
   хранится только в MR: метки `ship::*`, комментарии с маркером, журнал-артефакт.
-- Нужно проверить: pipeline trigger из вебхука и `TRIGGER_PAYLOAD` на нашей версии GitLab;
-  наличие Premium; лимиты раннеров.
+- Нужно проверить: pipeline trigger из вебхука и `TRIGGER_PAYLOAD` на тестовом GitLab
+  (gitlab.com или self-hosted в `infra/`); оба пути апрува — Premium и Free; лимиты раннеров.
 - Риски: петля steward ↔ CI, prompt injection, рост затрат. Снижение — ADR 0109 (политика,
   бюджет, kill-switch) и ADR 0110 (разделение провайдеров).
 
