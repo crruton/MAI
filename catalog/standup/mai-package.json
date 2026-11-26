@@ -1,0 +1,8 @@
+{
+  "name": "standup",
+  "version": "1.0.0",
+  "description": "Generate a standup update from recent activity.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

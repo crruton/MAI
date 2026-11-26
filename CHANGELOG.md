@@ -10,6 +10,11 @@
 
 ### Added
 
+- Каталог навыков команды (ADR 0111): `mai-marketplace.json` в корне и 18 пакетов
+  в `catalog/` версии 1.0.0 — подключается в `/packages` адресом репозитория.
+  Проверка `electron/lib/catalog-check.js` и `scripts/test-catalog.mjs`: версии,
+  владелец, лицензии upstream, токены, внутренние хосты и email. Документация —
+  `docs/CATALOG.md`.
 - Бэклог командной работы `docs/BACKLOG-TEAM.md`: единое хранилище скиллов на
   каталоге пакетов MAI, MAI для команды с Multica MAI, MAI Ship (декомпозиция
   Claude Ship под GitLab), маркетплейс на Authentik; челлендж 73 входных скиллов.

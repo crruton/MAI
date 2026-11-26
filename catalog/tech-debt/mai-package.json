@@ -1,0 +1,8 @@
+{
+  "name": "tech-debt",
+  "version": "1.0.0",
+  "description": "Identify, categorize, and prioritize technical debt.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

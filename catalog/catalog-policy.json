@@ -1,0 +1,5 @@
+{
+  "description": "Правила проверки каталога (ADR 0111): хосты и адреса, которых не должно быть в публичном репозитории",
+  "denyHosts": ["raftds.com", "raft.ru"],
+  "allowEmails": ["*@example.com", "*@example.org", "noreply@anthropic.com", "github@multica.ai"]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "ub-mode",
+  "version": "1.0.0",
+  "description": "Follow the reduced principles when writing or changing code.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "upstream, см. skills/ub-mode/UPSTREAM.md"
+}

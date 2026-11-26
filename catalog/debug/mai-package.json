@@ -1,0 +1,8 @@
+{
+  "name": "debug",
+  "version": "1.0.0",
+  "description": "Structured debugging session — reproduce, isolate, diagnose, and fix.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

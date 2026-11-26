@@ -126,3 +126,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0108](0108-mai-ship-gitlab-ispolnenie-v-ci.md) | MAI Ship для GitLab: агенты ревью, steward и approver в GitLab CI | proposed | 2026-11-26 |
 | [0109](0109-politika-apruva-v-repozitorii.md) | Политика апрува как файл в репозитории | proposed | 2026-11-26 |
 | [0110](0110-razdelenie-provayderov-v-ship.md) | Разделение провайдеров и учёток в MAI Ship | proposed | 2026-11-26 |
+| [0111](0111-katalog-navykov-komandy.md) | Каталог навыков команды в репозитории MAI | accepted | 2026-11-26 |

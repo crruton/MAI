@@ -17,6 +17,7 @@
 - [Доски](BOARDS.md)
 - [Хранилище](STORAGE.md)
 - [Память и навыки](MEMORY.md)
+- [Каталог навыков команды](CATALOG.md)
 - [Песочницы](SANDBOXES.md)
 - [Guardrails](GUARDRAILS.md)
 - [Repowise](REPOWISE.md)

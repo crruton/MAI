@@ -1,0 +1,8 @@
+{
+  "name": "ponytail-review",
+  "version": "1.0.0",
+  "description": "Quality review of a change: is the logic right, is it safe, does it hold under real load, is risky code tested, is it fast enough, and is every line needed.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "upstream, см. skills/ponytail-review/UPSTREAM.md"
+}

@@ -1,0 +1,8 @@
+{
+  "name": "release-notes",
+  "version": "1.0.0",
+  "description": "Summarize project updates over a requested date range in clear, nontechnical customer-facing language.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}
