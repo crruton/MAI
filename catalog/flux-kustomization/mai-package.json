@@ -1,0 +1,8 @@
+{
+  "name": "flux-kustomization",
+  "version": "1.0.0",
+  "description": "Author or diagnose Flux Kustomizations and HelmReleases in the project's existing GitOps layout.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

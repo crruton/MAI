@@ -1,0 +1,8 @@
+{
+  "name": "ci-pipeline-author",
+  "version": "1.0.0",
+  "description": "Write or improve GitLab CI pipelines using measured bottlenecks, DAG dependencies, caching, runner selection and cancellation semantics.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

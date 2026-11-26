@@ -13,7 +13,7 @@
 
 ## Что в каталоге
 
-27 навыков.
+42 навыка.
 
 | Навык | Для чего | Источник |
 |---|---|---|
@@ -99,6 +99,19 @@ npm.cmd run skills:export -- --target claude --project C:workapp grilling tdd
 новые версии, `--prune` удаляет навыки, которых больше нет в каталоге
 ([ADR 0114](adr/0114-eksport-navykov-v-drugie-agenty.md)).
 
+DevOps (`devops-context` — с чего начинать; корпоративный профиль сети, зеркал и реестра
+организации хранится в приватном каталоге):
+
+| Навык | Для чего |
+|---|---|
+| `devops-context` | среда, владелец и ограничения до работы с CI, Kubernetes, БД |
+| `ci-pipeline-author`, `ci-job-triage`, `ci-security-gates` | GitLab CI: написать, разобрать падение, гейты безопасности |
+| `dockerfile-review`, `docker-compose-author` | Dockerfile и Compose |
+| `helm-chart-author`, `flux-kustomization` | Helm-чарт приложения, GitOps на Flux |
+| `k8s-pod-triage`, `k8s-rightsizing` | разбор подов, ресурсы по метрикам |
+| `tf-module-author`, `tf-plan-review`, `tf-drift-check` | Terraform: модуль, ревью плана, дрейф |
+| `ansible-role-author`, `harbor-cli` | роли Ansible, Harbor через CLI |
+
 ## Наборы по ролям
 
 Поле `roles` в `mai-marketplace.json` перечисляет навыки роли ([ADR 0115](adr/0115-nabory-navykov-po-rolyam.md)):
@@ -110,6 +123,7 @@ npm.cmd run skills:export -- --target claude --project C:workapp grilling tdd
 | pm | request-triage, product-discovery, customer-interview, product-prd, task-breakdown, standup, release-notes, grilling, stop-slop |
 | qa | use-cases, testing-strategy, code-review, ponytail-review, diagnosing-bugs, incident-response |
 | lead | architecture, system-design, code-review, task-breakdown, tech-debt, standup, grilling, incident-response |
+| devops | все 15 devops-навыков и incident-response |
 
 Мастер первого запуска (`/onboarding`) ставит вместе с набором роли её навыки из каталога.
 Из терминала:

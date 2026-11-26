@@ -1,0 +1,8 @@
+{
+  "name": "k8s-pod-triage",
+  "version": "1.0.0",
+  "description": "Diagnose failing Kubernetes pods and migration Jobs from events, logs, metrics and resource settings.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

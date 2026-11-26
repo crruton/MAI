@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["image", "resources", "containerPort"],
+  "properties": {
+    "replicaCount": { "type": "integer", "minimum": 1 },
+    "image": {
+      "type": "object",
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      },
+      "additionalProperties": false
+    },
+    "imagePullSecrets": { "type": "array" },
+    "containerPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "env": { "type": "object", "additionalProperties": { "type": "string" } },
+    "envFrom": { "type": "array" },
+    "resources": {
+      "type": "object",
+      "required": ["requests", "limits"],
+      "properties": {
+        "requests": {
+          "type": "object",
+          "required": ["cpu", "memory"]
+        },
+        "limits": {
+          "type": "object",
+          "required": ["memory"]
+        }
+      }
+    },
+    "probes": { "type": "object" },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": { "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "podDisruptionBudget": { "type": "object" },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressFrom": { "type": "array" },
+        "egress": { "type": "array" }
+      }
+    },
+    "nodeSelector": { "type": "object" },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" }
+  }
+}

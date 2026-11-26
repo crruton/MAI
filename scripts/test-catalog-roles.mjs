@@ -27,7 +27,7 @@ const index = JSON.parse(fs.readFileSync(path.join(repo, 'mai-marketplace.json')
 
 console.log('[1] роли каталога');
 const roles = catalogRoles(repo);
-check('пять ролей', Object.keys(roles).join() === 'developer,analyst,pm,qa,lead', Object.keys(roles).join());
+check('шесть ролей', Object.keys(roles).join() === 'developer,analyst,pm,qa,lead,devops', Object.keys(roles).join());
 check('роли каталога проходят проверку', validateRoles(index).length === 0, validateRoles(index).join('; '));
 check('каждый навык каталога входит хотя бы в одну роль или он общий', index.packages.filter((p) => !Object.values(roles).flat().includes(p.name)).length <= 3, index.packages.filter((p) => !Object.values(roles).flat().includes(p.name)).map((p) => p.name).join());
 check('навыки роли разработчика', roleSkillNames(repo, 'developer').includes('to-mr') && roleSkillNames(repo, 'developer').includes('tdd'));

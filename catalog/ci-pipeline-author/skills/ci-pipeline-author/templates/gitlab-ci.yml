@@ -1,0 +1,224 @@
+# Optional werf/Kubernetes profile: MR + default branch + default-branch schedules only.
+# Verify example versions, runner tags, scan input paths and owner-managed schedules.
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      auto_cancel:
+        on_new_commit: none
+        on_job_failure: none
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      auto_cancel:
+        on_job_failure: all
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      auto_cancel:
+        on_new_commit: none
+
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  GIT_DEPTH: "20"
+  PIP_CACHE_DIR: $CI_PROJECT_DIR/.cache/pip
+  PIP_INDEX_URL: https://pypi.org/simple
+  TRIVY_CACHE_DIR: $CI_PROJECT_DIR/.cache/trivy
+  WERF_REPO: $CONTAINER_REGISTRY/$REGISTRY_PROJECT/$CI_PROJECT_NAME
+
+default:
+  tags: [$RUNNER_TAG]
+  interruptible: true
+  retry:
+    max: 1
+    when: [runner_system_failure, stuck_or_timeout_failure]
+
+.mr-and-default:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+.python:
+  extends: .mr-and-default
+  image: python:3.12-slim
+  cache:
+    key:
+      prefix: pip
+      files: [requirements.txt, requirements-dev.txt]
+    paths: [.cache/pip]
+    policy: pull
+  before_script:
+    - pip install -r requirements-dev.txt
+
+lint:
+  extends: .python
+  stage: test
+  needs: []
+  script:
+    - ruff check .
+
+unit-tests:
+  extends: .python
+  stage: test
+  needs: []
+  cache:
+    policy: pull-push
+  script:
+    - pytest -q --junitxml=report.xml
+  artifacts:
+    when: always
+    expire_in: 1 day
+    reports:
+      junit: report.xml
+
+.trivy:
+  extends: .mr-and-default
+  image:
+    name: aquasec/trivy:0.76.1
+    entrypoint: [""]
+  cache:
+    key: trivy-db
+    paths: [.cache/trivy]
+    policy: pull
+
+dependency-scan:
+  extends: .trivy
+  stage: test
+  needs: []
+  cache:
+    policy: pull-push
+  script:
+    - trivy fs --scanners vuln --severity CRITICAL --exit-code 1 --no-progress --format json --output dependency-report.json .
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths: [dependency-report.json]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: &dependency-inputs
+        - requirements*.txt
+        - pyproject.toml
+        - uv.lock
+        - Dockerfile
+        - werf.yaml
+        - werf-giterminism.yaml
+        - .gitlab-ci.yml
+        - ci/**/*
+
+secret-scan:
+  extends: .mr-and-default
+  stage: test
+  needs: []
+  image:
+    name: zricethezav/gitleaks:v8.30.1
+    entrypoint: [""]
+  script:
+    - gitleaks dir --redact --no-banner .
+
+secret-history-audit:
+  extends: secret-scan
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - gitleaks git --redact --no-banner .
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+.werf:
+  image: registry.werf.io/werf/werf:2.81.4
+  variables:
+    WERF_BUILDAH_MODE: auto
+    WERF_LOG_PROJECT_DIR: "1"
+    WERF_ADD_ANNOTATION_CI_COMMIT: ci.werf.io/commit=$CI_COMMIT_SHA
+    WERF_ADD_ANNOTATION_PIPELINE: gitlab.ci.werf.io/pipeline-url=$CI_PIPELINE_URL
+  before_script:
+    - echo "$REGISTRY_PASSWORD" | werf cr login --username "$REGISTRY_USERNAME" --password-stdin "$CONTAINER_REGISTRY"
+
+build:
+  extends: [.werf, .mr-and-default]
+  stage: build
+  needs:
+    - lint
+    - unit-tests
+    - job: dependency-scan
+      optional: true
+    - secret-scan
+  script:
+    - werf build --save-build-report --build-report-path werf-build.env
+  artifacts:
+    expire_in: 7 days
+    paths: [werf-build.env]
+
+image-scan:
+  extends: .trivy
+  stage: build
+  needs: [build]
+  variables:
+    GIT_STRATEGY: none
+    TRIVY_USERNAME: $REGISTRY_USERNAME
+    TRIVY_PASSWORD: $REGISTRY_PASSWORD
+  script:
+    - |
+      image=$(awk '
+        index($0, "WERF_APP_DOCKER_IMAGE_NAME=") == 1 {
+          count++; value = substr($0, index($0, "=") + 1)
+        }
+        END {
+          if (count != 1 || value !~ /^[A-Za-z0-9][A-Za-z0-9._\/:@-]*$/) exit 1
+          print value
+        }
+      ' werf-build.env)
+      case "$image" in
+        "${WERF_REPO:?}":*|"$WERF_REPO"@sha256:*) ;;
+        *) echo 'Unexpected image reference in build report.' >&2; exit 1 ;;
+      esac
+      trivy image --severity CRITICAL --exit-code 1 --no-progress "$image"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: *dependency-inputs
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+.deploy:
+  extends: .werf
+  stage: deploy
+  interruptible: false
+  needs: [build, image-scan]
+  resource_group: $CI_ENVIRONMENT_NAME
+  script:
+    - werf converge --require-built-images --use-build-report --build-report-path werf-build.env --env "$CI_ENVIRONMENT_NAME" --values ".helm/values/$CI_ENVIRONMENT_NAME.yaml"
+
+deploy-dev:
+  extends: .deploy
+  environment:
+    name: dev
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+deploy-prod:
+  extends: .deploy
+  environment:
+    name: production
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+
+cleanup:
+  extends: .werf
+  stage: deploy
+  needs: []
+  interruptible: false
+  resource_group: werf-cleanup
+  script:
+    - werf cleanup
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"

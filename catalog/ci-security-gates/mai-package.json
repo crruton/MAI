@@ -1,0 +1,8 @@
+{
+  "name": "ci-security-gates",
+  "version": "1.0.0",
+  "description": "Configure and verify GitLab CI security scans, merge gates and scheduled audits with explicit scope and suppression policy.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

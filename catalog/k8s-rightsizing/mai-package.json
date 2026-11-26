@@ -1,0 +1,8 @@
+{
+  "name": "k8s-rightsizing",
+  "version": "1.0.0",
+  "description": "Size Kubernetes container CPU/memory requests and limits from historical usage, throttling, OOM evidence and VPA recommendations.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

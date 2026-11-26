@@ -10,6 +10,10 @@
 
 ### Added
 
+- Каталог: 15 devops-навыков (CI, Docker, Helm, Flux, Kubernetes, Terraform, Ansible,
+  Harbor) и роль `devops`. Корпоративный профиль сети и зеркал в публичный каталог не
+  входит: ссылки на него заменены отсылкой к приватному каталогу организации, внутренние
+  хосты — на `example.com`.
 - Наборы навыков каталога по ролям (ADR 0115): поле `roles` в `mai-marketplace.json`
   (developer, analyst, pm, qa, lead). Мастер первого запуска ставит навыки роли из
   каталога команды; `--role` у `skills:export` и `multica:skills`. Проверка каталога

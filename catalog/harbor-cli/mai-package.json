@@ -1,0 +1,8 @@
+{
+  "name": "harbor-cli",
+  "version": "1.0.0",
+  "description": "Operate Harbor registries with the official harbor CLI.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

@@ -1,0 +1,8 @@
+{
+  "name": "ci-job-triage",
+  "version": "1.0.0",
+  "description": "Diagnose failed GitLab CI jobs using logs, DAG timing, runner resources and retry history.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

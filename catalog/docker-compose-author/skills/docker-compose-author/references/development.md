@@ -1,0 +1,14 @@
+# Local development
+
+Use when developers need a repeatable local stack. Sources checked on 2026-11-01.
+
+- Keep shared service wiring in a base file, with source mounts, reload commands, debug ports and development targets in an explicit development override. Production must select its own ordered files rather than accidentally loading an automatic local override. Profiles select optional tools/services; they do not remove dev settings from a selected service.
+- Choose source bind mounts or Compose Watch based on the actual edit/build cycle and installed version. Watch requires Compose 2.22 or later; individual actions can require newer versions. Sync source changes, rebuild dependency changes, and exclude generated state and secrets. Do not sync host `node_modules`, virtualenvs or native binaries across OS/architecture boundaries. [Compose Watch](https://docs.docker.com/compose/how-tos/file-watch/)
+- Mounting over an image directory hides its contents. Check where dependency directories live, whether generated files need persistence, and whether a named dependency volume masks a newly built dependency set. Rebuild or refresh only the affected disposable state through a documented command.
+- Verify Linux UID/GID permissions and macOS/Windows bind-mount behavior. Keep source writable only when needed; avoid blanket recursive ownership changes on host repositories. Give application caches/temp files suitable writable paths.
+- Publish only ports needed from the host, normally on `127.0.0.1`; containers still connect by service name and container port. Sharing a developer endpoint on a LAN is an explicit choice. Avoid publishing databases solely for service-to-service traffic. [Compose networking](https://docs.docker.com/compose/how-tos/networking/)
+- Supply `.env.example` with non-secret defaults/placeholders, and ignore real local credential files. Explain which variables configure Compose interpolation and which reach the application. Do not assume an application automatically reads a mounted secret file.
+- Use distinct project names for concurrent checkouts/tests and avoid fixed container names. Keep restart/reload behavior observable instead of hiding crash loops. Test first startup from empty disposable state and a subsequent restart with existing data.
+- Document start, logs, test and normal stop commands using the same files/profiles. Mark data reset separately and name the exact disposable volumes; do not use `down -v` as routine shutdown.
+
+Shared Dockerfile builds should install only development dependencies in the dev target and only runtime dependencies in the release target. A dependency cache improves warm builds but must not be required for correctness on a new machine. [Multi-stage builds](https://docs.docker.com/build/building/multi-stage/), [cache optimization](https://docs.docker.com/build/cache/optimize/).
