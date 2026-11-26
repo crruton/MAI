@@ -37,5 +37,6 @@
 - [ADR — решения](adr/README.md)
 - [Бэклог](BACKLOG.md)
 - [Бэклог выравнивания](BACKLOG-NEXT.md)
+- [Бэклог командной работы](BACKLOG-TEAM.md)
 - [План развития](ROADMAP.md)
 - [Каталог моделей MAI](mai-models.md)
