@@ -1,0 +1,23 @@
+# .mai-code/ship.yaml — пример для сервиса. Читается только из target branch (ADR 0109).
+version: 1
+enabled: true
+review:
+  level: standard
+  trigger: [open, push]
+  lenses: [correctness, security, adr, tests]
+steward:
+  enabled: true
+  max_rounds: 3
+  fix: [ci, conflicts, findings]
+  branch_prefix: mai/
+providers:
+  executor: agentrouter/claude-opus-5-5
+  reviewer: agentrouter/claude-opus-5-5
+  steward: agentrouter/claude-opus-5-5
+  approver: openai/gpt-5.1        # другое семейство (ADR 0110)
+budget:
+  per_mr_usd: 3
+  monthly_usd: 300
+notify:
+  channel: rocketchat
+  events: [needs_human, blocked, budget, error]

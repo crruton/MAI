@@ -10,6 +10,11 @@
 
 ### Added
 
+- MAI Ship для GitLab — спецификация (ADR 0108, 0109, 0110, статус proposed):
+  ревью, steward и approver MR по образцу Claude Ship на примитивах GitLab;
+  политика апрува `.mai-code/approval-policy.yaml` и настройки `.mai-code/ship.yaml`
+  с JSON-схемами и примерами; approver от другого семейства моделей; старт в
+  observe-only. Изменение `openspec/changes/mai-ship-gitlab/`, кода пока нет.
 - Инструменты (ADR 0054): `glob` — поиск файлов по маске; `edit_file` —
   `replace_all`, несколько правок за вызов (атомарно), файлы с CRLF; длинный
   вывод любого инструмента — целиком в файл, модели — начало, конец и путь;

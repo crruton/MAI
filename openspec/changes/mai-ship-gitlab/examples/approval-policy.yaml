@@ -1,0 +1,43 @@
+# .mai-code/approval-policy.yaml — пример для сервиса. Старт в observe (ADR 0109, п. 5).
+version: 1
+mode: observe
+enforce_classes: [docs, tests-only]
+gates:
+  pipeline: success
+  max_blocking_findings: 0
+  max_changed_lines: 400
+  require_not_draft: true
+rules:
+  - name: migrations
+    match: { any_path: ["**/migrations/**", "**/*.sql"] }
+    decision: require_human
+    reason: Миграция данных
+  - name: infra
+    match: { any_path: ["infra/**", "**/*.tf", "charts/**"] }
+    decision: require_human
+    reason: Изменение инфраструктуры
+  - name: secrets
+    match: { any_path: ["**/.env*", "**/*.key"] }
+    decision: block
+    reason: Файлы секретов в MR
+  - name: docs
+    match: { paths: ["docs/**", "**/*.md"] }
+    decision: approve
+  - name: tests-only
+    match: { paths: ["tests/**", "scripts/test-*.mjs"] }
+    decision: approve
+  - name: small-fix
+    match: { author: agent, max_changed_lines: 50 }
+    decision: approve
+classifiers:
+  - name: external-effect
+    question: Изменение отправляет данные во внешний сервис или меняет публичный API?
+    when_true: require_human
+  - name: auth
+    question: Изменение затрагивает вход, роли, права доступа или проверку токенов?
+    when_true: require_human
+default: require_human
+human:
+  min_approvals: 1
+  min_role: maintainer
+  use_codeowners: true

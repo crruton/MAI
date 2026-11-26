@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mai-code/schemas/approval-policy.schema.json",
+  "title": "MAI Ship: политика апрува (.mai-code/approval-policy.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "mode", "default", "rules"],
+  "properties": {
+    "version": { "const": 1 },
+    "mode": { "enum": ["observe", "enforce"], "description": "observe никогда не ставит approve (ADR 0109, п. 5)" },
+    "enforce_classes": {
+      "type": "array",
+      "description": "Имена правил, для которых в mode: enforce разрешён настоящий approve",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pipeline": { "enum": ["success", "any"], "default": "success" },
+        "max_blocking_findings": { "type": "integer", "minimum": 0, "default": 0 },
+        "max_changed_lines": { "type": "integer", "minimum": 1 },
+        "max_changed_files": { "type": "integer", "minimum": 1 },
+        "require_not_draft": { "type": "boolean", "default": true }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/rule" }
+    },
+    "classifiers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/classifier" }
+    },
+    "default": { "enum": ["require_human", "block"], "description": "Итог, если ни одно правило не совпало. approve запрещён" },
+    "human": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min_approvals": { "type": "integer", "minimum": 1, "default": 1 },
+        "min_role": { "enum": ["developer", "maintainer", "owner"], "default": "maintainer" },
+        "use_codeowners": { "type": "boolean", "default": true }
+      }
+    }
+  },
+  "$defs": {
+    "decision": { "enum": ["approve", "require_human", "block"] },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "glob; совпадение, если ВСЕ изменённые файлы под масками" },
+        "any_path": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "glob; совпадение, если ХОТЯ БЫ ОДИН файл под маской" },
+        "labels": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "author": { "enum": ["human", "agent", "any"] },
+        "max_changed_lines": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "match", "decision"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "match": { "$ref": "#/$defs/match" },
+        "decision": { "$ref": "#/$defs/decision" },
+        "reason": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "classifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "question", "when_true"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "question": { "type": "string", "minLength": 10, "maxLength": 500, "description": "Вопрос да/нет к изменению; модель возвращает только true/false и цитату" },
+        "when_true": { "enum": ["require_human", "block"], "description": "Классификатор только ужесточает решение (ADR 0109, п. 3)" }
+      }
+    }
+  }
+}
