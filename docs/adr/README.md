@@ -127,3 +127,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0109](0109-politika-apruva-v-repozitorii.md) | Политика апрува как файл в репозитории | proposed | 2026-11-26 |
 | [0110](0110-razdelenie-provayderov-v-ship.md) | Разделение провайдеров и учёток в MAI Ship | proposed | 2026-11-26 |
 | [0111](0111-katalog-navykov-komandy.md) | Каталог навыков команды в репозитории MAI | accepted | 2026-11-26 |
+| [0112](0112-multica-workspace-i-proekt-v-nastroykah-proekta.md) | Workspace и проект Multica — в настройках проекта | accepted | 2026-11-26 |

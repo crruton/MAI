@@ -3065,16 +3065,33 @@ ipcMain.handle('multica:install', () => {
   requireAdmin();
   return multica.installCli();
 });
-ipcMain.handle('multica:auth', () => multica.authStatus());
-ipcMain.handle('multica:issues', (_e, limit) => multica.listIssues(limit || 30));
+/** Workspace и проект Multica для папки: личное → проект (git) → настройки MAI (E2.3, ADR 0112). */
+function multicaTarget(projectDir) {
+  const dir = projectDir || loadSettings().projectDir;
+  return multica.resolveTarget({ projectDir: dir, trusted: Boolean(dir) && isTrusted(dir), user: loadSettings().multica || {} });
+}
+ipcMain.handle('multica:auth', () => multica.authStatus(multicaTarget()));
+ipcMain.handle('multica:issues', (_e, limit) => multica.listIssues(limit || 30, multicaTarget()));
+ipcMain.handle('multica:target', (_e, projectDir) => multicaTarget(projectDir));
+ipcMain.handle('multica:workspaces', () => multica.listWorkspaces());
+ipcMain.handle('multica:projects', (_e, workspaceId) => multica.listProjects({ workspaceId: workspaceId || multicaTarget().workspaceId }));
+ipcMain.handle('multica:setTarget', (_e, payload) => {
+  requireAdmin();
+  const dir = payload?.projectDir || loadSettings().projectDir;
+  if (!dir) throw new Error('Не выбрана папка проекта');
+  if (!isTrusted(dir)) return needTrust(dir) || { ok: false, error: 'Папка проекта не доверена: настройки Multica в неё не записываются' };
+  return multica.saveProjectTarget(dir, { workspaceId: payload?.workspaceId, projectId: payload?.projectId }, { scope: payload?.scope || 'project' });
+});
 ipcMain.handle('multica:syncDocs', (_e, projectDir) => {
   requireAdmin();
-  return multica.syncOpenSpec(projectDir || loadSettings().projectDir);
+  const dir = projectDir || loadSettings().projectDir;
+  return multica.syncOpenSpec(dir, multicaTarget(dir));
 });
 // Статусы Multica → галочки в openspec/changes/*/tasks.md (F14, ADR 0089).
 ipcMain.handle('multica:pullStatuses', (_e, projectDir) => {
   requireAdmin();
-  return multica.pullStatuses(projectDir || loadSettings().projectDir);
+  const dir = projectDir || loadSettings().projectDir;
+  return multica.pullStatuses(dir, { target: multicaTarget(dir) });
 });
 
 // ---------- Docker-песочницы ----------

@@ -10,6 +10,12 @@
 
 ### Added
 
+- Multica: workspace и проект для репозитория (ADR 0112). Выбор в панели «Multica» →
+  «Этот проект», хранение в `.mai-code/settings.json` (для команды, в git) или
+  `settings.local.json` (личное). CLI получает `--workspace-id` и `--project`; id
+  проверяется, чтобы значение из файла не стало флагом. IPC `multica:target`,
+  `multica:workspaces`, `multica:projects`, `multica:setTarget`; модуль
+  `electron/lib/multica-target.js`, тест `test-multica-target` (25 проверок).
 - Каталог навыков команды (ADR 0111): `mai-marketplace.json` в корне и 18 пакетов
   в `catalog/` версии 1.0.0 — подключается в `/packages` адресом репозитория.
   Проверка `electron/lib/catalog-check.js` и `scripts/test-catalog.mjs`: версии,

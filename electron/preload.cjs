@@ -205,6 +205,10 @@ contextBridge.exposeInMainWorld('mai', {
     issues: (limit) => invoke('multica:issues', limit),
     syncDocs: (projectDir) => invoke('multica:syncDocs', projectDir),
     pullStatuses: (projectDir) => invoke('multica:pullStatuses', projectDir),
+    target: (projectDir) => invoke('multica:target', projectDir),
+    workspaces: () => invoke('multica:workspaces'),
+    projects: (workspaceId) => invoke('multica:projects', workspaceId),
+    setTarget: (payload) => invoke('multica:setTarget', payload),
   },
   sandbox: {
     status: () => invoke('sandbox:status'),

@@ -343,6 +343,18 @@ ADR 0089. `openspec.js` — `parseTaskMarker`, `statusUpdatesFromIssues`,
 IPC `multica:pullStatuses` (ADMIN); `multica-sync.mjs --pull`. В app.js —
 кнопка `.multica-pull` в панели Multica.
 
+### Workspace и проект Multica
+
+ADR 0112. `multica-target.js` (без Electron) — `resolveTarget` (личный файл →
+`settings.json` проекта → настройки MAI, файлы проекта только при доверии),
+`targetArgs`, `issueListArgs`, `issueCreateArgs`, `issueUpdateArgs`,
+`saveProjectTarget`, `normalizeWorkspaces`, `normalizeProjects`; `multica.js` —
+`listWorkspaces`, `listProjects`, цель в `listIssues`, `syncOpenSpec`,
+`pullStatuses`, `authStatus`. IPC `multica:target`, `multica:workspaces`,
+`multica:projects` (ANY), `multica:setTarget` (ADMIN, доверенная папка). В app.js —
+блок «Этот проект» в панели Multica (`.multica-ws`, `.multica-project`,
+`.multica-save-target`).
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,

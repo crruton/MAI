@@ -31,6 +31,7 @@
 | 26.11.2026 | спека MAI Ship: E3.A1–A3, E3.A6, E3.B1–B2 | ADR 0108–0110, `openspec/changes/mai-ship-gitlab/` | ключ `on:` в YAML 1.1 читается как `true` — в схеме `notify.events` |
 | 26.11.2026 | E3.B3, частично E3.B4–B5, E3.F2: модуль политики и семейства моделей | `electron/lib/ship/policy.js`, `electron/lib/model-families.js`, `test-ship-policy` (65 проверок) | `globToRegExp` регистронезависим на Windows — политика его не наследует, чтобы решение не зависело от ОС |
 | 26.11.2026 | E1.1–E1.3: каталог, проверка, 18 навыков | ADR 0111, `catalog/`, `docs/CATALOG.md`, `test-catalog` (31 проверка) | `create-gitlab-mr` не перенесён — канон `to-mr` (S2); общие навыки оказались без внутренних адресов |
+| 26.11.2026 | E2.3: workspace и проект Multica для репозитория | ADR 0112, `multica-target.js`, панель «Multica», `test-multica-target` (25), `test-ui` [51] | значение из `settings.json` чужого репозитория могло стать флагом CLI — id проверяется; личный файл теперь всегда в `.gitignore` |
 | 26.11.2026 | прогон `npm test` | — | вне этой работы: `test-web` и `test-local-models` иногда падают на выходе (`UV_HANDLE_CLOSING`, Node 24.19 на Windows); `test-shell` падает, если на машине установлен `repowise`. Оба дефекта есть на чистом `dev` — пункт Q8 |
 
 ---
@@ -183,7 +184,7 @@
 |---|---|---|---|---|---|
 | E2.1 | Discovery: 5 интервью с разработчиками, которые работают в Claude Code или OpenCode — чего им не хватает в MAI | P1 | 2 | отчёт с JTBD, решение go/no-go | — |
 | E2.2 | Профиль команды из git: `managed-settings.json`, каталоги, MCP без секретов, `AGENTS.md`; применяется после входа через Keycloak | P1 | 4 | новый участник получает профиль меньше чем за 15 минут | E2.1, E1.3 |
-| E2.3 | Multica: передавать `workspaceId` в CLI, выбор workspace и проекта в панели «Multica», профиль CLI на пользователя | P1 | 2 | синхронизация идёт в выбранный workspace | — |
+| E2.3 ✓ | Multica: передавать `workspaceId` в CLI, выбор workspace и проекта в панели «Multica», профиль CLI на пользователя | P1 | 2 | синхронизация идёт в выбранный workspace | — |
 | E2.4 | Multica: участники, squads и проекты из профиля команды в декларативном файле профиля | P2 | 3 | состав workspace приводится к профилю | E2.3 |
 | E2.5 | Двусторонние статусы и комментарии Multica ↔ OpenSpec (расширение ADR 0089) | P2 | 3 | «в работе» и переоткрытие видны в `tasks.md` | E2.3 |
 | E2.6 | MAI как runtime Multica: задача squad'а выполняется `mai -p` (ADR 0077) | P2 | 5 | issue из Multica выполняется MAI без окна | E2.3 |
