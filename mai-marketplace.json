@@ -34,7 +34,7 @@
     },
     {
       "name": "grilling",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Grill the user relentlessly about a plan, decision, or idea.",
       "source": "catalog/grilling"
     },
@@ -109,6 +109,48 @@
       "version": "1.0.0",
       "description": "Follow the reduced principles when writing or changing code.",
       "source": "catalog/ub-mode"
+    },
+    {
+      "name": "change-request",
+      "version": "1.0.0",
+      "description": "Доработка вне PBC в продукте: постановка в issue, вопросы автору, проверка техлидом и при необходимости владельцем продукта, OpenSpec change доработки, обновление worksheet PBC, передача в разработку ",
+      "source": "catalog/change-request"
+    },
+    {
+      "name": "customer-interview",
+      "version": "1.0.0",
+      "description": "Интервью заказчика при работе над PRD методом grilling: дерево решений продукта, раунды вопросов с рекомендованными ответами, запись ответов в PRD и конец интервью.",
+      "source": "catalog/customer-interview"
+    },
+    {
+      "name": "pbc",
+      "version": "1.0.0",
+      "description": "PBC (Packaged Business Capability) продукта: как резать PRD на капабилити, индекс docs/pbc/README.md, шаблон worksheet из 12 разделов, критерии приёмки, бизнес- и техническая валидация со списками зам",
+      "source": "catalog/pbc"
+    },
+    {
+      "name": "request-triage",
+      "version": "1.0.0",
+      "description": "Разбор входящего запроса к продукту — brief, доработка, баг, техническая задача или вопрос: признаки каждого типа, граница «баг или доработка», когда доработка перерастает в brief, что проверить, как ",
+      "source": "catalog/request-triage"
+    },
+    {
+      "name": "product-discovery",
+      "version": "1.0.0",
+      "description": "Анализ рынка, конкурентов и пользователей и формулировка продуктовых гипотез продукта: источники, структура исследования, карточка гипотезы, приоритизация, где хранить в `<docs>`.",
+      "source": "catalog/product-discovery"
+    },
+    {
+      "name": "use-cases",
+      "version": "1.0.0",
+      "description": "Тестирование продукта: тест-кейсы (Use Cases) по PBC, проверка каждой влитой задачи, тестирование реализованного PBC по user stories и тест-кейсам, отчёт о прогоне и оформление бага.",
+      "source": "catalog/use-cases"
+    },
+    {
+      "name": "product-prd",
+      "version": "1.0.0",
+      "description": "Формат и правила PRD продукта: набор документов docs/prd/00–13 в `<docs>`, что в каждом, user stories с Gherkin, версии и CHANGELOG, чек-лист качества PRD.",
+      "source": "catalog/product-prd"
     }
   ]
 }

@@ -73,10 +73,12 @@ function emailAllowed(email, allow) {
 }
 
 /** Поиск секретов, запрещённых хостов и email в тексте одного файла. */
-export function scanText(text, { denyHosts = [], allowEmails = [] } = {}) {
+export function scanText(text, { denyHosts = [], allowEmails = [], denyTerms = [] } = {}) {
   const found = [];
   for (const [label, re] of SECRET_PATTERNS) if (re.test(text)) found.push(label);
   for (const host of denyHosts) if (hostRe(host).test(text)) found.push(`внутренний хост ${host}`);
+  const lower = text.toLowerCase();
+  for (const term of denyTerms) if (term && lower.includes(String(term).toLowerCase())) found.push(`внутреннее название «${term}»`);
   for (const email of text.match(EMAIL_RE) || []) {
     if (!emailAllowed(email, allowEmails)) found.push(`email ${email}`);
   }
@@ -94,7 +96,7 @@ export function checkCatalog(root) {
   const index = readJson(path.join(root, CATALOG));
   if (!index || !Array.isArray(index.packages)) return { errors: [`${CATALOG}: нет списка packages`], warnings, packages: 0, skills };
   const policy = readJson(path.join(root, POLICY_FILE)) || {};
-  const scan = { denyHosts: policy.denyHosts || [], allowEmails: policy.allowEmails || [] };
+  const scan = { denyHosts: policy.denyHosts || [], allowEmails: policy.allowEmails || [], denyTerms: policy.denyTerms || [] };
   const seen = new Set();
   for (const [i, entry] of index.packages.entries()) {
     const at = `${CATALOG}: packages[${i}]`;

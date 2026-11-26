@@ -10,6 +10,10 @@
 
 ### Added
 
+- Каталог: 7 навыков продуктового цикла (`request-triage`, `product-discovery`,
+  `customer-interview`, `product-prd`, `pbc`, `change-request`, `use-cases`) — одна копия
+  вместо двух расходящихся, без привязки к конкретному продукту. Проверка каталога ищет
+  внутренние названия (`denyTerms` в `catalog/catalog-policy.json`).
 - Экспорт навыков каталога в Claude Code, OpenCode и Codex (ADR 0114):
   `npm.cmd run skills:export -- --target claude,opencode,codex` (`--dry-run`, `--prune`,
   `--project`, имена). Метка `.mai-catalog.json`; чужие папки не перезаписываются; запись
@@ -283,6 +287,8 @@
 
 ### Fixed
 
+- Каталог: в `UPSTREAM.md` навыка `grilling` было название внутреннего workspace;
+  убрано, версия 1.0.1.
 - Запросы к модели (ADR 0107): обрезка текста по `slice` резала суррогатную
   пару (эмодзи, редкие иероглифы) — в истории оставался одиночный surrogate,
   `JSON.stringify` превращал его в `\ud83d`, и шлюз отвечал `400 Invalid JSON

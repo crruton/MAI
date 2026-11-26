@@ -1,5 +1,20 @@
 {
-  "description": "Правила проверки каталога (ADR 0111): хосты и адреса, которых не должно быть в публичном репозитории",
-  "denyHosts": ["raftds.com", "raft.ru"],
-  "allowEmails": ["*@example.com", "*@example.org", "noreply@anthropic.com", "github@multica.ai"]
+  "description": "Правила проверки каталога (ADR 0111): хосты, адреса и внутренние названия, которых не должно быть в публичном репозитории",
+  "denyHosts": [
+    "raftds.com",
+    "raft.ru"
+  ],
+  "allowEmails": [
+    "*@example.com",
+    "*@example.org",
+    "noreply@anthropic.com",
+    "github@multica.ai"
+  ],
+  "denyTerms": [
+    "raft-crm",
+    "sdr-docs",
+    "hockey-scout",
+    "grandline",
+    "gamayun"
+  ]
 }

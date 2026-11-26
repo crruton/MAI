@@ -7,4 +7,4 @@
 
 ## Наши правки
 
-- Нет. Перенесён из `workspaces/sdr/skills` и `workspaces/grandline-exterior-ai/skills`, обе копии совпадали с upstream.
+- Нет. Текст совпадает с upstream.

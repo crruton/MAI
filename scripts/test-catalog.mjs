@@ -26,7 +26,7 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 console.log('[1] каталог репозитория');
 const real = checkCatalog(repo);
 check('нет ошибок', real.errors.length === 0, real.errors.join('\n'));
-check('18 пакетов и 18 навыков', real.packages === 18 && real.skills === 18, `${real.packages}/${real.skills}`);
+check('пакетов столько же, сколько в индексе, по навыку в каждом', real.packages === JSON.parse(fs.readFileSync(path.join(repo, 'mai-marketplace.json'), 'utf8')).packages.length && real.skills === real.packages, `${real.packages}/${real.skills}`);
 for (const w of real.warnings) console.log(`  WARN ${w}`);
 
 console.log('[2] сканер');
@@ -40,6 +40,8 @@ check('запрещённый хост и поддомен', scanText('https://g
 check('похожий хост не запрещён', scanText('https://notcorp.example.network', policy).length === 0);
 check('чужой email', scanText('пишите ivan.petrov@corp.ru', policy).some((p) => p.startsWith('email')));
 check('email из списка разрешённых', scanText('dev@example.com', policy).length === 0);
+check('внутреннее название без учёта регистра', scanText('Файл в Acme-CRM-docs', { denyTerms: ['acme-crm'] }).some((p) => p.includes('acme-crm')));
+check('без denyTerms названия не ищутся', scanText('Файл в Acme-CRM-docs', {}).length === 0);
 
 console.log('[3] frontmatter');
 const fm = frontmatter('---\nname: x\ndescription: >-\n  Первая строка\n  вторая.\nversion: 1.0.0\n---\n# X');
@@ -89,7 +91,7 @@ console.log('[5] установка из каталога кодом MAI');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-catalog-data-'));
 const market = { name: 'mai-team', url: repo };
 const catalog = readCatalog(market, dataDir);
-check('readCatalog видит 18 пакетов', catalog.packages.length === 18 && !catalog.error, catalog.error || catalog.packages.length);
+check('readCatalog видит все пакеты индекса', catalog.packages.length === real.packages && !catalog.error, catalog.error || catalog.packages.length);
 let installed = null;
 try {
   installed = installFromMarketplace({ market, name: 'grilling', dataDir });
@@ -97,7 +99,7 @@ try {
   check('установка grilling', false, e.message);
 }
 if (installed) {
-  check('установлен grilling 1.0.0', installed.package.version === '1.0.0' && installed.origin.marketplace === 'mai-team');
+  check('установлен grilling версии из каталога', installed.package.version === catalog.packages.find((p) => p.name === 'grilling').version && installed.origin.marketplace === 'mai-team');
   const list = listPackages(null, dataDir, { includeProject: false });
   const pkg = list.find((p) => p.name === 'grilling');
   check('пакет виден в списке: 1 навык, не исполняемый', pkg && pkg.parts?.skills === 1 && pkg.executable === false, JSON.stringify(pkg));

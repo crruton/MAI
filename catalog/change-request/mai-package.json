@@ -1,0 +1,8 @@
+{
+  "name": "change-request",
+  "version": "1.0.0",
+  "description": "Доработка вне PBC в продукте: постановка в issue, вопросы автору, проверка техлидом и при необходимости владельцем продукта, OpenSpec change доработки, обновление worksheet PBC, передача в разработку ",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

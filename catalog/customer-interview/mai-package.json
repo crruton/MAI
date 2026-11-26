@@ -1,0 +1,8 @@
+{
+  "name": "customer-interview",
+  "version": "1.0.0",
+  "description": "Интервью заказчика при работе над PRD методом grilling: дерево решений продукта, раунды вопросов с рекомендованными ответами, запись ответов в PRD и конец интервью.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}
