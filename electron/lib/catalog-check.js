@@ -72,6 +72,11 @@ function emailAllowed(email, allow) {
   return allow.some((rule) => (rule.startsWith('*@') ? lower.endsWith(rule.slice(1).toLowerCase()) : lower === rule.toLowerCase()));
 }
 
+/** Имена навыков из фраз «навык `имя`», «скилл `имя`», «скиллу `имя`». */
+export function skillRefs(text) {
+  return [...String(text).matchAll(/(?:скилл|навык)[а-яё]*\s+`([a-z][a-z0-9-]+)`/gi)].map((m) => m[1]);
+}
+
 /** Поиск секретов, запрещённых хостов и email в тексте одного файла. */
 export function scanText(text, { denyHosts = [], allowEmails = [], denyTerms = [] } = {}) {
   const found = [];
@@ -93,6 +98,7 @@ export function checkCatalog(root) {
   const errors = [];
   const warnings = [];
   let skills = 0;
+  const refs = [];
   const index = readJson(path.join(root, CATALOG));
   if (!index || !Array.isArray(index.packages)) return { errors: [`${CATALOG}: нет списка packages`], warnings, packages: 0, skills };
   const policy = readJson(path.join(root, POLICY_FILE)) || {};
@@ -136,6 +142,7 @@ export function checkCatalog(root) {
         continue;
       }
       const text = fs.readFileSync(file, 'utf8');
+      for (const ref of skillRefs(text)) refs.push({ from: `${name}/${skill.name}`, ref });
       const fm = frontmatter(text);
       if (!fm) {
         errors.push(`${name}/${skill.name}: нет frontmatter`);
@@ -160,5 +167,9 @@ export function checkCatalog(root) {
       }
     }
   }
+  // Ссылки «навык `имя`» — на навык каталога или встроенный навык MAI (`skills/` в корне).
+  const builtin = fs.existsSync(path.join(root, 'skills')) ? fs.readdirSync(path.join(root, 'skills')) : [];
+  const known = new Set([...seen, ...builtin]);
+  for (const { from, ref } of refs) if (!known.has(ref)) errors.push(`${from}: ссылка на навык «${ref}», которого нет в каталоге`);
   return { errors, warnings, packages: seen.size, skills };
 }

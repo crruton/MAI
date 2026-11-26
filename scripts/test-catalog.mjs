@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkCatalog, scanText, frontmatter } from '../electron/lib/catalog-check.js';
+import { checkCatalog, scanText, frontmatter, skillRefs } from '../electron/lib/catalog-check.js';
 import { readCatalog, installFromMarketplace } from '../electron/lib/marketplace.js';
 import { listPackages } from '../electron/lib/packages.js';
 
@@ -43,6 +43,7 @@ check('email из списка разрешённых', scanText('dev@example.co
 check('внутреннее название без учёта регистра', scanText('Файл в Acme-CRM-docs', { denyTerms: ['acme-crm'] }).some((p) => p.includes('acme-crm')));
 check('без denyTerms названия не ищутся', scanText('Файл в Acme-CRM-docs', {}).length === 0);
 
+check('skillRefs: падежи и регистр', skillRefs('по скиллу `pbc`, навыка `to-mr`, Навык `tdd`, слово `x`').join() === 'pbc,to-mr,tdd');
 console.log('[3] frontmatter');
 const fm = frontmatter('---\nname: x\ndescription: >-\n  Первая строка\n  вторая.\nversion: 1.0.0\n---\n# X');
 check('многострочное description', fm.description === 'Первая строка вторая.' && fm.version === '1.0.0', JSON.stringify(fm));
@@ -84,6 +85,8 @@ check('source вне catalog/', has(fixture((f) => { f['mai-marketplace.json'].p
 check('повтор пакета', has(fixture((f) => { f['mai-marketplace.json'].packages.push(f['mai-marketplace.json'].packages[0]); }), /повторяется/));
 check('внутренний хост в справочнике', has(fixture((f) => { f['catalog/demo/skills/demo/references/mirrors.md'] = 'mirror: https://nexus.corp.example.net/repo'; }), /references\/mirrors\.md: внутренний хост/));
 check('секрет в скрипте', has(fixture((f) => { f['catalog/demo/skills/demo/scripts/run.py'] = 'TOKEN = "glpat-AbCdEfGhIjKlMnOpQrSt12"'; }), /run\.py: GitLab-токен/));
+check('ссылка на навык вне каталога — ошибка', has(fixture((f) => { f['catalog/demo/skills/demo/SKILL.md'] += 'Дальше — по навыку `mr-publish`.'; }), /ссылка на навык «mr-publish»/));
+check('ссылка на себя и встроенный навык — без ошибки', fixture((f) => { f['catalog/demo/skills/demo/SKILL.md'] += 'См. скилл `demo` и навык `handoff`.'; f['skills/handoff/SKILL.md'] = '---' + String.fromCharCode(10) + 'name: handoff' + String.fromCharCode(10) + '---'; }).errors.length === 0);
 const longSkill = fixture((f) => { f['catalog/demo/skills/demo/SKILL.md'] += 'x\n'.repeat(600); });
 check('длинный SKILL.md — предупреждение, не ошибка', longSkill.errors.length === 0 && longSkill.warnings.some((w) => /строк/.test(w)));
 

@@ -112,7 +112,7 @@
     },
     {
       "name": "change-request",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Доработка вне PBC в продукте: постановка в issue, вопросы автору, проверка техлидом и при необходимости владельцем продукта, OpenSpec change доработки, обновление worksheet PBC, передача в разработку ",
       "source": "catalog/change-request"
     },
@@ -151,6 +151,18 @@
       "version": "1.0.0",
       "description": "Формат и правила PRD продукта: набор документов docs/prd/00–13 в `<docs>`, что в каждом, user stories с Gherkin, версии и CHANGELOG, чек-лист качества PRD.",
       "source": "catalog/product-prd"
+    },
+    {
+      "name": "openspec",
+      "version": "1.0.0",
+      "description": "Документация продукта в формате OpenSpec в `<docs>`: как из готового PBC сделать OpenSpec change (proposal, delta specs, design, tasks), правила формата и строгой валидации, что обновляет разработчик ",
+      "source": "catalog/openspec"
+    },
+    {
+      "name": "task-breakdown",
+      "version": "1.0.0",
+      "description": "Нарезка PBC продукта на задачи разработки по логике, а не по дням: законченная часть функциональности — одна задача (API сущности со всеми слоями, CI целиком).",
+      "source": "catalog/task-breakdown"
     }
   ]
 }
