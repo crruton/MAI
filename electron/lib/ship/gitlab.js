@@ -55,6 +55,10 @@ export function createGitlab({ url, token, fetch: fetchImpl = globalThis.fetch, 
     updateNote: (project, iid, noteId, body) => call('PUT', `${mrPath(project, iid)}/notes/${Number(noteId)}`, { body: { body } }),
     /** Апрув привязан к SHA: GitLab откажет, если head MR уже другой. */
     approve: (project, iid, sha) => call('POST', `${mrPath(project, iid)}/approve`, { body: { sha } }),
+    getPipelineJobs: (project, pipelineId) => all(`/projects/${p(project)}/pipelines/${Number(pipelineId)}/jobs`),
+    getDiscussions: (project, iid) => all(`${mrPath(project, iid)}/discussions`),
+    /** Обсуждение на строке diff: `position` — base/start/head SHA, new_path, new_line. */
+    createDiscussion: (project, iid, body, position) => call('POST', `${mrPath(project, iid)}/discussions`, { body: { body, position } }),
     /** Кто апрувнул MR (есть и на Free). Сброс апрувов при push — настройка проекта. */
     getApprovals: (project, iid) => call('GET', `${mrPath(project, iid)}/approvals`),
     setLabels: (project, iid, { add = [], remove = [] }) =>

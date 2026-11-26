@@ -10,27 +10,40 @@
 #   MAI_SHIP_DISABLED      "true" — выключить Ship в проекте
 # Настройки и политика — .mai-code/ship.yaml и .mai-code/approval-policy.yaml в target branch.
 #
-# Сейчас есть роль approver. Ревьюер и steward — следующие шаги (E3.D, E3.E).
+# Роли: ship:review (находки на строках diff, метка ship::blocking) и ship:approval.
+# Steward — следующий шаг (E3.E). Ревьюеру нужны SHIP_REVIEWER_BASE_URL и SHIP_REVIEWER_API_KEY.
 # Образа MAI Ship пока нет (E3.A5): джоба берёт MAI из git по закреплённому MAI_SHIP_REF.
 
 variables:
   MAI_SHIP_REPO: https://github.com/crruton/MAI.git
   MAI_SHIP_REF: dev
 
-ship:approval:
+.mai-ship:
   stage: .post
   image: node:24-slim
+  interruptible: true
+  timeout: 15m
   rules:
     - if: $MAI_SHIP_DISABLED == "true"
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-  needs: []
-  interruptible: true
-  timeout: 10m
   before_script:
     - apt-get update -qq && apt-get install -y -qq git >/dev/null
     - git clone --depth 1 --branch "$MAI_SHIP_REF" "$MAI_SHIP_REPO" /tmp/mai
     - cd /tmp/mai && npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
+ship:review:
+  extends: .mai-ship
+  needs: []
+  script:
+    - node /tmp/mai/scripts/mai-ship.mjs review
+
+ship:approval:
+  extends: .mai-ship
+  # После ревью: approver видит метку ship::blocking.
+  needs:
+    - job: ship:review
+      optional: true
   script:
     # --gate: на GitLab Free джоба — гейт «Pipelines must succeed» (ADR 0108). Код 2 — блок,
     # 3 — нужен апрув человека: апрувните MR и перезапустите джобу. В режиме observe — всегда 0.

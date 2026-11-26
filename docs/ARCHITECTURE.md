@@ -405,6 +405,13 @@ ADR 0119. `ship/gitlab.js` — `createGitlab({ url, token, fetch })` (MR, diffs,
 классификаторы при необходимости, комментарий, метки, approve), `createClassifier` (маска
 секретов), `gateExitCode` (GitLab Free). CLI — `scripts/mai-ship.mjs`; CI — `ci/mai-ship.gitlab-ci.yml`.
 
+### MAI Ship: ревьюер
+
+ADR 0120. `ship/review.js` — `runReview` (контекст, `lensesFor`, находки `parseFindings`, только
+добавленные строки `addedLines`, состязательная проверка, обсуждения с `fingerprint`, сводка,
+метка `ship::blocking`), `createReviewModel`. В `ship/approve.js` — `pipelineStatusFromJobs`:
+статус своего pipeline без джоб `ship:*`. В `ship/gitlab.js` — discussions и джобы pipeline.
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,

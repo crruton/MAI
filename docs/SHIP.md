@@ -2,10 +2,21 @@
 
 Актуально на 26.11.2026. Решения — [ADR 0108](adr/0108-mai-ship-gitlab-ispolnenie-v-ci.md),
 [0109](adr/0109-politika-apruva-v-repozitorii.md), [0110](adr/0110-razdelenie-provayderov-v-ship.md),
-[0119](adr/0119-ship-approver-bez-okna.md). Спека — `openspec/changes/mai-ship-gitlab/`.
+[0119](adr/0119-ship-approver-bez-okna.md), [0120](adr/0120-ship-revyuer.md). Спека — `openspec/changes/mai-ship-gitlab/`.
 
 MAI Ship — механика Claude Ship на GitLab: ревью, steward и approver по политике-файлу.
-Сейчас готов **approver**. Ревьюер и steward — следующие шаги.
+Готовы **ревьюер** и **approver**. Steward — следующий шаг.
+
+## Как работает ревьюер
+
+1. Берёт diff MR и `AGENTS.md` target branch (секреты маскируются).
+2. Ищет проблемы по направлениям: `review.level` — quick (корректность), standard (плюс
+   безопасность и тесты, по умолчанию), deep (плюс ADR и стандарты); или `review.lenses`.
+3. Каждую находку отдельный вызов модели пытается опровергнуть — остаются подтверждённые.
+4. Публикует обсуждения на строках diff (повтор не дублирует), одну сводку и метку
+   `ship::blocking`, если есть blocking-находка. Approver по этой метке блокирует MR.
+
+Модель — `providers.reviewer`; переменные `SHIP_REVIEWER_BASE_URL`, `SHIP_REVIEWER_API_KEY`.
 
 ## Как работает approver
 
@@ -43,6 +54,7 @@ MAI Ship — механика Claude Ship на GitLab: ревью, steward и ap
 
 ```powershell
 $env:GITLAB_URL = "https://gitlab.example.com"; $env:GITLAB_TOKEN = "<токен>"
+node scripts/mai-ship.mjs review --project group/app --mr 42 --dry-run
 node scripts/mai-ship.mjs approve --project group/app --mr 42 --dry-run
 ```
 
@@ -58,4 +70,5 @@ node scripts/mai-ship.mjs approve --project group/app --mr 42 --dry-run
 - Не проверено на живом GitLab и с живой моделью; проверено на поддельном GitLab.
 - Образа MAI Ship нет: джоба клонирует MAI и ставит зависимости на каждом запуске.
 - Затраты на модель пока не считаются: поле `budget` проверяется, но расход не копится.
-- Находки ревью: пока только метка `ship::blocking` (ревьюера ещё нет).
+- Ревьюер видит только diff и `AGENTS.md`, без чтения остального кода (инструменты — вместе со steward).
+- Качество находок не измерено эталонным набором (E3.D5).

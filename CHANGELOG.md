@@ -10,6 +10,9 @@
 
 ### Added
 
+- MAI Ship: ревьюер (ADR 0120) — `node scripts/mai-ship.mjs review` и джоба `ship:review`:
+  находки по направлениям уровня, состязательная проверка каждой, обсуждения на строках diff
+  без дублей, сводка и метка `ship::blocking` для approver'а. Тест `test-ship-review` (21).
 - MAI Ship: роль approver без окна (ADR 0119) — `node scripts/mai-ship.mjs approve` читает MR и
   политику из target branch GitLab, зовёт модель-классификатор только когда нужно, пишет
   решение комментарием и меткой, в enforce ставит approve на оценённый SHA; `--gate` для
@@ -316,6 +319,8 @@
 
 ### Fixed
 
+- MAI Ship: approver в своём pipeline видел статус `running` и блокировал бы каждый MR;
+  теперь статус считается по джобам, кроме `ship:*`.
 - Каталог: `change-request` ссылался на `mr-publish`, которого нет в каталоге; теперь
   `to-mr` и `openspec`, версия 1.0.1.
 - Каталог: в `UPSTREAM.md` навыка `grilling` было название внутреннего workspace;

@@ -25,6 +25,19 @@ function readYaml(text, label) {
   }
 }
 
+/**
+ * Статус pipeline для гейта. Approver работает в том же pipeline, который оценивает: пока он
+ * идёт, статус — running. Тогда статус считается по джобам, кроме своих `ship:*`
+ * (skipped и необязательные ручные не мешают).
+ */
+export function pipelineStatusFromJobs(jobs = []) {
+  const others = jobs.filter((j) => !String(j.name || '').startsWith('ship:'));
+  if (!others.length) return 'success';
+  if (others.some((j) => ['failed', 'canceled'].includes(j.status) && !j.allow_failure)) return 'failed';
+  const done = others.every((j) => ['success', 'skipped'].includes(j.status) || (j.status === 'manual' && j.allow_failure) || (j.status === 'failed' && j.allow_failure));
+  return done ? 'success' : 'running';
+}
+
 /** Ответ классификатора: только true/false и цитата. Всё остальное — «нет ответа». */
 export function parseClassifierAnswer(raw) {
   const text = String(raw || '');
@@ -82,6 +95,14 @@ function noteBody({ result, sha, policyMode, dryRun }) {
   ].join('\n');
 }
 
+async function pipelineStatus(gitlab, project, mr, env) {
+  const head = mr.head_pipeline || mr.pipeline || null;
+  if (head && env.CI_PIPELINE_ID && String(head.id) === String(env.CI_PIPELINE_ID)) {
+    return pipelineStatusFromJobs(await gitlab.getPipelineJobs(project, head.id));
+  }
+  return head?.status || '';
+}
+
 /**
  * Код выхода джобы-гейта на GitLab Free (ADR 0108): «Pipelines must succeed» вместо
  * обязательных апрувов. observe — 0 всегда; enforce: approve — 0; нужен человек — 0, только
@@ -132,7 +153,7 @@ export async function runApprove({ gitlab, project, iid, classify = null, makeCl
     changedLines,
     labels,
     draft: Boolean(mr.draft || mr.work_in_progress),
-    pipeline: mr.head_pipeline?.status || mr.pipeline?.status || '',
+    pipeline: await pipelineStatus(gitlab, project, mr, env),
     blockingFindings: labels.includes('ship::blocking') ? 1 : 0,
     authorIsAgent: executors.length > 0,
     models: { approver: shipCfg.providers?.approver || '', reviewer: shipCfg.providers?.reviewer || '', executors },

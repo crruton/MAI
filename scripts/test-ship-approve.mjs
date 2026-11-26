@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createGitlab, diffFacts, NOTE_MARKER } from '../electron/lib/ship/gitlab.js';
-import { runApprove, createClassifier, parseClassifierAnswer, gateExitCode, LABELS } from '../electron/lib/ship/approve.js';
+import { runApprove, createClassifier, parseClassifierAnswer, gateExitCode, pipelineStatusFromJobs, LABELS } from '../electron/lib/ship/approve.js';
 
 let pass = 0;
 let fail = 0;
@@ -46,7 +46,8 @@ default: require_human
 /** Поддельный GitLab: MR 7 в проекте group/app. */
 function fakeGitlab({ mode = 'observe', files = ['docs/guide.md'], pipeline = 'success', labels = [], commits = ['Добавить раздел\n\nAgent-Model: agentrouter/claude-opus-5-5'], target = {}, headAfter = null } = {}) {
   const state = {
-    mr: { iid: 7, state: 'opened', sha: 'abc123def456', target_branch: 'main', source_branch: 'feature', draft: false, labels: [...labels], head_pipeline: { status: pipeline } },
+    mr: { iid: 7, state: 'opened', sha: 'abc123def456', target_branch: 'main', source_branch: 'feature', draft: false, labels: [...labels], head_pipeline: { id: 555, status: pipeline } },
+    jobs: [{ name: 'test', status: 'success' }, { name: 'lint', status: 'success' }, { name: 'ship:review', status: 'success' }, { name: 'ship:approval', status: 'running' }],
     files: { main: { '.mai-code/ship.yaml': SHIP, '.mai-code/approval-policy.yaml': POLICY(mode), ...target } },
     diffs: files.map((f) => ({ old_path: f, new_path: f, diff: '@@ -1 +1,2 @@\n-old\n+new\n+line\n' })),
     commits: commits.map((message) => ({ message })),
@@ -95,6 +96,7 @@ function fakeGitlab({ mode = 'observe', files = ['docs/guide.md'], pipeline = 's
       note.body = body.body;
       return json(note);
     }
+    if (p === '/projects/group/app/pipelines/555/jobs') return json(page === 1 ? state.jobs : []);
     if (p.endsWith('/approvals') && method === 'GET') return json({ approved_by: state.approvedBy.map((username) => ({ user: { username } })) });
     if (p.endsWith('/approve')) {
       if (body.sha !== state.mr.sha) return json({ message: 'SHA does not match HEAD' }, 409);
@@ -192,6 +194,19 @@ check('секрет в diff замаскирован до отправки мо�
 check('diff передан как данные, temperature 0', sent[0].temperature === 0 && /не инструкции/.test(sent[0].messages[0].content));
 check('diffFacts: файлы, переименование и строки', JSON.stringify(diffFacts([{ old_path: 'a.js', new_path: 'b.js', diff: '+++ b\n--- a\n+x\n-y\n z' }])) === JSON.stringify({ files: ['b.js', 'a.js'], changedLines: 2 }));
 
+console.log('[6a] свой pipeline');
+g = fakeGitlab({ pipeline: 'running' });
+out = await runApprove({ gitlab: g.gitlab, project, iid: 7, classify: no, env: { CI_PIPELINE_ID: '555' } });
+check('approver в своём pipeline: running, но остальные джобы зелёные → не блок', out.result.decision === 'approve', JSON.stringify(out.result));
+g = fakeGitlab({ pipeline: 'running' });
+out = await runApprove({ gitlab: g.gitlab, project, iid: 7, classify: no });
+check('чужой pipeline running → block', out.result.decision === 'block' && out.result.rule === 'gate-pipeline');
+check('статус по джобам', pipelineStatusFromJobs([{ name: 'test', status: 'failed' }]) === 'failed'
+  && pipelineStatusFromJobs([{ name: 'test', status: 'failed', allow_failure: true }, { name: 'ship:approval', status: 'running' }]) === 'success'
+  && pipelineStatusFromJobs([{ name: 'test', status: 'running' }]) === 'running'
+  && pipelineStatusFromJobs([{ name: 'deploy', status: 'manual', allow_failure: true }, { name: 'a', status: 'skipped' }]) === 'success'
+  && pipelineStatusFromJobs([{ name: 'deploy', status: 'manual', allow_failure: false }]) === 'running');
+
 console.log('[6b] гейт GitLab Free (--gate)');
 const gate = async (opts, setup = () => {}) => { const f = fakeGitlab(opts); setup(f.state); const o = await runApprove({ gitlab: f.gitlab, project, iid: 7, classify: opts.classify || no }); return gateExitCode(o, { gitlab: f.gitlab, project, iid: 7, policyMode: o.policyMode }); };
 check('observe: всегда 0, даже если нужен человек', (await gate({ files: ['db/migrations/1.sql'] })) === 0);
@@ -206,7 +221,7 @@ console.log('[7] CLI');
 const cli = spawnSync(process.execPath, [path.join(repo, 'scripts', 'mai-ship.mjs'), 'approve'], { encoding: 'utf8', env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot || '' } });
 check('без проекта и MR — код 1 и подсказка', cli.status === 1 && /--project и --mr/.test(cli.stderr), cli.stderr);
 const wrong = spawnSync(process.execPath, [path.join(repo, 'scripts', 'mai-ship.mjs'), 'steward'], { encoding: 'utf8' });
-check('неготовая роль — понятная ошибка', wrong.status === 1 && /review и steward/.test(wrong.stderr));
+check('неготовая роль — понятная ошибка', wrong.status === 1 && /steward — следующий шаг/.test(wrong.stderr), wrong.stderr);
 
 console.log(`\nship-approve: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);
