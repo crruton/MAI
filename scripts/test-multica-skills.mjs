@@ -20,6 +20,7 @@ function check(name, cond, extra = '') {
   }
 }
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const TOTAL = JSON.parse(fs.readFileSync(path.join(repo, 'mai-marketplace.json'), 'utf8')).packages.length;
 const CR = String.fromCharCode(13);
 const LF = String.fromCharCode(10);
 
@@ -63,7 +64,7 @@ function fakeServer({ listWithoutConfig = false, prefix = '' } = {}) {
 
 console.log('[1] навыки каталога');
 const all = collectCatalogSkills(repo);
-check('18 навыков с версией и хэшем', all.length === 18 && all.every((s) => s.version === '1.0.0' && /^[0-9a-f]{16}$/.test(s.hash)));
+check('все навыки каталога с версией и хэшем', all.length === TOTAL && all.every((s) => /^[0-9]+[.][0-9]+[.][0-9]+$/.test(s.version) && /^[0-9a-f]{16}$/.test(s.hash)));
 const stop = all.find((s) => s.name === 'stop-slop');
 check('файлы навыка с путями через /', stop.files.some((f) => f.path === 'references/phrases.md') && stop.files.some((f) => f.path === 'LICENSE'));
 check('выбор по именам', collectCatalogSkills(repo, ['tdd', 'grilling']).map((s) => s.name).sort().join() === 'grilling,tdd');
@@ -78,17 +79,17 @@ check('неизвестное имя — ошибка', /Нет в катало�
 console.log('[2] первая отдача и повтор');
 let srv = fakeServer();
 let r = pushSkills({ root: repo, run: srv.run, target: { workspaceId: 'ws-team' } });
-check('создано 18', r.created === 18 && srv.skills.size === 18, r.message);
+check('создано столько, сколько в каталоге', r.created === TOTAL && srv.skills.size === TOTAL, r.message);
 const tdd = [...srv.skills.values()].find((s) => s.name === 'tdd');
 check('содержимое, описание и config с меткой', tdd.content.startsWith('---\nname: tdd') && tdd.description && tdd.config.managed_by === MANAGED_BY && tdd.config.version === '1.0.0' && tdd.config.hash);
 check('файлы навыка загружены', Object.keys(tdd.files).sort().join() === ['LICENSE', 'UPSTREAM.md', 'mocking.md', 'tests.md'].sort().join(), Object.keys(tdd.files).join());
 check('workspace в каждом вызове', srv.calls.every((c) => c.args[0] === '--workspace-id' && c.args[1] === 'ws-team'));
 const uploads = srv.calls.filter((c) => c.fileExists !== null);
-check('файлы читаются из временной копии (cwd) и только с LF', uploads.length > 18 && uploads.every((c) => c.fileExists && c.lf));
+check('файлы читаются из временной копии (cwd) и только с LF', uploads.length > TOTAL && uploads.every((c) => c.fileExists && c.lf));
 check('временные копии удалены', uploads.every((c) => !fs.existsSync(c.cwd)));
 const before = srv.writes();
 r = pushSkills({ root: repo, run: srv.run });
-check('повтор: без изменений, ни одной записи', r.unchanged === 18 && r.created === 0 && srv.writes() === before, r.message);
+check('повтор: без изменений, ни одной записи', r.unchanged === TOTAL && r.created === 0 && srv.writes() === before, r.message);
 
 console.log('[3] обновление, чужие навыки, prune');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-skills-'));
@@ -97,7 +98,7 @@ fs.cpSync(path.join(repo, 'catalog'), path.join(tmp, 'catalog'), { recursive: tr
 const tddFile = path.join(tmp, 'catalog', 'tdd', 'skills', 'tdd', 'SKILL.md');
 fs.writeFileSync(tddFile, fs.readFileSync(tddFile, 'utf8').replace('version: 1.0.0', 'version: 1.1.0') + '\nНовый раздел.\n');
 r = pushSkills({ root: tmp, run: srv.run });
-check('правка навыка → update только его', r.updated === 1 && r.unchanged === 17 && r.actions.find((a) => a.action === 'update').name === 'tdd', r.message);
+check('правка навыка → update только его', r.updated === 1 && r.unchanged === TOTAL - 1 && r.actions.find((a) => a.action === 'update').name === 'tdd', r.message);
 check('в Multica новая версия и текст', tdd.config.version === '1.1.0' && tdd.content.includes('Новый раздел.'));
 srv.skills.set('manual-1', { id: 'manual-1', name: 'debug-copy', config: {} });
 const own = [...srv.skills.values()].find((s) => s.name === 'debug');
@@ -132,7 +133,7 @@ fs.rmSync(crlf, { recursive: true, force: true });
 console.log('[4] dry-run и форматы ответа');
 srv = fakeServer();
 r = pushSkills({ root: repo, run: srv.run, dryRun: true });
-check('dry-run: план без записей', r.dryRun && r.created === 18 && srv.writes() === 0 && /^План/.test(r.message));
+check('dry-run: план без записей', r.dryRun && r.created === TOTAL && srv.writes() === 0 && /^План/.test(r.message));
 srv = fakeServer({ listWithoutConfig: true, prefix: 'Using workspace ws\n' });
 pushSkills({ root: repo, run: srv.run, names: ['grilling'] });
 r = pushSkills({ root: repo, run: srv.run, names: ['grilling'] });

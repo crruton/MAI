@@ -187,8 +187,18 @@ export function globalAgentsFile() {
   return path.join(dataDir(), 'AGENTS.md');
 }
 
+/** AGENTS.md команды из профиля (E2.2, ADR 0118): main пишет его при применении профиля. */
+export function teamAgentsFile() {
+  return path.join(dataDir(), 'AGENTS.team.md');
+}
+
 export function readAgents(projectDir) {
-  const result = { project: '', global: '', projectFile: agentsFile(projectDir), globalFile: globalAgentsFile() };
+  const result = { project: '', global: '', team: '', projectFile: agentsFile(projectDir), globalFile: globalAgentsFile() };
+  try {
+    result.team = fs.readFileSync(teamAgentsFile(), 'utf8');
+  } catch {
+    result.team = '';
+  }
   try {
     result.project = fs.readFileSync(result.projectFile, 'utf8');
   } catch {

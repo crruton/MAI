@@ -1,0 +1,8 @@
+{
+  "name": "tf-plan-review",
+  "version": "1.0.0",
+  "description": "Review Terraform plans for replacements, data loss, security exposure, dependency impact, and cost changes.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

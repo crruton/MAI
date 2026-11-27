@@ -1,0 +1,20 @@
+# Репозиторий документации: правки текста — рутина, CI и политика — человек.
+version: 1
+mode: observe
+enforce_classes: [docs]
+gates:
+  pipeline: success
+  max_changed_lines: 800
+rules:
+  - name: assets
+    match: { any_path: ["**/*.png", "**/*.jpg", "**/*.svg", "**/*.pdf"] }
+    decision: require_human
+    reason: Двоичные файлы и картинки — проверяет человек
+  - name: docs
+    match: { paths: ["**/*.md", "docs/**"] }
+    decision: approve
+classifiers:
+  - name: legal
+    question: Изменение меняет юридические формулировки, цены, сроки или обещания клиентам?
+    when_true: require_human
+default: require_human

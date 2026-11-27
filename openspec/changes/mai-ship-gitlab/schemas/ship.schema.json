@@ -39,7 +39,9 @@
           "uniqueItems": true,
           "default": ["ci", "conflicts", "findings"]
         },
-        "branch_prefix": { "type": "string", "pattern": "^[a-z0-9._/-]+$", "default": "mai/" }
+        "branch_prefix": { "type": "string", "pattern": "^[a-z0-9._/-]+$", "default": "mai/" },
+        "commands": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true, "description": "Команды проверки, которые steward может запускать: run_shell(<команда>*)" },
+        "max_iterations": { "type": "integer", "minimum": 1, "maximum": 100, "default": 30 }
       }
     },
     "providers": {

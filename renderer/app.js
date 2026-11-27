@@ -1982,6 +1982,29 @@ function prPrompt(args = '') {
     .join('\n');
 }
 
+/**
+ * /ship (E3.C1, ADR 0108): как Claude Ship /ship, для GitLab и GitHub. Коммит — отдельной
+ * командой git commit: MAI добавит трейлеры Agent-Model и Agent-User (ADR 0116), по ним
+ * approver проверяет независимость модели (ADR 0110). Draft не снимается, merge не делается.
+ */
+function shipPrompt(args = '') {
+  return [
+    'Доведи текущую работу до Draft merge request — как /ship в Claude Ship.',
+    '1. Посмотри `git status`, текущую ветку, `git remote -v`, `git log` относительно основной ветки. Определи платформу по remote: GitLab — `glab`, GitHub — `gh`.',
+    '2. Проверки до push: найди команды проекта в AGENTS.md, package.json, Makefile, CI-конфиге и запусти линтер и тесты затронутых частей. Упало — почини или остановись и скажи, что упало. Красное не пушь.',
+    '3. Если ты на основной или защищённой ветке (main, master, dev, если она защищена) — создай новую ветку: `<ключ задачи>-<кратко>` в нижнем регистре или `ship/<кратко>`.',
+    '4. Коммит: только файлы этой задачи, без секретов и мусора. Сделай `git add` и отдельной командой `git commit -m "..."` — не склеивай через && или ;, тогда MAI добавит трейлеры Agent-Model и Agent-User. Сообщение — в стиле `git log` проекта.',
+    '5. `git push -u origin <ветка>`. В защищённую ветку не пушь, историю не переписывай.',
+    '6. Описание: если доступен навык `to-mr` — загрузи его (load_skill) и следуй ему. Иначе — разделы Summary (проблема и итоговое поведение), Evidence (что проверено и результат), Merge Danger (миграции, конфиги, риски; нет — «Существенных рисков не выявлено»). Есть шаблон MR/PR в репозитории — заполни его. Заголовок — `[КЛЮЧ] Кратко` или `[NO-KEY] Кратко`.',
+    '7. Создай черновик: GitLab — `glab mr create --draft --title … --description …` (описание — из файла во временной папке), GitHub — `gh pr create --draft --title … --body-file …`. Сначала проверь, нет ли уже открытого MR/PR из этой ветки — тогда обнови его, а не создавай второй.',
+    '8. Если в проекте есть `.mai-code/ship.yaml` — скажи, что ревью и решение approver\'а придут из CI (MAI Ship). Draft не снимай, не апрувь и не мерджи сам.',
+    '9. В ответе — ссылка на MR/PR, ветка, что проверено и что упало (если упало).',
+    args ? `Ключ задачи или уточнение от меня: ${args}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
 /* ---------- рабочие копии для чатов (CC11.5, ADR 0076) ---------- */
 
 /**
@@ -2392,6 +2415,10 @@ async function runSlash(text) {
       clear();
       await send({ text: prPrompt(args), display: `/pr${args ? ` ${args}` : ''}` });
       return;
+    case 'ship':
+      clear();
+      await send({ text: shipPrompt(args), display: `/ship${args ? ` ${args}` : ''}` });
+      return;
     case 'worktree':
       clear();
       await openWorktrees(args.trim());
@@ -2785,6 +2812,8 @@ async function openOnboarding() {
       return;
     }
     for (const w of result.warnings || []) toast(w, 'err');
+    const fromCatalog = [...(result.catalogSkills?.installed || []), ...(result.catalogSkills?.updated || [])];
+    if (fromCatalog.length) toast(`Навыки команды для роли: ${fromCatalog.join(', ')}`, 'ok');
     connectors(result.package);
   };
 
@@ -3909,7 +3938,7 @@ const suggest = { kind: '', items: [], index: 0, token: null, timer: null };
 const SLASH_GROUPS = {
   'Чат': ['compact', 'context', 'cost', 'clear', 'rename', 'fork', 'rewind', 'resume', 'export', 'import', 'help'],
   'Модель и режим': ['model', 'mode'],
-  'Git': ['commit', 'review', 'security-review', 'pr', 'worktree', 'signoff'],
+  'Git': ['commit', 'review', 'security-review', 'pr', 'ship', 'worktree', 'signoff'],
   'Проект': ['init', 'memory', 'agents', 'hooks', 'permissions', 'trash', 'projects', 'onboarding'],
   'Подключения': ['connectors', 'packages', 'schedule'],
   'Обслуживание': ['updates', 'cleanup', 'privacy'],
@@ -5285,25 +5314,37 @@ async function openMemory() {
 
 /* ---------- доступ и роли ---------- */
 
+/** Роли по возрастанию прав (ADR 0117): каждая следующая включает предыдущие. */
+const ROLE_ORDER = ['guest', 'developer', 'lead', 'admin'];
+/** Без данных о входе — локальный admin (D1). */
+function roleAtLeast(level) {
+  const role = state.auth?.role || 'admin';
+  return ROLE_ORDER.indexOf(role) >= ROLE_ORDER.indexOf(level);
+}
+
+/** Какая роль нужна панели: та же раскладка, что у каналов IPC (ADR 0117). */
+const PANEL_LEVEL = { multica: 'developer', memory: 'developer', sandbox: 'developer', skills: 'lead', agents: 'lead', providers: 'admin', runtimes: 'admin', plugins: 'admin' };
+
 function applyRoleGuard() {
-  const admin = !state.auth || state.auth.role === 'admin';
-  document.body.classList.toggle('role-guest', !admin);
-  for (const panel of ['providers', 'runtimes', 'skills', 'agents', 'memory', 'plugins', 'multica', 'sandbox']) {
+  const developer = roleAtLeast('developer');
+  document.body.classList.toggle('role-guest', !developer);
+  for (const [panel, level] of Object.entries(PANEL_LEVEL)) {
     const button = document.querySelector(`[data-panel="${panel}"]`);
     if (!button) continue;
-    button.disabled = !admin;
-    button.title = admin ? '' : 'Недоступно для роли guest';
+    const allowed = roleAtLeast(level);
+    button.disabled = !allowed;
+    button.title = allowed ? '' : `Нужна роль ${level}`;
   }
   const newProject = $('#new-project-btn');
   if (newProject) {
-    newProject.disabled = !admin;
-    newProject.title = admin ? 'Создать проект в отдельной папке (это не изоляция: агент работает с вашими правами)' : 'Создание проектов доступно роли admin';
+    newProject.disabled = !developer;
+    newProject.title = developer ? 'Создать проект в отдельной папке (это не изоляция: агент работает с вашими правами)' : 'Создание проектов доступно роли developer и выше';
   }
-  // Смена папки — только admin; меню проекта открывается всем (N9).
+  // Смена папки — от developer; меню проекта открывается всем (N9).
   const projectPick = $('#project-pick');
   if (projectPick) {
-    projectPick.disabled = !admin;
-    projectPick.title = admin ? 'Сменить папку проекта' : 'Смена проекта доступна роли admin';
+    projectPick.disabled = !developer;
+    projectPick.title = developer ? 'Сменить папку проекта' : 'Смена проекта доступна роли developer и выше';
   }
   const authButton = $('#auth-btn');
   if (authButton) {
@@ -5314,6 +5355,8 @@ function applyRoleGuard() {
 
 async function openAuth() {
   const auth = await api.auth.status();
+  // Профиль команды (ADR 0118): что пришло от организации.
+  const team = await api.team.status().catch(() => ({ configured: false }));
   state.auth = auth;
   applyRoleGuard();
 
@@ -5353,6 +5396,11 @@ async function openAuth() {
         el('dd', { text: auth.loggedIn ? 'активна' : 'нет' }),
       ]),
       auth.required ? el('p', { class: 'hint-text auth-corporate', text: `Корпоративный режим: вход обязателен, адрес Keycloak задан организацией (${auth.issuer || '—'}). Локальной роли нет.` }) : null,
+      team.configured
+        ? el('p', { class: `hint-text auth-team${team.ok ? '' : ' error-text'}`, text: team.ok
+          ? `Профиль команды «${team.name}» (${team.from === 'managed' ? 'задан организацией' : 'из настроек'}): каталоги ${team.marketplaces.join(', ') || '—'}, MCP ${team.mcpServers.join(', ') || '—'}${team.agents ? ', AGENTS.md команды' : ''}${team.workspaceId ? `, workspace Multica ${team.workspaceId}` : ''}.`
+          : `Профиль команды не применён: ${team.error || 'нет данных'}` })
+        : null,
       auth.required ? null : el('div', { class: 'row' }, [field('Issuer Keycloak', issuer), field('Client ID', clientId)]),
       el('div', { class: 'row' }, [
         auth.required ? null : el('button', {

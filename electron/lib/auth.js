@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { shell, safeStorage } from 'electron';
 import { dataDir } from './config.js';
 import { readManaged } from './settings-levels.js';
-import { corporatePolicy, identityFromToken, refreshTokens, sessionGate, stampTokens, tokenState } from './auth-session.js';
+import { roleAtLeast, corporatePolicy, identityFromToken, refreshTokens, sessionGate, stampTokens, tokenState } from './auth-session.js';
 
 /**
  * Роли и вход.
@@ -29,7 +29,9 @@ export function authPolicy() {
   return policyCache.value;
 }
 
-const ROLES = new Set(['admin', 'guest']);
+// Роли из Keycloak (ADR 0117); локальный режим интерфейса — только admin и guest (D1).
+const ROLES = new Set(['admin', 'lead', 'developer', 'guest']);
+const LOCAL_ROLES = new Set(['admin', 'guest']);
 
 function authFile() {
   return path.join(dataDir(), 'auth.json');
@@ -123,11 +125,16 @@ export function authStatus() {
   };
 }
 
-export function requireAdmin() {
+/** Роль не ниже `level` (E2.8, ADR 0117): guest < developer < lead < admin. */
+export function requireRole(level) {
   const { role, required } = readAuth();
   if (required && role === 'none') throw new Error('Нужен вход через Keycloak');
-  if (role !== 'admin') throw new Error('Недостаточно прав: требуется роль admin');
+  if (!roleAtLeast(role, level)) throw new Error(`Недостаточно прав: требуется роль ${level}`);
   return true;
+}
+
+export function requireAdmin() {
+  return requireRole('admin');
 }
 
 /** Гейт IPC (F21): в корпоративном режиме без входа — только каналы экрана входа. */
@@ -180,7 +187,7 @@ export function configureAuth({ issuer, clientId }) {
 }
 
 export function setLocalRole(role) {
-  if (!ROLES.has(role)) throw new Error(`Неизвестная роль: ${role}`);
+  if (!LOCAL_ROLES.has(role)) throw new Error(`Неизвестная роль: ${role}`);
   const current = readAuth();
   if (current.required) throw new Error('Корпоративный режим: роль задаётся в Keycloak, локальной роли нет');
   if (current.mode === 'keycloak' && current.tokens) {

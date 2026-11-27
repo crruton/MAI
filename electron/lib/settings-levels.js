@@ -57,6 +57,8 @@ export function readManaged(file = managedSettingsPath()) {
     // Каталог коннекторов организации (ADR 0052).
     connectors: Array.isArray(data?.connectors) ? data.connectors : [],
     onlyManagedConnectors: data?.onlyManagedConnectors === true,
+    // Профиль команды (E2.2, ADR 0118): адрес задаёт организация.
+    teamProfile: data?.teamProfile || null,
     // Корпоративный режим: обязательный вход через Keycloak (F21, ADR 0093).
     auth: corporatePolicy(data),
   };

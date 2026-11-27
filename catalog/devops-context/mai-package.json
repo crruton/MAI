@@ -1,0 +1,8 @@
+{
+  "name": "devops-context",
+  "version": "1.0.0",
+  "description": "Identify the target environment, deployment owner and operational constraints before CI, Kubernetes, database or backup work.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

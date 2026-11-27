@@ -1,0 +1,8 @@
+{
+  "name": "use-cases",
+  "version": "1.0.0",
+  "description": "Тестирование продукта: тест-кейсы (Use Cases) по PBC, проверка каждой влитой задачи, тестирование реализованного PBC по user stories и тест-кейсам, отчёт о прогоне и оформление бага.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

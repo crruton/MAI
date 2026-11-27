@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { collectCatalogSkills, MANAGED_BY } from './multica-skills.js';
+import { roleSkillNames } from './catalog-roles.js';
 
 export const MARKER = '.mai-catalog.json';
 
@@ -78,7 +79,8 @@ function writeSkill(skill, dest, source) {
  * @param {{ root: string, targets: string[], projectDir?: string, home?: string, names?: string[],
  *           prune?: boolean, dryRun?: boolean, source?: string }} options
  */
-export function exportSkills({ root, targets, projectDir = '', home = os.homedir(), names = [], prune = false, dryRun = false, source = 'mai-team' }) {
+export function exportSkills({ root, targets, projectDir = '', home = os.homedir(), names = [], role = '', prune = false, dryRun = false, source = 'mai-team' }) {
+  if (role) names = [...new Set([...names, ...roleSkillNames(root, role)])];
   if (!targets?.length) throw new Error(`Укажите агентов: ${Object.keys(TARGETS).join(', ')}`);
   const skills = collectCatalogSkills(root, names);
   const results = [];

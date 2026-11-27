@@ -10,6 +10,56 @@
 
 ### Added
 
+- MAI Ship: steward (ADR 0122) — `node scripts/mai-ship.mjs steward` и джоба `ship:steward`
+  (`when: on_failure`): упавшие джобы, blocking-находки и `@mai` → цикл агента MAI в режиме
+  «только разрешённое» → коммит с `Agent-Model`, push в ветку MR, комментарий с откатом;
+  `@mai stop/resume`, лимит раундов, запретные пути, только участники от Developer.
+- Цикл агента MAI работает без Electron: прослойка `electron/lib/electron-shim.js`
+  (`MAI_DATA_DIR`); `test-agent-loop` проходит и в Node. Тест `test-ship-steward` (22).
+- MAI Ship: журнал решений и согласие с людьми (ADR 0121) — запись решения в комментарии
+  approver'а, `approve --journal` (артефакт `ship-journal.jsonl`), `mai-ship report`: согласие по
+  правилам и кандидаты в `enforce_classes`; джоба `ship:report` по расписанию. Навык каталога
+  `ship-setup` с шаблонами политик для документации, библиотеки, сервиса и инфраструктуры.
+  Тесты `test-ship-report` (18), `test-ship-templates` (24).
+- Команда `/ship [ключ]` (E3.C1, MAI Ship): проверки проекта до push, коммит отдельной
+  командой (трейлеры `Agent-Model`/`Agent-User`), ветка, push, Draft MR через `glab` или Draft
+  PR через `gh` с описанием по навыку `to-mr`; без снятия Draft и merge. Группа «Git» в «/».
+- MAI Ship: ревьюер (ADR 0120) — `node scripts/mai-ship.mjs review` и джоба `ship:review`:
+  находки по направлениям уровня, состязательная проверка каждой, обсуждения на строках diff
+  без дублей, сводка и метка `ship::blocking` для approver'а. Тест `test-ship-review` (21).
+- MAI Ship: роль approver без окна (ADR 0119) — `node scripts/mai-ship.mjs approve` читает MR и
+  политику из target branch GitLab, зовёт модель-классификатор только когда нужно, пишет
+  решение комментарием и меткой, в enforce ставит approve на оценённый SHA; `--gate` для
+  GitLab Free. CI-шаблон `ci/mai-ship.gitlab-ci.yml`, документация `docs/SHIP.md`, тест
+  `test-ship-approve` (37). Зависимость `yaml` 2.9.1.
+- Профиль команды (ADR 0118): `teamProfile` в настройках организации указывает на репозиторий
+  с `mai-team.json` — каталоги, MCP-серверы (без секретов), `AGENTS.md` команды и workspace
+  Multica приходят участнику нижним слоем при запуске и после входа. Окно «Доступ» показывает
+  профиль. Модуль `electron/lib/team-profile.js`, тест `test-team-profile` (26), пример
+  `examples/team-profile/`, документация `docs/TEAM.md`.
+- Роли `developer` и `lead` (ADR 0117): guest < developer < lead < admin, роль — старшая из
+  токена Keycloak. developer — память, артефакты, доски, worktree, задачи Multica; lead —
+  ещё цель Multica, навыки и агенты проекта, плановые задачи. Запуск процессов из окна и
+  настройки машины — только admin (ADR 0028). Роли добавлены в шаблон realm.
+- Атрибуция коммитов агента (ADR 0116): простой `git commit` в `run_shell` получает трейлеры
+  `Agent-Model: <провайдер>/<модель>` и `Agent-User: <имя> <email>` пользователя Keycloak;
+  подтверждение показывает итоговую команду; субагенты — тоже. Выключение —
+  `attribution.enabled: false`. Модуль `electron/lib/attribution.js`, тест `test-attribution` (25).
+- Каталог: 15 devops-навыков (CI, Docker, Helm, Flux, Kubernetes, Terraform, Ansible,
+  Harbor) и роль `devops`. Корпоративный профиль сети и зеркал в публичный каталог не
+  входит: ссылки на него заменены отсылкой к приватному каталогу организации, внутренние
+  хосты — на `example.com`.
+- Наборы навыков каталога по ролям (ADR 0115): поле `roles` в `mai-marketplace.json`
+  (developer, analyst, pm, qa, lead). Мастер первого запуска ставит навыки роли из
+  каталога команды; `--role` у `skills:export` и `multica:skills`. Проверка каталога
+  проверяет роли. Модуль `electron/lib/catalog-roles.js`, тест `test-catalog-roles` (19).
+- Каталог: навыки `openspec` (change по PBC, delta specs, архив) и `task-breakdown`
+  (нарезка PBC на задачи по логике). Проверка каталога не пропускает ссылку на навык,
+  которого нет ни в каталоге, ни среди встроенных навыков MAI.
+- Каталог: 7 навыков продуктового цикла (`request-triage`, `product-discovery`,
+  `customer-interview`, `product-prd`, `pbc`, `change-request`, `use-cases`) — одна копия
+  вместо двух расходящихся, без привязки к конкретному продукту. Проверка каталога ищет
+  внутренние названия (`denyTerms` в `catalog/catalog-policy.json`).
 - Экспорт навыков каталога в Claude Code, OpenCode и Codex (ADR 0114):
   `npm.cmd run skills:export -- --target claude,opencode,codex` (`--dry-run`, `--prune`,
   `--project`, имена). Метка `.mai-catalog.json`; чужие папки не перезаписываются; запись
@@ -248,6 +298,8 @@
 
 ### Changed
 
+- MAI Ship, ревьюер (E3.D6): находки разных направлений на одной строке склеиваются в одно
+  обсуждение; отпечаток находки — файл и строка, повторный прогон не плодит дубли.
 - Строка ввода (ADR 0105, N9): вид работы, режим разрешений и глубина — в одном
   чипе «Код · Правки · средняя ▾»; счётчик контекста и «Результаты» — в строке
   состояния.
@@ -283,6 +335,16 @@
 
 ### Fixed
 
+- MAI Ship, по итогам боевой проверки на GitLab 17.3: `/diffs` запрашивается страницами по 20
+  (с `per_page=100` GitLab отвечал 500); гейт не считает апрув пользователя токена approver'а
+  апрувом человека; ревьюер закрывает свои исправленные находки, чтобы steward не чинил
+  исправленное; токен steward'а больше не попадает в URL `git push` и текст ошибки.
+- MAI Ship: approver в своём pipeline видел статус `running` и блокировал бы каждый MR;
+  теперь статус считается по джобам, кроме `ship:*`.
+- Каталог: `change-request` ссылался на `mr-publish`, которого нет в каталоге; теперь
+  `to-mr` и `openspec`, версия 1.0.1.
+- Каталог: в `UPSTREAM.md` навыка `grilling` было название внутреннего workspace;
+  убрано, версия 1.0.1.
 - Запросы к модели (ADR 0107): обрезка текста по `slice` резала суррогатную
   пару (эмодзи, редкие иероглифы) — в истории оставался одиночный surrogate,
   `JSON.stringify` превращал его в `\ud83d`, и шлюз отвечал `400 Invalid JSON

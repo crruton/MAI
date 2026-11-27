@@ -1,0 +1,8 @@
+{
+  "name": "ansible-role-author",
+  "version": "1.0.0",
+  "description": "Create, refactor, or review Ansible roles with explicit inputs, reliable change reporting, restart behavior, and repeat-run validation.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

@@ -13,6 +13,8 @@
 
 ## Что в каталоге
 
+43 навыка.
+
 | Навык | Для чего | Источник |
 |---|---|---|
 | `architecture` | ADR: выбор технологии, фиксация решения | команда |
@@ -33,6 +35,20 @@
 | `testing-strategy` | стратегия и план тестирования | команда |
 | `to-mr` | доведение ветки до GitLab MR с доказательствами и Draft-статусом | команда |
 | `ub-mode` | дисциплина TDD и чистого кода по Uncle Bob | unclebob/ub-mode, MIT |
+
+Продуктовый цикл (работают вместе; `<docs>` — репозиторий документации продукта или `docs/`):
+
+| Навык | Для чего |
+|---|---|
+| `request-triage` | разбор входящего запроса: brief, доработка, баг, техзадача, вопрос |
+| `product-discovery` | рынок, конкуренты, пользователи, продуктовые гипотезы |
+| `customer-interview` | интервью заказчика по PRD методом grilling |
+| `product-prd` | формат и правила PRD: документы, user stories с Gherkin, чек-лист |
+| `pbc` | разбиение PRD на Packaged Business Capabilities |
+| `change-request` | доработка вне PBC: постановка, проверка, OpenSpec |
+| `use-cases` | тест-кейсы по PBC и проверка влитых задач |
+| `openspec` | OpenSpec change по PBC: delta specs, строгая проверка, архив; задачи в Multica — `openspec-multica` |
+| `task-breakdown` | нарезка PBC на задачи разработки по логике, порядок и зависимости |
 
 ## Добавить или изменить навык
 
@@ -83,6 +99,46 @@ npm.cmd run skills:export -- --target claude --project C:workapp grilling tdd
 новые версии, `--prune` удаляет навыки, которых больше нет в каталоге
 ([ADR 0114](adr/0114-eksport-navykov-v-drugie-agenty.md)).
 
+DevOps (`devops-context` — с чего начинать; корпоративный профиль сети, зеркал и реестра
+организации хранится в приватном каталоге):
+
+| Навык | Для чего |
+|---|---|
+| `devops-context` | среда, владелец и ограничения до работы с CI, Kubernetes, БД |
+| `ci-pipeline-author`, `ci-job-triage`, `ci-security-gates` | GitLab CI: написать, разобрать падение, гейты безопасности |
+| `dockerfile-review`, `docker-compose-author` | Dockerfile и Compose |
+| `helm-chart-author`, `flux-kustomization` | Helm-чарт приложения, GitOps на Flux |
+| `k8s-pod-triage`, `k8s-rightsizing` | разбор подов, ресурсы по метрикам |
+| `tf-module-author`, `tf-plan-review`, `tf-drift-check` | Terraform: модуль, ревью плана, дрейф |
+| `ansible-role-author`, `harbor-cli` | роли Ansible, Harbor через CLI |
+| `ship-setup` | подключить MAI Ship: шаблоны политик апрува для четырёх типов репозиториев |
+
+## Наборы по ролям
+
+Поле `roles` в `mai-marketplace.json` перечисляет навыки роли ([ADR 0115](adr/0115-nabory-navykov-po-rolyam.md)):
+
+| Роль | Навыки |
+|---|---|
+| developer | code-review, debug, diagnosing-bugs, tdd, ponytail, to-mr, documentation, tech-debt, openspec, stop-slop |
+| analyst | request-triage, product-discovery, customer-interview, product-prd, pbc, openspec, change-request, use-cases, grilling, system-design, stop-slop |
+| pm | request-triage, product-discovery, customer-interview, product-prd, task-breakdown, standup, release-notes, grilling, stop-slop |
+| qa | use-cases, testing-strategy, code-review, ponytail-review, diagnosing-bugs, incident-response |
+| lead | architecture, system-design, code-review, task-breakdown, tech-debt, standup, grilling, incident-response |
+| devops | все 15 devops-навыков и incident-response |
+
+Мастер первого запуска (`/onboarding`) ставит вместе с набором роли её навыки из каталога.
+Из терминала:
+
+```powershell
+npm.cmd run skills:export -- --target claude --role analyst
+npm.cmd run multica:skills -- --role developer
+```
+
+## Ссылки между навыками
+
+Фраза «навык `имя`» или «скилл `имя`» в навыке каталога должна вести на навык каталога или
+на встроенный навык MAI (`skills/`). Иначе проверка каталога не проходит.
+
 ## Что не попадает в каталог
 
 Репозиторий публичный. Проверка не пропускает токены, приватные ключи, хосты из
@@ -93,4 +149,3 @@ npm.cmd run skills:export -- --target claude --project C:workapp grilling tdd
 ## Ограничения
 
 - Правка навыка в папке другого агента перезапишется при экспорте новой версии: править нужно в каталоге.
-- Наборов по ролям пока нет (E1.7): навыки ставятся по одному.

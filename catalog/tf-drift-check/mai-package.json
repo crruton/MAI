@@ -1,0 +1,8 @@
+{
+  "name": "tf-drift-check",
+  "version": "1.0.0",
+  "description": "Diagnose Terraform drift between configuration, saved state, and live infrastructure; distinguish external changes from code or provider changes and prepare a reconciliation.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

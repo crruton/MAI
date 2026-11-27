@@ -1,0 +1,41 @@
+# Сервис: миграции, права и внешние эффекты — человек; секреты — блок.
+version: 1
+mode: observe
+enforce_classes: [docs, tests-only]
+gates:
+  pipeline: success
+  max_blocking_findings: 0
+  max_changed_lines: 400
+rules:
+  - name: secrets
+    match: { any_path: ["**/.env*", "**/*.key", "**/*.pem"] }
+    decision: block
+    reason: Файлы секретов в MR
+  - name: migrations
+    match: { any_path: ["**/migrations/**", "**/*.sql"] }
+    decision: require_human
+    reason: Миграция данных
+  - name: infra
+    match: { any_path: ["Dockerfile", "**/Dockerfile", "charts/**", "deploy/**", "**/*.tf"] }
+    decision: require_human
+    reason: Сборка и развёртывание
+  - name: docs
+    match: { paths: ["**/*.md", "docs/**"] }
+    decision: approve
+  - name: tests-only
+    match: { paths: ["test/**", "tests/**", "**/*.test.*", "**/*.spec.*", "**/test_*.py"] }
+    decision: approve
+  - name: small-fix
+    match: { author: agent, max_changed_lines: 50 }
+    decision: approve
+classifiers:
+  - name: external-effect
+    question: Изменение отправляет данные во внешний сервис или меняет публичный API сервиса?
+    when_true: require_human
+  - name: auth
+    question: Изменение затрагивает вход, роли, права доступа или проверку токенов?
+    when_true: require_human
+  - name: payments
+    question: Изменение касается оплаты, денег или биллинга?
+    when_true: block
+default: require_human

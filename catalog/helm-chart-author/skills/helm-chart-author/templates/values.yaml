@@ -1,0 +1,57 @@
+replicaCount: 2
+
+image:
+  repository: registry.example.com/team/app
+  # Pin by tag; prefer digest in production.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+containerPort: 8080
+
+# Plain environment variables. Secrets go through existingSecret refs, never values.
+env: {}
+
+# Names of existing Secrets/ConfigMaps mounted as env. Created elsewhere (SOPS/ESO).
+envFrom: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 128Mi
+
+probes:
+  path: /healthz
+  startup:
+    failureThreshold: 30
+    periodSeconds: 5
+  liveness:
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+service:
+  type: ClusterIP
+  port: 80
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+networkPolicy:
+  enabled: true
+  # Namespaces/pods allowed to reach the app. Empty list means nobody.
+  ingressFrom: []
+  # Extra egress rules appended after the DNS allow rule (raw NetworkPolicyEgressRule).
+  egress: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

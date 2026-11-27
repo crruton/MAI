@@ -130,3 +130,11 @@ ADR фиксируют решения, которые дорого менять:
 | [0112](0112-multica-workspace-i-proekt-v-nastroykah-proekta.md) | Workspace и проект Multica — в настройках проекта | accepted | 2026-11-26 |
 | [0113](0113-navyki-kataloga-v-multica.md) | Навыки каталога → Multica MAI | accepted | 2026-11-26 |
 | [0114](0114-eksport-navykov-v-drugie-agenty.md) | Экспорт навыков каталога в Claude Code, OpenCode и Codex | accepted | 2026-11-26 |
+| [0115](0115-nabory-navykov-po-rolyam.md) | Наборы навыков каталога по ролям | accepted | 2026-11-26 |
+| [0116](0116-atribuciya-kommitov-agenta.md) | Атрибуция коммитов агента: трейлеры Agent-Model и Agent-User | accepted | 2026-11-26 |
+| [0117](0117-roli-developer-i-lead.md) | Роли developer и lead в матрице прав IPC | accepted | 2026-11-26 |
+| [0118](0118-profil-komandy.md) | Профиль команды: каталоги, MCP, AGENTS.md и workspace из одного репозитория | accepted | 2026-11-26 |
+| [0119](0119-ship-approver-bez-okna.md) | MAI Ship: approver без окна, парсер YAML и гейт для GitLab Free | accepted, дополнено 27.11 | 2026-11-26 |
+| [0120](0120-ship-revyuer.md) | MAI Ship: ревьюер с состязательной проверкой и статус своего pipeline | accepted, дополнено 27.11 | 2026-11-26 |
+| [0121](0121-ship-zhurnal-i-soglasie.md) | MAI Ship: журнал решений в MR и согласие approver ↔ человек | accepted | 2026-11-27 |
+| [0122](0122-ship-steward-i-agent-bez-electron.md) | MAI Ship: steward и цикл агента MAI без Electron | accepted, дополнено 27.11 | 2026-11-27 |

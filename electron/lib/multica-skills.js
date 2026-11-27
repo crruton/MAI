@@ -13,6 +13,7 @@ import path from 'node:path';
 import { CATALOG } from './marketplace.js';
 import { frontmatter } from './catalog-check.js';
 import { targetArgs, pickList } from './multica-target.js';
+import { roleSkillNames } from './catalog-roles.js';
 
 export const MANAGED_BY = 'mai-code';
 const MAX_FILE = 512 * 1024;
@@ -174,7 +175,8 @@ function materialize(skill) {
  * Отдаёт навыки каталога в Multica.
  * @returns {{ ok: true, dryRun, created, updated, unchanged, conflicts, deleted, actions }}
  */
-export function pushSkills({ root, run, target = {}, names = [], prune = false, dryRun = false, source = 'mai-team' }) {
+export function pushSkills({ root, run, target = {}, names = [], role = '', prune = false, dryRun = false, source = 'mai-team' }) {
+  if (role) names = [...new Set([...names, ...roleSkillNames(root, role)])];
   const local = collectCatalogSkills(root, names);
   const remote = remoteSkills(run, target);
   const actions = planSkillPush(local, remote, { prune: prune && names.length === 0 });

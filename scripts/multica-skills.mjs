@@ -4,6 +4,7 @@
  *
  *   npm.cmd run multica:skills -- --dry-run
  *   npm.cmd run multica:skills -- grilling tdd
+ *   npm.cmd run multica:skills -- --role developer
  *   npm.cmd run multica:skills -- --workspace <id> --prune
  *
  * Каталог — корень этого репозитория (`mai-marketplace.json`) или `--root <папка>`.
@@ -32,6 +33,7 @@ const option = (name) => {
 
 const dryRun = flag('--dry-run');
 const prune = flag('--prune');
+const role = option('--role');
 const workspaceId = option('--workspace') || process.env.MULTICA_WORKSPACE_ID || '';
 const root = path.resolve(option('--root') || path.join(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const names = args.filter((a) => !a.startsWith('-'));
@@ -45,7 +47,7 @@ function run(cliArgs, { cwd } = {}) {
 }
 
 try {
-  const report = pushSkills({ root, run, target: { workspaceId }, names, prune, dryRun });
+  const report = pushSkills({ root, run, target: { workspaceId }, names, role, prune, dryRun });
   console.log(report.message);
   for (const a of report.actions) if (a.action !== 'unchanged') console.log(`  ${a.action.padEnd(9)} ${a.name}${a.reason ? ` — ${a.reason}` : ''}`);
 } catch (err) {

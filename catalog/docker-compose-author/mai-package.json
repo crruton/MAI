@@ -1,0 +1,8 @@
+{
+  "name": "docker-compose-author",
+  "version": "1.0.0",
+  "description": "Create, change or review Docker Compose configurations for local development and single-host production.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

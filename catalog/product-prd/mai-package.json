@@ -1,0 +1,8 @@
+{
+  "name": "product-prd",
+  "version": "1.0.0",
+  "description": "Формат и правила PRD продукта: набор документов docs/prd/00–13 в `<docs>`, что в каждом, user stories с Gherkin, версии и CHANGELOG, чек-лист качества PRD.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

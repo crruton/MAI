@@ -305,7 +305,7 @@ ipcMain.handle('roles:list', () => ({
 }));
 ipcMain.handle('roles:install', (_e, id) => {
   roleCalls.push(id);
-  return { ok: true, role: { id }, package: { name: `role-${id}`, parts: { skills: 1, commands: 1 } } };
+  return { ok: true, role: { id }, package: { name: `role-${id}`, parts: { skills: 1, commands: 1 } }, catalogSkills: { installed: ['code-review', 'tdd'], updated: [], skipped: [], errors: [] } };
 });
 const localCalls = [];
 const boardOpens = [];
@@ -555,6 +555,8 @@ ipcMain.handle('repowise:restartMcp', () => {
 const multicaPulls = [];
 ipcMain.handle('multica:status', () => ({ available: true, version: 'multica 0.4', config: {} }));
 ipcMain.handle('multica:issues', () => ({ ok: true, issues: [] }));
+// Профиль команды (E2.2, ADR 0118).
+ipcMain.handle('team:status', () => ({ configured: true, from: 'managed', url: 'https://git.example/profile.git', name: 'acme-team', ok: true, error: '', marketplaces: ['mai-team'], mcpServers: ['docs'], agents: true, workspaceId: 'ws-team' }));
 // Workspace и проект Multica для папки (E2.3, ADR 0112).
 const multicaTargets = [];
 const multicaProjectCalls = [];
@@ -1976,6 +1978,8 @@ app.whenReady().then(async () => {
     await wait(400);
     const step2 = await ui(`document.querySelector('.onboarding-installed')?.textContent || ''`);
     check('выбор роли ставит набор и показывает, что в нём', roleCalls.join() === 'developer' && /навыков 1, команд 1/.test(step2), step2);
+    const roleToasts = await ui(`[...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ')`);
+    check('мастер сообщает о навыках команды для роли (E1.7)', /Навыки команды для роли: code-review, tdd/.test(roleToasts), roleToasts);
     await ui(`document.querySelector('.onboarding-connect').click()`);
     await wait(500);
     const shown = await ui(`[...document.querySelectorAll('.connector')].map((c) => c.dataset.id).join()`);
@@ -2127,6 +2131,8 @@ app.whenReady().then(async () => {
     check('/security-review 7: gh pr diff, только чтение, путь атаки и уверенность', /gh pr diff 7/.test(sec?.text) && /файлы не меняй/.test(sec?.text) && /путь атаки/.test(sec?.text) && /уверенность/.test(sec?.text), sec?.text?.slice(0, 200));
     const pr = await slash('/pr для релиза');
     check('/pr: шаблон репозитория, не пушить в защищённую, без merge', /pull_request_template/.test(pr?.text) && /в защищённую ветку не пушь/.test(pr?.text) && /Не мерджи PR/.test(pr?.text) && /для релиза/.test(pr?.text), pr?.text?.slice(0, 200));
+    const ship = await slash('/ship MAI-42');
+    check('/ship: проверки до push, коммит отдельной командой (атрибуция), Draft, без merge (E3.C1)', /Красное не пушь/.test(ship?.text) && /не склеивай через && или ;/.test(ship?.text) && /glab mr create --draft/.test(ship?.text) && /gh pr create --draft/.test(ship?.text) && /Draft не снимай/.test(ship?.text) && /to-mr/.test(ship?.text) && /MAI-42/.test(ship?.text) && ship?.displayText === '/ship MAI-42', ship?.text?.slice(0, 300));
     await ui(`(() => { const i = document.querySelector('#input'); i.value = '/worktree'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
     await wait(500);
     const wtRows = await ui(`[...document.querySelectorAll('.worktree-row')].map((r) => r.querySelector('b').textContent + ':' + Boolean(r.querySelector('.worktree-remove'))).join('|')`);
@@ -2201,6 +2207,15 @@ app.whenReady().then(async () => {
     await wait(400);
     const ownProjects = await ui(`[...document.querySelector('.modal-backdrop .multica-project').options].map((o) => o.value).join(',')`);
     check('смена workspace перезагружает проекты', ownProjects === '' && multicaProjectCalls.includes('ws-own'), ownProjects);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await ui(`document.querySelector('#auth-btn')?.click()`);
+    await wait(500);
+    const teamLine = await ui(`document.querySelector('.modal-backdrop .auth-team')?.textContent || ''`);
+    check('«Доступ»: профиль команды от организации — каталоги, MCP, AGENTS.md, workspace (E2.2)', teamLine.includes('Профиль команды «acme-team» (задан организацией): каталоги mai-team, MCP docs, AGENTS.md команды, workspace Multica ws-team'), teamLine);
+    await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
+    await wait(200);
+    await ui(`document.querySelector('[data-panel=multica]').click()`);
+    await wait(600);
     await ui(`document.querySelector('.modal-backdrop .x')?.click()`);
 
     console.log('\n[52] Калибратор архитектуры и PRD (F15, ADR 0090)');

@@ -1,0 +1,8 @@
+{
+  "name": "tf-module-author",
+  "version": "1.0.0",
+  "description": "Author or refactor Terraform modules, typed interfaces, provider wiring, and import or moved blocks.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

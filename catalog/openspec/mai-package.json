@@ -1,0 +1,8 @@
+{
+  "name": "openspec",
+  "version": "1.0.0",
+  "description": "Документация продукта в формате OpenSpec в `<docs>`: как из готового PBC сделать OpenSpec change (proposal, delta specs, design, tasks), правила формата и строгой валидации, что обновляет разработчик ",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

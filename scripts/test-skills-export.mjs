@@ -21,6 +21,7 @@ function check(name, cond, extra = '') {
   }
 }
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const TOTAL = JSON.parse(fs.readFileSync(path.join(repo, 'mai-marketplace.json'), 'utf8')).packages.length;
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-export-home-'));
 const project = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-export-proj-'));
 const CR = String.fromCharCode(13);
@@ -38,14 +39,14 @@ check('неизвестный агент — ошибка со списком', 
 
 console.log('[2] первый экспорт и повтор');
 let r = exportSkills({ root: repo, targets: ['claude', 'opencode', 'codex'], home });
-check('по 18 навыков в три агента', r.results.every((x) => x.created === 18), JSON.stringify(r.results.map((x) => x.created)));
+check('все навыки каталога в три агента', r.results.every((x) => x.created === TOTAL), JSON.stringify(r.results.map((x) => x.created)));
 const tdd = path.join(home, '.claude', 'skills', 'tdd');
 check('SKILL.md, файлы и метка на месте', fs.existsSync(path.join(tdd, 'SKILL.md')) && fs.existsSync(path.join(tdd, 'mocking.md')) && JSON.parse(fs.readFileSync(path.join(tdd, MARKER), 'utf8')).managed_by === 'mai-code');
 check('файлы с LF', !fs.readFileSync(path.join(tdd, 'SKILL.md'), 'utf8').includes(CR));
 check('вложенные справки', fs.existsSync(path.join(home, '.codex', 'skills', 'stop-slop', 'references', 'phrases.md')));
 check('нет временных папок', !fs.readdirSync(path.join(home, '.claude', 'skills')).some((n) => n.includes('.mai-tmp-')));
 r = exportSkills({ root: repo, targets: ['claude'], home });
-check('повтор: без изменений', r.results[0].unchanged === 18 && r.results[0].created === 0);
+check('повтор: без изменений', r.results[0].unchanged === TOTAL && r.results[0].created === 0);
 
 console.log('[3] обновление, чужие папки, prune');
 fs.appendFileSync(path.join(tdd, 'SKILL.md'), 'локальная правка');

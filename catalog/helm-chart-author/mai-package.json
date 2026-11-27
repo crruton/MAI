@@ -1,0 +1,8 @@
+{
+  "name": "helm-chart-author",
+  "version": "1.0.0",
+  "description": "Write values for existing Helm releases or author and validate charts.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

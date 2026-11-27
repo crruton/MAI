@@ -34,7 +34,7 @@
     },
     {
       "name": "grilling",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Grill the user relentlessly about a plan, decision, or idea.",
       "source": "catalog/grilling"
     },
@@ -109,6 +109,232 @@
       "version": "1.0.0",
       "description": "Follow the reduced principles when writing or changing code.",
       "source": "catalog/ub-mode"
+    },
+    {
+      "name": "change-request",
+      "version": "1.0.1",
+      "description": "Доработка вне PBC в продукте: постановка в issue, вопросы автору, проверка техлидом и при необходимости владельцем продукта, OpenSpec change доработки, обновление worksheet PBC, передача в разработку ",
+      "source": "catalog/change-request"
+    },
+    {
+      "name": "customer-interview",
+      "version": "1.0.0",
+      "description": "Интервью заказчика при работе над PRD методом grilling: дерево решений продукта, раунды вопросов с рекомендованными ответами, запись ответов в PRD и конец интервью.",
+      "source": "catalog/customer-interview"
+    },
+    {
+      "name": "pbc",
+      "version": "1.0.0",
+      "description": "PBC (Packaged Business Capability) продукта: как резать PRD на капабилити, индекс docs/pbc/README.md, шаблон worksheet из 12 разделов, критерии приёмки, бизнес- и техническая валидация со списками зам",
+      "source": "catalog/pbc"
+    },
+    {
+      "name": "request-triage",
+      "version": "1.0.0",
+      "description": "Разбор входящего запроса к продукту — brief, доработка, баг, техническая задача или вопрос: признаки каждого типа, граница «баг или доработка», когда доработка перерастает в brief, что проверить, как ",
+      "source": "catalog/request-triage"
+    },
+    {
+      "name": "product-discovery",
+      "version": "1.0.0",
+      "description": "Анализ рынка, конкурентов и пользователей и формулировка продуктовых гипотез продукта: источники, структура исследования, карточка гипотезы, приоритизация, где хранить в `<docs>`.",
+      "source": "catalog/product-discovery"
+    },
+    {
+      "name": "use-cases",
+      "version": "1.0.0",
+      "description": "Тестирование продукта: тест-кейсы (Use Cases) по PBC, проверка каждой влитой задачи, тестирование реализованного PBC по user stories и тест-кейсам, отчёт о прогоне и оформление бага.",
+      "source": "catalog/use-cases"
+    },
+    {
+      "name": "product-prd",
+      "version": "1.0.0",
+      "description": "Формат и правила PRD продукта: набор документов docs/prd/00–13 в `<docs>`, что в каждом, user stories с Gherkin, версии и CHANGELOG, чек-лист качества PRD.",
+      "source": "catalog/product-prd"
+    },
+    {
+      "name": "openspec",
+      "version": "1.0.0",
+      "description": "Документация продукта в формате OpenSpec в `<docs>`: как из готового PBC сделать OpenSpec change (proposal, delta specs, design, tasks), правила формата и строгой валидации, что обновляет разработчик ",
+      "source": "catalog/openspec"
+    },
+    {
+      "name": "task-breakdown",
+      "version": "1.0.0",
+      "description": "Нарезка PBC продукта на задачи разработки по логике, а не по дням: законченная часть функциональности — одна задача (API сущности со всеми слоями, CI целиком).",
+      "source": "catalog/task-breakdown"
+    },
+    {
+      "name": "ansible-role-author",
+      "version": "1.0.0",
+      "description": "Create, refactor, or review Ansible roles with explicit inputs, reliable change reporting, restart behavior, and repeat-run validation.",
+      "source": "catalog/ansible-role-author"
+    },
+    {
+      "name": "ci-job-triage",
+      "version": "1.0.0",
+      "description": "Diagnose failed GitLab CI jobs using logs, DAG timing, runner resources and retry history.",
+      "source": "catalog/ci-job-triage"
+    },
+    {
+      "name": "ci-pipeline-author",
+      "version": "1.0.0",
+      "description": "Write or improve GitLab CI pipelines using measured bottlenecks, DAG dependencies, caching, runner selection and cancellation semantics.",
+      "source": "catalog/ci-pipeline-author"
+    },
+    {
+      "name": "ci-security-gates",
+      "version": "1.0.0",
+      "description": "Configure and verify GitLab CI security scans, merge gates and scheduled audits with explicit scope and suppression policy.",
+      "source": "catalog/ci-security-gates"
+    },
+    {
+      "name": "devops-context",
+      "version": "1.0.0",
+      "description": "Identify the target environment, deployment owner and operational constraints before CI, Kubernetes, database or backup work.",
+      "source": "catalog/devops-context"
+    },
+    {
+      "name": "docker-compose-author",
+      "version": "1.0.0",
+      "description": "Create, change or review Docker Compose configurations for local development and single-host production.",
+      "source": "catalog/docker-compose-author"
+    },
+    {
+      "name": "dockerfile-review",
+      "version": "1.0.0",
+      "description": "Review or improve Dockerfiles and container image builds for secret handling, base-image choice, size, caching and runtime correctness.",
+      "source": "catalog/dockerfile-review"
+    },
+    {
+      "name": "flux-kustomization",
+      "version": "1.0.0",
+      "description": "Author or diagnose Flux Kustomizations and HelmReleases in the project's existing GitOps layout.",
+      "source": "catalog/flux-kustomization"
+    },
+    {
+      "name": "harbor-cli",
+      "version": "1.0.0",
+      "description": "Operate Harbor registries with the official harbor CLI.",
+      "source": "catalog/harbor-cli"
+    },
+    {
+      "name": "helm-chart-author",
+      "version": "1.0.0",
+      "description": "Write values for existing Helm releases or author and validate charts.",
+      "source": "catalog/helm-chart-author"
+    },
+    {
+      "name": "k8s-pod-triage",
+      "version": "1.0.0",
+      "description": "Diagnose failing Kubernetes pods and migration Jobs from events, logs, metrics and resource settings.",
+      "source": "catalog/k8s-pod-triage"
+    },
+    {
+      "name": "k8s-rightsizing",
+      "version": "1.0.0",
+      "description": "Size Kubernetes container CPU/memory requests and limits from historical usage, throttling, OOM evidence and VPA recommendations.",
+      "source": "catalog/k8s-rightsizing"
+    },
+    {
+      "name": "tf-drift-check",
+      "version": "1.0.0",
+      "description": "Diagnose Terraform drift between configuration, saved state, and live infrastructure; distinguish external changes from code or provider changes and prepare a reconciliation.",
+      "source": "catalog/tf-drift-check"
+    },
+    {
+      "name": "tf-module-author",
+      "version": "1.0.0",
+      "description": "Author or refactor Terraform modules, typed interfaces, provider wiring, and import or moved blocks.",
+      "source": "catalog/tf-module-author"
+    },
+    {
+      "name": "tf-plan-review",
+      "version": "1.0.0",
+      "description": "Review Terraform plans for replacements, data loss, security exposure, dependency impact, and cost changes.",
+      "source": "catalog/tf-plan-review"
+    },
+    {
+      "name": "ship-setup",
+      "version": "1.0.0",
+      "description": "Подключить MAI Ship к GitLab-проекту — выбрать шаблон политики апрува под тип репозитория.",
+      "source": "catalog/ship-setup"
     }
-  ]
+  ],
+  "roles": {
+    "developer": [
+      "code-review",
+      "debug",
+      "diagnosing-bugs",
+      "tdd",
+      "ponytail",
+      "to-mr",
+      "documentation",
+      "tech-debt",
+      "openspec",
+      "stop-slop"
+    ],
+    "analyst": [
+      "request-triage",
+      "product-discovery",
+      "customer-interview",
+      "product-prd",
+      "pbc",
+      "openspec",
+      "change-request",
+      "use-cases",
+      "grilling",
+      "system-design",
+      "stop-slop"
+    ],
+    "pm": [
+      "request-triage",
+      "product-discovery",
+      "customer-interview",
+      "product-prd",
+      "task-breakdown",
+      "standup",
+      "release-notes",
+      "grilling",
+      "stop-slop"
+    ],
+    "qa": [
+      "use-cases",
+      "testing-strategy",
+      "code-review",
+      "ponytail-review",
+      "diagnosing-bugs",
+      "incident-response"
+    ],
+    "lead": [
+      "architecture",
+      "system-design",
+      "code-review",
+      "task-breakdown",
+      "tech-debt",
+      "standup",
+      "grilling",
+      "incident-response",
+      "ship-setup"
+    ],
+    "devops": [
+      "ansible-role-author",
+      "ci-job-triage",
+      "ci-pipeline-author",
+      "ci-security-gates",
+      "devops-context",
+      "docker-compose-author",
+      "dockerfile-review",
+      "flux-kustomization",
+      "harbor-cli",
+      "helm-chart-author",
+      "k8s-pod-triage",
+      "k8s-rightsizing",
+      "tf-drift-check",
+      "tf-module-author",
+      "tf-plan-review",
+      "incident-response",
+      "ship-setup"
+    ]
+  }
 }

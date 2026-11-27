@@ -1,0 +1,27 @@
+# Библиотека: публичный API и зависимости — человек, тесты и документация — рутина.
+version: 1
+mode: observe
+enforce_classes: [docs, tests-only]
+gates:
+  pipeline: success
+  max_blocking_findings: 0
+  max_changed_lines: 400
+rules:
+  - name: dependencies
+    match: { any_path: ["package.json", "package-lock.json", "pyproject.toml", "go.mod", "Cargo.toml", "**/requirements*.txt"] }
+    decision: require_human
+    reason: Изменение зависимостей
+  - name: docs
+    match: { paths: ["**/*.md", "docs/**"] }
+    decision: approve
+  - name: tests-only
+    match: { paths: ["test/**", "tests/**", "**/*.test.*", "**/*_test.*", "**/test_*.py"] }
+    decision: approve
+  - name: small-fix
+    match: { author: agent, max_changed_lines: 40 }
+    decision: approve
+classifiers:
+  - name: public-api
+    question: Изменение меняет публичный API библиотеки (сигнатуры, экспорт, поведение по умолчанию)?
+    when_true: require_human
+default: require_human

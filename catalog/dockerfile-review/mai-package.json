@@ -1,0 +1,8 @@
+{
+  "name": "dockerfile-review",
+  "version": "1.0.0",
+  "description": "Review or improve Dockerfiles and container image builds for secret handling, base-image choice, size, caching and runtime correctness.",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}

@@ -33,14 +33,17 @@ import { createAgentBrowser } from './lib/browser-agent.js';
 import { listMarketplaces, refreshMarketplace, installFromMarketplace, normalizeMarketplace, catalogDir, CATALOG } from './lib/marketplace.js';
 import { readManaged, readProjectLevels, mergeLevels, updateLocalRules, projectSettingsFiles, updateLocalMcp } from './lib/settings-levels.js';
 import { listPackages, packageDirs, packageHooks, packageMcpServers, installPackage, uninstallPackage } from './lib/packages.js';
+import { userLine } from './lib/attribution.js';
+import { profileSource, profileDir, refreshProfile, readProfile, mergeMarketplaces } from './lib/team-profile.js';
 import { listRoles, installRole } from './lib/roles.js';
+import { installRoleSkills, catalogRoles } from './lib/catalog-roles.js';
 import { skillConflicts } from './lib/skills.js';
 import { wrapData } from './lib/injection.js';
 import { localConnectors } from './lib/local-connectors.js';
 import { createNotifier } from './lib/notify.js';
 import { currentBranch } from './lib/git-guard.js';
 import { repoRoot, realPath, createWorktree, listWorktrees, removeWorktree, worktreeId } from './lib/worktree.js';
-import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, installBundledSkills, skillVersion } from './lib/skills.js';
+import { createSkill, deleteSkill, listSkills, readAgents, writeAgents, agentsFile, globalAgentsFile, teamAgentsFile, installBundledSkills, skillVersion } from './lib/skills.js';
 import { scanUpdates, scanDue, installArgs } from './lib/update-scan.js';
 import { trackVersion, planCleanup, applyCleanup, formatBytes } from './lib/cleaner.js';
 import { readMemoryState, saveMemory, saveMemoryFile, memoryVersion, restoreMemory } from './lib/memory.js';
@@ -86,7 +89,7 @@ import { editDiagram, applyDiagram } from './lib/diagram-agent.js';
 import { buildContext as calibrationContext, calibrate, renderMarkdown as calibrationMarkdown } from './lib/calibrator.js';
 import { listChanges as openspecChanges } from './lib/openspec.js';
 import { createWorkspace, listWorkspaces, sandboxRoot } from './lib/workspace.js';
-import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin, sessionGateFor, ensureSession } from './lib/auth.js';
+import { authStatus, configureAuth, setLocalRole, loginKeycloak, logout, requireAdmin, requireRole, sessionGateFor, ensureSession } from './lib/auth.js';
 import { listDocs, readDoc, searchDocs } from './lib/docs.js';
 import * as multica from './lib/multica.js';
 import * as sandbox from './lib/container.js';
@@ -161,7 +164,7 @@ let mainWindow = null;
 
 // Матрица прав IPC (ADR 0028): роль проверяется до любого обработчика.
 // Канал без записи в матрице считается admin-only.
-guardIpc(ipcMain, requireAdmin, {
+guardIpc(ipcMain, requireRole, {
   onUnknown: (channel) => console.warn(`[ipc] канал ${channel} не внесён в матрицу прав — доступен только admin`),
   sessionGate: sessionGateFor,
 });
@@ -223,6 +226,7 @@ function mcpSources(projectDir) {
   const dir = projectDir || settings.projectDir;
   const trusted = isTrusted(dir);
   const layers = [
+    ['team', teamProfile().mcpServers],
     ['global', settings.mcpServers || {}],
     ['package', packageMcpServers(packagesFor(dir))],
     ['project', trusted ? projectMcpConfig(dir) : {}],
@@ -241,6 +245,79 @@ function mcpSources(projectDir) {
 function managed() {
   return readManaged();
 }
+
+/* ---------- Профиль команды (E2.2, ADR 0118) ---------- */
+
+let teamProfileState = { at: 0, profile: readProfile(''), source: null, error: '' };
+
+/** Текущий профиль из кэша. Без настройки или с ошибками — пустой профиль. */
+function teamProfile() {
+  return teamProfileState.profile.ok ? teamProfileState.profile : { marketplaces: [], mcpServers: {}, agents: '', multica: {} };
+}
+
+/** Читает профиль из кэша и пишет AGENTS.md команды. Сеть не трогает. */
+function applyTeamProfile() {
+  let source = null;
+  try {
+    source = profileSource({ managed: managed(), settings: loadSettings() });
+  } catch (err) {
+    teamProfileState = { at: Date.now(), profile: readProfile(''), source: null, error: err?.message || String(err) };
+    return teamProfileState;
+  }
+  const profile = source ? readProfile(profileDir(source, dataDir())) : readProfile('');
+  try {
+    if (profile.ok && profile.agents.trim()) fs.writeFileSync(teamAgentsFile(), profile.agents, 'utf8');
+    else fs.rmSync(teamAgentsFile(), { force: true });
+  } catch (err) {
+    console.error('[team] AGENTS.md команды не записан:', err?.message || err);
+  }
+  teamProfileState = { at: Date.now(), profile, source, error: source && !profile.ok ? profile.errors.join('; ') : '' };
+  return teamProfileState;
+}
+
+/** Скачивает профиль (git) и применяет. Ошибка сети не стирает прежний кэш. */
+async function refreshTeamProfile() {
+  let source = null;
+  try {
+    source = profileSource({ managed: managed(), settings: loadSettings() });
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+  if (!source) {
+    applyTeamProfile();
+    return { ok: true, configured: false };
+  }
+  const fetched = refreshProfile(source, dataDir());
+  const state = applyTeamProfile();
+  if (state.profile.ok) {
+    await mcp.sync(mcpConfigs(loadSettings().projectDir)).catch(() => {});
+    audit({ at: new Date().toISOString(), tool: 'team:apply', source: 'system', cls: 'external', subject: `${state.profile.name} ← ${source.url.slice(0, 200)}`, decision: 'allow' });
+  }
+  return { ok: state.profile.ok, configured: true, fetched: fetched.ok, fetchError: fetched.error || '', ...teamStatus() };
+}
+
+function teamStatus() {
+  const { profile, source, error, at } = teamProfileState;
+  return {
+    configured: Boolean(source),
+    from: source?.from || '',
+    url: source?.url || '',
+    name: profile.name || '',
+    ok: profile.ok,
+    error,
+    appliedAt: at,
+    marketplaces: profile.marketplaces.map((m) => m.name),
+    mcpServers: Object.keys(profile.mcpServers),
+    agents: Boolean(profile.agents),
+    workspaceId: profile.multica.workspaceId || '',
+  };
+}
+
+ipcMain.handle('team:status', () => teamStatus());
+ipcMain.handle('team:refresh', async () => {
+  requireRole('developer');
+  return refreshTeamProfile();
+});
 
 function managedHooks() {
   const org = managed();
@@ -273,6 +350,14 @@ function plannerFor(settings, activeKey) {
   } catch {
     return null;
   }
+}
+
+/** Атрибуция коммитов агента (E2.7, ADR 0116): модель и вошедший пользователь Keycloak. */
+function attributionFor(resolved) {
+  const settings = loadSettings();
+  const auth = authStatus();
+  const user = auth.mode === 'keycloak' && auth.loggedIn ? auth.user : null;
+  return { enabled: settings.attribution?.enabled !== false, model: `${resolved.providerId}/${resolved.modelId}`, user: userLine(user) };
 }
 
 function agentSettings(settings) {
@@ -481,6 +566,9 @@ app.whenReady().then(async () => {
     app.exit(await runCli(CLI));
     return;
   }
+  // Профиль команды (ADR 0118): кэш — сразу, свежая версия — в фоне.
+  applyTeamProfile();
+  refreshTeamProfile().catch((err) => console.error('[team] профиль не обновлён:', err?.message || err));
   try {
     installBundledSkills(path.join(app.getAppPath(), 'skills'));
   } catch (err) {
@@ -671,7 +759,9 @@ ipcMain.handle('auth:configure', (_e, payload) => {
 
 ipcMain.handle('auth:login', async () => {
   try {
-    return { ok: true, ...(await loginKeycloak()) };
+    const result = await loginKeycloak();
+    const team = await refreshTeamProfile().catch((err) => ({ ok: false, error: err?.message || String(err) }));
+    return { ok: true, ...result, team };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }
@@ -1039,7 +1129,7 @@ ipcMain.handle('runtimes:stop', (event) => {
 // ---------- проект ----------
 
 ipcMain.handle('project:pick', async () => {
-  requireAdmin();
+  requireRole('developer');
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
   if (result.canceled || !result.filePaths[0]) return null;
   // Процесс плагинов старого проекта держит его папку (cwd): останавливаем после текущих вызовов.
@@ -1379,7 +1469,7 @@ ipcMain.handle('attachments:open', async (_e, payload) => {
 ipcMain.handle('workspace:root', () => sandboxRoot());
 ipcMain.handle('workspace:list', () => listWorkspaces());
 ipcMain.handle('workspace:create', async (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   try {
     const result = createWorkspace(payload || {});
     saveSettings({ projectDir: result.projectDir });
@@ -1714,6 +1804,7 @@ ipcMain.handle('chat:start', async (event, payload) => {
         provider: resolved.provider,
         projectDir,
         model: resolved.modelId,
+        attribution: attributionFor(resolved),
         messages: session.messages,
         signal: controller.signal,
         mcp,
@@ -1893,6 +1984,7 @@ async function runScheduled(task, { reason = 'schedule' } = {}) {
       provider: resolved.provider,
       projectDir,
       model: resolved.modelId,
+      attribution: attributionFor(resolved),
       messages: session.messages,
       signal: controller.signal,
       mcp,
@@ -2020,6 +2112,7 @@ async function runCli(opts) {
       provider: resolved.provider,
       projectDir,
       model: resolved.modelId,
+      attribution: attributionFor(resolved),
       messages: session.messages,
       signal: controller.signal,
       mcp,
@@ -2353,6 +2446,17 @@ ipcMain.handle('roles:list', () => {
   };
 });
 
+/**
+ * Каталоги команды для навыков роли (E1.7, ADR 0115): подключённые в /packages, у которых
+ * в индексе есть роли, и корень MAI, если приложение запущено из исходников.
+ */
+function teamCatalogs() {
+  const own = path.join(__dirname, '..');
+  const list = marketplaces().filter((m) => Object.keys(catalogRoles(catalogDir(m, dataDir()))).length);
+  if (!list.length && fs.existsSync(path.join(own, CATALOG))) list.push({ name: 'mai-team', url: own });
+  return list;
+}
+
 ipcMain.handle('roles:install', async (_e, id) => {
   try {
     const { role, package: pkg } = installRole({ id, rolesDir: rolesDir(), dataDir: dataDir() });
@@ -2360,8 +2464,17 @@ ipcMain.handle('roles:install', async (_e, id) => {
     const settings = loadSettings();
     saveSettings({ packages: { ...(settings.packages || {}), [pkg.name]: { ...(settings.packages?.[pkg.name] || {}), enabled: true } }, onboarding: { ...(settings.onboarding || {}), role: role.id } });
     audit({ at: new Date().toISOString(), tool: 'role:install', source: 'user', cls: 'external', subject: `${role.id} → ${pkg.name} ${role.version}`, decision: 'allow' });
+    // Навыки роли из каталога команды: новые ставятся, более новые версии обновляются.
+    const catalogSkills = { installed: [], updated: [], skipped: [], errors: [] };
+    for (const market of teamCatalogs()) {
+      const r = installRoleSkills({ market, role: role.id, dataDir: dataDir() });
+      for (const key of Object.keys(catalogSkills)) catalogSkills[key].push(...r[key]);
+    }
+    if (catalogSkills.installed.length || catalogSkills.updated.length) {
+      audit({ at: new Date().toISOString(), tool: 'role:catalog-skills', source: 'user', cls: 'external', subject: `${role.id}: +${catalogSkills.installed.join(',')} ↑${catalogSkills.updated.join(',')}`, decision: 'allow' });
+    }
     const { dir: _dir, ...clean } = role;
-    return { ok: true, role: clean, package: { name: pkg.name, parts: pkg.parts }, warnings: packageSkillWarnings(pkg.name) };
+    return { ok: true, role: clean, package: { name: pkg.name, parts: pkg.parts }, catalogSkills, warnings: [...packageSkillWarnings(pkg.name), ...catalogSkills.errors] };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }
@@ -2566,9 +2679,15 @@ ipcMain.handle('trash:purge', (_e, payload = {}) => ({ ok: true, removed: purgeT
 
 /* ---------- маркетплейс пакетов (CC10.2, ADR 0042) ---------- */
 
-function marketplaces() {
+/** Каталоги, подключённые пользователем: их меняют marketplace:add и marketplace:remove. */
+function ownMarketplaces() {
   const list = loadSettings().marketplaces;
   return Array.isArray(list) ? list.filter((m) => m && m.name && m.url) : [];
+}
+
+/** Каталоги с учётом профиля команды (ADR 0118): личный сильнее при совпадении имени. */
+function marketplaces() {
+  return mergeMarketplaces(ownMarketplaces(), teamProfile().marketplaces);
 }
 
 function marketplaceView() {
@@ -2582,7 +2701,7 @@ ipcMain.handle('marketplace:list', () => marketplaceView());
 ipcMain.handle('marketplace:add', (_e, payload = {}) => {
   try {
     const market = normalizeMarketplace(payload);
-    const list = marketplaces().filter((m) => m.name !== market.name);
+    const list = ownMarketplaces().filter((m) => m.name !== market.name);
     refreshMarketplace(market, dataDir());
     saveSettings({ marketplaces: [...list, market] });
     audit({ at: new Date().toISOString(), tool: 'marketplace:add', source: 'user', cls: 'external', subject: `${market.name} ← ${market.url.slice(0, 300)}`, decision: 'allow' });
@@ -2593,7 +2712,7 @@ ipcMain.handle('marketplace:add', (_e, payload = {}) => {
 });
 
 ipcMain.handle('marketplace:remove', (_e, name) => {
-  saveSettings({ marketplaces: marketplaces().filter((m) => m.name !== name) });
+  saveSettings({ marketplaces: ownMarketplaces().filter((m) => m.name !== name) });
   removeTree(path.join(dataDir(), 'marketplaces', String(name).replace(/[^a-z0-9._-]/gi, '')));
   return { ok: true, ...marketplaceView() };
 });
@@ -2770,7 +2889,7 @@ ipcMain.handle('agents:read', (_e, projectDir) => {
 });
 
 ipcMain.handle('agents:write', (_e, { file, content }) => {
-  requireAdmin();
+  requireRole('lead');
   return writeAgents(file, content);
 });
 
@@ -2778,7 +2897,7 @@ ipcMain.handle('agents:write', (_e, { file, content }) => {
 
 ipcMain.handle('memory:read', (_e, projectDir) => readMemoryState(projectDir));
 ipcMain.handle('memory:write', (_e, { file, content, projectDir }) => {
-  requireAdmin();
+  requireRole('developer');
   return saveMemoryFile(projectOf({ projectDir }), file, content);
 });
 
@@ -2798,7 +2917,7 @@ ipcMain.handle('memory:append', (_e, payload = {}) => {
 });
 
 ipcMain.handle('memory:save', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   return saveMemory(projectOf(payload), { scope: payload.scope, content: payload.content, note: payload.note });
 });
 
@@ -2807,7 +2926,7 @@ ipcMain.handle('memory:version', (_e, payload) =>
 );
 
 ipcMain.handle('memory:restore', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   return restoreMemory(projectOf(payload), payload.scope, payload.version);
 });
 
@@ -2824,11 +2943,11 @@ ipcMain.handle('skills:list', (_e, projectDir) => {
   });
 });
 ipcMain.handle('skills:create', (_e, { projectDir, ...data }) => {
-  requireAdmin();
+  requireRole('lead');
   return createSkill(projectDir, data);
 });
 ipcMain.handle('skills:delete', (_e, file) => {
-  requireAdmin();
+  requireRole('lead');
   return deleteSkill(file);
 });
 
@@ -3068,7 +3187,8 @@ ipcMain.handle('multica:install', () => {
 /** Workspace и проект Multica для папки: личное → проект (git) → настройки MAI (E2.3, ADR 0112). */
 function multicaTarget(projectDir) {
   const dir = projectDir || loadSettings().projectDir;
-  return multica.resolveTarget({ projectDir: dir, trusted: Boolean(dir) && isTrusted(dir), user: loadSettings().multica || {} });
+  const user = { workspaceId: loadSettings().multica?.workspaceId || teamProfile().multica.workspaceId || '' };
+  return multica.resolveTarget({ projectDir: dir, trusted: Boolean(dir) && isTrusted(dir), user });
 }
 ipcMain.handle('multica:auth', () => multica.authStatus(multicaTarget()));
 ipcMain.handle('multica:issues', (_e, limit) => multica.listIssues(limit || 30, multicaTarget()));
@@ -3076,7 +3196,7 @@ ipcMain.handle('multica:target', (_e, projectDir) => multicaTarget(projectDir));
 ipcMain.handle('multica:workspaces', () => multica.listWorkspaces());
 ipcMain.handle('multica:projects', (_e, workspaceId) => multica.listProjects({ workspaceId: workspaceId || multicaTarget().workspaceId }));
 ipcMain.handle('multica:setTarget', (_e, payload) => {
-  requireAdmin();
+  requireRole('lead');
   const dir = payload?.projectDir || loadSettings().projectDir;
   if (!dir) throw new Error('Не выбрана папка проекта');
   if (!isTrusted(dir)) return needTrust(dir) || { ok: false, error: 'Папка проекта не доверена: настройки Multica в неё не записываются' };
@@ -3097,18 +3217,18 @@ function skillCatalogRoot(name) {
 }
 // Навыки каталога → Multica MAI (E1.8, ADR 0113).
 ipcMain.handle('multica:pushSkills', (_e, payload) => {
-  requireAdmin();
+  requireRole('lead');
   const names = Array.isArray(payload?.names) ? payload.names.map(String) : [];
   return multica.pushCatalogSkills(skillCatalogRoot(payload?.market), multicaTarget(payload?.projectDir), { names, prune: Boolean(payload?.prune), dryRun: Boolean(payload?.dryRun) });
 });
 ipcMain.handle('multica:syncDocs', (_e, projectDir) => {
-  requireAdmin();
+  requireRole('developer');
   const dir = projectDir || loadSettings().projectDir;
   return multica.syncOpenSpec(dir, multicaTarget(dir));
 });
 // Статусы Multica → галочки в openspec/changes/*/tasks.md (F14, ADR 0089).
 ipcMain.handle('multica:pullStatuses', (_e, projectDir) => {
-  requireAdmin();
+  requireRole('developer');
   const dir = projectDir || loadSettings().projectDir;
   return multica.pullStatuses(dir, { target: multicaTarget(dir) });
 });
@@ -3311,7 +3431,7 @@ ipcMain.handle('artifacts:list', (_e, payload) =>
 ipcMain.handle('artifacts:get', (_e, payload) => readArtifact(projectOf(payload), payload.id));
 
 ipcMain.handle('artifacts:save', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const projectDir = projectOf(payload);
   const artifact = writeArtifact(projectDir, payload.artifact || {});
   return { ok: true, artifact, stats: artifactStats(projectDir) };
@@ -3324,12 +3444,12 @@ ipcMain.handle('artifacts:version', (_e, payload) =>
 );
 
 ipcMain.handle('artifacts:restore', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   return restoreArtifact(projectOf(payload), payload.id, payload.version);
 });
 
 ipcMain.handle('artifacts:delete', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   return deleteArtifact(projectOf(payload), payload.id);
 });
 
@@ -3342,7 +3462,7 @@ ipcMain.handle('artifacts:search', (_e, payload) =>
 );
 
 ipcMain.handle('artifacts:import', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   return importExisting(projectOf(payload));
 });
 
@@ -3416,7 +3536,7 @@ ipcMain.handle('export:chat', async (event, payload) => {
 });
 
 ipcMain.handle('artifacts:applyToFile', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const projectDir = projectOf(payload);
   const artifact = readArtifact(projectDir, payload.id);
   const target = artifact.meta?.file;
@@ -3436,7 +3556,7 @@ ipcMain.handle('boards:load', (_e, payload) => {
 });
 
 ipcMain.handle('boards:save', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   // Версия секции (F9, ADR 0062): правка поверх чужого сохранения — конфликт, а не потеря.
   return saveBoardSection(projectOf(payload), payload.section, payload.data, payload.rev);
 });
@@ -3447,7 +3567,7 @@ ipcMain.handle('boards:views', async (_e, payload) => {
 });
 
 ipcMain.handle('boards:baseline', async (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const projectDir = projectOf(payload);
   return saveBaseline(projectDir, await gitHead(projectDir));
 });
@@ -3547,7 +3667,7 @@ ipcMain.handle('boards:clearErrors', () => {
 });
 
 ipcMain.handle('boards:correction', async (event, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const window = BrowserWindow.fromWebContents(event.sender);
   const state = runState(window);
   if (state.correction) return { ok: false, error: 'Самокоррекция уже выполняется' };
@@ -3604,6 +3724,7 @@ ipcMain.handle('boards:correction', async (event, payload) => {
         provider: resolved.provider,
         projectDir,
         model: resolved.modelId,
+        attribution: attributionFor(resolved),
         messages: session.messages,
         signal: controller.signal,
         mcp,
@@ -3808,7 +3929,7 @@ ipcMain.handle('boards:rasterize', async (_e, payload) => {
 });
 
 ipcMain.handle('boards:diagramChat', async (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const settings = loadSettings();
   let resolved;
   try {
@@ -3871,7 +3992,7 @@ const CALIBRATION_ID = 'calibration:architecture';
 
 /** Калибровка архитектуры и PRD (F15, ADR 0090): отчёт → артефакт note с версиями. */
 ipcMain.handle('boards:calibrate', async (_e, payload = {}) => {
-  requireAdmin();
+  requireRole('developer');
   const log = [];
   const settings = loadSettings();
   try {
@@ -3912,7 +4033,7 @@ ipcMain.handle('boards:calibrate', async (_e, payload = {}) => {
 
 /** Применить предложение агента схем (F10, ADR 0086). Только admin. */
 ipcMain.handle('boards:diagramApply', (_e, payload = {}) => {
-  requireAdmin();
+  requireRole('developer');
   try {
     return applyDiagram({ projectDir: projectOf(payload), proposal: payload.proposal, baseHash: String(payload.baseHash || '') });
   } catch (err) {
@@ -3921,7 +4042,7 @@ ipcMain.handle('boards:diagramApply', (_e, payload = {}) => {
 });
 
 ipcMain.handle('boards:saveView', (_e, payload) => {
-  requireAdmin();
+  requireRole('developer');
   const projectDir = projectOf(payload);
   const { views } = generateViews(projectDir, '');
   const view = views[payload.view];
@@ -3967,7 +4088,7 @@ app.on('before-quit', () => syncQueue.stop());
 app.on('before-quit', () => void flushMetrics());
 ipcMain.handle('infra:syncStatus', (_e, payload) => ({ enabled: autoSyncEnabled(), ...syncQueue.status(projectOf(payload)) }));
 ipcMain.handle('infra:syncNow', async (_e, payload) => {
-  requireAdmin();
+  requireRole('lead');
   return { enabled: autoSyncEnabled(), ...(await syncQueue.flush(projectOf(payload))) };
 });
 ipcMain.handle('infra:sync', (_e, payload) =>
@@ -4011,7 +4132,7 @@ ipcMain.handle('repowise:status', async (_e, payload) => {
   return { ...base, mcp: configured ? mcp.status().find((s) => s.name === 'repowise') || { name: 'repowise', status: 'disconnected', restarts: 0 } : null };
 });
 ipcMain.handle('repowise:restartMcp', async () => {
-  requireAdmin();
+  requireRole('developer');
   const config = loadSettings().mcpServers?.repowise;
   if (!config) return { ok: false, error: 'MCP repowise не подключён — нажмите «Подключить MCP»' };
   const res = mcp.servers.has('repowise') ? await mcp.restart('repowise') : await mcp.connect('repowise', config);

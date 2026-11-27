@@ -42,7 +42,8 @@ Realm `mai-code` импортируется при первом старте. П
 
 Через Admin Console: http://localhost:8080/admin → realm `mai-code` →
 Users → Add user. Затем вкладка Credentials → Set password и Role mapping →
-realm role `admin` или `guest`.
+realm role `admin`, `lead`, `developer` или `guest` (ADR 0117). Роли по возрастанию прав:
+guest < developer < lead < admin; берётся старшая.
 
 Через CLI:
 

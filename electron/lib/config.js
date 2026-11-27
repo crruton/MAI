@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { app, safeStorage } from 'electron';
+import { app, safeStorage } from './electron-shim.js';
 import { createSecretBox, openSettings, sealSettings, keepUnreadable, plaintextSecrets } from './secrets.js';
 import { envCandidates, readEnvFiles } from './env.js';
 import { RUNTIME_PRESETS } from './runtimes.js';

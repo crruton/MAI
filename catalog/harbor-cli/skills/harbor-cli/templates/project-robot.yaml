@@ -1,0 +1,11 @@
+name: example-cli
+description: List artifacts in the example project
+duration: 30
+level: project
+permissions:
+  - kind: project
+    namespace: example-project
+    access:
+      - resource: artifact
+        actions:
+          - list

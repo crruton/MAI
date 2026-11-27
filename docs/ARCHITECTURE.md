@@ -372,6 +372,60 @@ ADR 0114. `skills-export.js` (без Electron) — `TARGETS` (claude, opencode, 
 подмена). Навыки — `collectCatalogSkills` из `multica-skills.js`. Скрипт
 `scripts/skills-export.mjs` (`npm run skills:export`).
 
+### Наборы навыков каталога по ролям
+
+ADR 0115. `catalog-roles.js` (без Electron) — `catalogRoles`, `roleSkillNames`, `validateRoles`
+(вызывается из `catalog-check.js`), `installRoleSkills`. В main.js — `teamCatalogs()` и навыки
+роли в `roles:install` (поле ответа `catalogSkills`). Опция `role` у `pushSkills` и
+`exportSkills`, ключ `--role` у скриптов.
+
+### Атрибуция коммитов агента
+
+ADR 0116. `attribution.js` (без Electron) — `attributeCommit` (простой `git commit` → трейлеры
+`Agent-Model`, `Agent-User`), `userLine`, `cleanTrailerValue`, проверка git ≥ 2.32. Вызывается
+в `effectiveCommand` (`tools/shell.js`) — итоговая строка и для подтверждения, и для запуска.
+В main.js — `attributionFor(resolved)` во всех `runAgent`; в agent.js — `toolCtx.attribution`,
+передаётся субагенту.
+
+### Профиль команды
+
+ADR 0118. `team-profile.js` (без Electron) — `profileSource` (организация → настройки),
+`refreshProfile` (git во временную папку), `readProfile` и `validateProfile` (без секретов),
+`mergeMarketplaces`. В main.js — `teamProfile()`, `applyTeamProfile()` (пишет `AGENTS.team.md`),
+`refreshTeamProfile()` при запуске и после `auth:login`; `ownMarketplaces()` — только личные
+каталоги, `marketplaces()` — с профилем; слой `team` в `mcpSources`; workspace профиля в
+`multicaTarget`. `readAgents` возвращает `team`, `systemPrompt` ставит его перед глобальным.
+IPC `team:status` (ANY), `team:refresh` (DEVELOPER).
+
+### MAI Ship: approver
+
+ADR 0119. `ship/gitlab.js` — `createGitlab({ url, token, fetch })` (MR, diffs, commits, notes,
+файл из ветки, approve с `sha`, approvals, метки), `diffFacts`, `diffText`, `upsertNote` (маркер
+роли). `ship/approve.js` — `runApprove` (политика из target branch, факты, `evaluate`,
+классификаторы при необходимости, комментарий, метки, approve), `createClassifier` (маска
+секретов), `gateExitCode` (GitLab Free). CLI — `scripts/mai-ship.mjs`; CI — `ci/mai-ship.gitlab-ci.yml`.
+
+### MAI Ship: ревьюер
+
+ADR 0120. `ship/review.js` — `runReview` (контекст, `lensesFor`, находки `parseFindings`, только
+добавленные строки `addedLines`, состязательная проверка, обсуждения с `fingerprint`, сводка,
+метка `ship::blocking`), `createReviewModel`. В `ship/approve.js` — `pipelineStatusFromJobs`:
+статус своего pipeline без джоб `ship:*`. В `ship/gitlab.js` — discussions и джобы pipeline.
+
+### MAI Ship: журнал и согласие
+
+ADR 0121. `ship/report.js` — `decisionRecord`, `decisionMarker`, `parseDecision`, `humanOutcome`,
+`agrees`, `agreementReport` (по правилам, кандидаты в enforce), `formatReport`, `collectDecisions`.
+Запись пишет `runApprove` в комментарий; `approve --journal` — JSONL; `report` — CLI.
+
+### Без Electron: прослойка и steward
+
+ADR 0122. `electron-shim.js` — `app`, `safeStorage`, `utilityProcess`: настоящие в Electron,
+заглушки в Node (`MAI_DATA_DIR`). Её импортируют `config.js` и `plugin-host.js`, поэтому
+`agent.js` грузится в Node. `ship/steward.js` — `runSteward` (задания, `@mai`, лимит раундов,
+запретные пути, коммит и push), `stewardRules`, `stewardTask`, `parseCommand`, `forbiddenMatchers`,
+`createAgentRunner` (тот же вызов `runAgent` в CLI и тестах). CLI — `mai-ship.mjs steward`.
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,
@@ -810,8 +864,10 @@ IPC: `trust:get(projectDir)`, `trust:set({ projectDir, state })` (`trusted` —
 только admin), `trust:list`, `trust:remove(projectDir)` (admin).
 
 Матрица прав (`electron/lib/ipc-permissions.js`): `guardIpc` оборачивает
-`ipcMain.handle` до регистрации обработчиков; канал `admin` отказывает гостю
-ответом `{ ok: false, forbidden: true }`. Канал вне матрицы считается `admin`.
+`ipcMain.handle` до регистрации обработчиков и вызывает `requireRole(уровень)` для
+уровней `developer`, `lead`, `admin` (ADR 0117); при нехватке роли — ответ
+`{ ok: false, forbidden: true }`. Канал вне матрицы считается `admin`. Роли — `ROLE_ORDER`,
+`roleAtLeast`, `roleFromClaims` в `auth-session.js`, `requireRole` в `auth.js`.
 `scripts/test-ipc-permissions.mjs` падает, если канал не внесён в матрицу.
 
 Блокировка проекта (`electron/lib/project-lock.js`): чат, самокоррекция и

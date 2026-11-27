@@ -211,6 +211,10 @@ contextBridge.exposeInMainWorld('mai', {
     setTarget: (payload) => invoke('multica:setTarget', payload),
     pushSkills: (payload) => invoke('multica:pushSkills', payload),
   },
+  team: {
+    status: () => invoke('team:status'),
+    refresh: () => invoke('team:refresh'),
+  },
   sandbox: {
     status: () => invoke('sandbox:status'),
     list: () => invoke('sandbox:list'),

@@ -1,0 +1,8 @@
+{
+  "name": "pbc",
+  "version": "1.0.0",
+  "description": "PBC (Packaged Business Capability) продукта: как резать PRD на капабилити, индекс docs/pbc/README.md, шаблон worksheet из 12 разделов, критерии приёмки, бизнес- и техническая валидация со списками зам",
+  "owner": "crruton",
+  "license": "MIT",
+  "author": "MAI Code"
+}
