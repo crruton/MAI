@@ -10,6 +10,11 @@
 
 ### Added
 
+- MAI Ship: эскалация к человеку (ADR 0123) — при «нужен человек» approver назначает ревьюеров
+  по CODEOWNERS target branch (кроме автора; на Free — одного) и шлёт уведомление в канал из
+  `ship.yaml` (Telegram, Rocket.Chat, webhook); при «заблокировано» — только уведомление; повтор
+  по тому же SHA людей не дёргает. Модуль `electron/lib/ship/escalate.js`, тест
+  `test-ship-escalate` (22).
 - MAI Ship, steward (E3.E2–E3.E4, ADR 0122): сбой раннера или сети — один перезапуск джобы,
   повтор на том же коммите — `ship::needs-human`; конфликт с target — слияние target в ветку MR
   (чисто — push, конфликт — отмена и список файлов человеку); ответ «исправлено в `<sha>`» в

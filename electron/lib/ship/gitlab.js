@@ -44,6 +44,10 @@ export function createGitlab({ url, token, fetch: fetchImpl = globalThis.fetch, 
   const mrPath = (project, iid) => `/projects/${p(project)}/merge_requests/${Number(iid)}`;
 
   return {
+    /** Пользователь по логину (для ревьюеров из CODEOWNERS); нет — null. */
+    findUser: async (username) => (await call('GET', `/users?username=${encodeURIComponent(username)}`))?.[0] || null,
+    /** Ревьюеры MR. На GitLab Free — один. */
+    setReviewers: (project, iid, ids) => call('PUT', mrPath(project, iid), { body: { reviewer_ids: ids } }),
     /** Пользователь токена — сам approver: его апрув не считается апрувом человека. */
     getUser: () => call('GET', '/user'),
     getMr: (project, iid) => call('GET', mrPath(project, iid)),

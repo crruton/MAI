@@ -426,6 +426,12 @@ ADR 0122. `electron-shim.js` — `app`, `safeStorage`, `utilityProcess`: нас�
 запретные пути, коммит и push), `stewardRules`, `stewardTask`, `parseCommand`, `forbiddenMatchers`,
 `createAgentRunner` (тот же вызов `runAgent` в CLI и тестах). CLI — `mai-ship.mjs steward`.
 
+### MAI Ship: эскалация
+
+ADR 0123. `ship/escalate.js` — `parseCodeowners`, `ownerPatternRe`, `ownersFor`, `shipChannel`,
+`escalate` (ревьюеры по CODEOWNERS через `findUser`/`setReviewers`, уведомление через
+`channelRequest` из `notify.js`, без повторов по SHA). Вызывается в конце `runApprove`.
+
 ### Калибратор
 
 ADR 0090. `calibrator.js` — `buildContext`, `parseReport`, `diffReports`,

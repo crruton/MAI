@@ -10,7 +10,8 @@ import { evaluate } from './policy.js';
 import { agentModelsFromCommits } from '../model-families.js';
 import { diffFacts, diffText, upsertNote } from './gitlab.js';
 import { createSecretFilter } from '../secret-filter.js';
-import { decisionRecord, decisionMarker } from './report.js';
+import { decisionRecord, decisionMarker, parseDecision } from './report.js';
+import { escalate } from './escalate.js';
 
 export const SHIP_FILE = '.mai-code/ship.yaml';
 export const POLICY_FILE = '.mai-code/approval-policy.yaml';
@@ -135,7 +136,7 @@ export async function gateExitCode(out, { gitlab, project, iid, botUsername = 'm
  *           makeClassifier?: (shipCfg) => classify, env?: object, dryRun?: boolean }} options
  * @returns {Promise<{ status: string, result?: object, actions: string[] }>}
  */
-export async function runApprove({ gitlab, project, iid, classify = null, makeClassifier = null, env = {}, dryRun = false }) {
+export async function runApprove({ gitlab, project, iid, classify = null, makeClassifier = null, env = {}, dryRun = false, fetch: doFetch = globalThis.fetch }) {
   const actions = [];
   const mr = await gitlab.getMr(project, iid);
   if (mr.state !== 'opened') return { status: 'skipped', reason: `MR в состоянии ${mr.state}`, actions };
@@ -203,6 +204,9 @@ export async function runApprove({ gitlab, project, iid, classify = null, makeCl
   const body = `${noteBody({ result, sha, policyMode: policy?.mode, dryRun })}\n\n${decisionMarker(record)}`;
   if (dryRun) return { status: 'planned', result, note: body, actions, policyMode, record };
 
+  // Прошлое решение — до перезаписи комментария: повтор по тому же SHA людей не дёргает (E3.F4).
+  const before = await gitlab.getNotes(project, iid);
+  const previous = before.map((n) => parseDecision(n.body)).filter(Boolean).sort((a, b) => String(a.at).localeCompare(String(b.at))).pop() || null;
   await upsertNote(gitlab, project, iid, 'approve', body);
   actions.push('note');
   const label = LABELS[result.action];
@@ -215,5 +219,18 @@ export async function runApprove({ gitlab, project, iid, classify = null, makeCl
     await gitlab.approve(project, iid, sha);
     actions.push(`approve:${sha}`);
   }
-  return { status: 'done', result, actions, policyMode, record };
+  // Эскалация к человеку (E3.F4): ревьюеры по CODEOWNERS и уведомление в канал из ship.yaml.
+  let escalation = null;
+  if (result.action === 'needs_human' || result.action === 'block') {
+    let self = '';
+    try {
+      self = (await gitlab.getUser?.())?.username || '';
+    } catch {
+      self = '';
+    }
+    escalation = await escalate({ gitlab, project, iid, mr, files, result, previous, sha, shipCfg, env, fetch: doFetch, self });
+    if (escalation.reviewers.length) actions.push(`reviewers:${escalation.reviewers.join(',')}`);
+    if (escalation.notified) actions.push('notified');
+  }
+  return { status: 'done', result, actions, policyMode, record, escalation };
 }

@@ -92,6 +92,22 @@ node scripts/mai-ship.mjs approve --project group/app --mr 42 --dry-run
 
 `--dry-run` печатает решение и текст комментария, ничего не записывая.
 
+## Если нужен человек
+
+Когда approver решил «нужен человек», MR назначается владельцам изменённых файлов по CODEOWNERS
+target branch (кроме автора MR; на GitLab Free — один ревьюер), а в канал из `ship.yaml` уходит
+уведомление. При «заблокировано» — только уведомление. Повтор того же решения по тому же SHA
+людей не дёргает ([ADR 0123](adr/0123-ship-eskalaciya-k-cheloveku.md)).
+
+```yaml
+notify:
+  channel: telegram        # telegram | rocketchat | webhook | none
+  events: [needs_human, blocked]
+```
+
+Секреты — переменные CI: `SHIP_NOTIFY_TELEGRAM_TOKEN` и `SHIP_NOTIFY_TELEGRAM_CHAT` для Telegram,
+`SHIP_NOTIFY_WEBHOOK_URL` для Rocket.Chat и webhook (Slack, Mattermost, Teams).
+
 ## Журнал и переход в enforce
 
 Каждое решение approver'а лежит в его комментарии машиночитаемой записью (ADR 0121); джоба

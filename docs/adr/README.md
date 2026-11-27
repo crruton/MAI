@@ -138,3 +138,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0120](0120-ship-revyuer.md) | MAI Ship: ревьюер с состязательной проверкой и статус своего pipeline | accepted, дополнено 27.11 | 2026-11-26 |
 | [0121](0121-ship-zhurnal-i-soglasie.md) | MAI Ship: журнал решений в MR и согласие approver ↔ человек | accepted, дополнено 27.11 | 2026-11-27 |
 | [0122](0122-ship-steward-i-agent-bez-electron.md) | MAI Ship: steward и цикл агента MAI без Electron | accepted, дополнено 27.11 | 2026-11-27 |
+| [0123](0123-ship-eskalaciya-k-cheloveku.md) | MAI Ship: эскалация к человеку — CODEOWNERS и уведомления | accepted | 2026-11-27 |
