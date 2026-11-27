@@ -47,6 +47,8 @@
 | 26.11.2026 | E3.C1: команда `/ship` | `renderer/app.js`, `commands.js`, `docs/SHIP.md`, `test-ui` (338) | коммит через `&&` остался бы без трейлера `Agent-Model` — в промпте явно отдельной командой |
 | 27.11.2026 | E3.F6, E3.G2, E3.B6: журнал решений, согласие, шаблоны политик | ADR 0121, `ship/report.js`, `mai-ship report`, навык `ship-setup`, `test-ship-report` (18), `test-ship-templates` (24) | — |
 | 27.11.2026 | E3.A5, E3.E1, E3.E5–E7: steward и цикл агента без Electron | ADR 0122, `electron-shim.js`, `ship/steward.js`, джоба `ship:steward`, `test-ship-steward` (22), `test-agent-loop` в Node (177) | `git status` показывал новую папку целиком — миграция проходила мимо запретных путей; CLI не передавал MCP — steward упал бы на первом запуске; `needs: []` с `on_failure` не запускал бы джобу никогда |
+| 27.11.2026 | Схемы досок — PlantUML (C4-PlantUML) вместо Mermaid; образ MAI Ship 837 → 272 МБ | ADR 0127, `test-plantuml` (24 с Java), UI-тест; ADR 0126 дополнение, образ проверен против живого GitLab | удаление npm в отдельном слое не уменьшало образ — итоговый слой собран из чистого alpine |
+| 27.11.2026 | E3.C4: MR ↔ задачи Multica MAI | ADR 0128, `test-ship-mr-issue` (19), UI-тест | ключ после `Draft:` не находился (тест сначала это пропускал) — исправлено; живая Multica MAI не проверена |
 | 27.11.2026 | E3.H0: боевая проверка на GitLab 17.3 и моделях MAI | песочница, `docs/SHIP.md` «Боевая проверка» | `/diffs` с per_page=100 → 500; апрув владельца токена открывал гейт; steward чинил бы уже исправленное; токен в URL push. Все исправлены. Джобы CI не проверены — нет раннеров |
 | 27.11.2026 | E3.D6: одна строка — одно обсуждение ревью | `ship/review.js` `mergeFindings`, `test-ship-review` (24) | — |
 | 27.11.2026 | E3.G1: метрики потока в отчёте (без стоимости) | `ship/report.js` `flowMetrics`, `test-ship-report` (25) | — |
@@ -263,7 +265,7 @@
 | E3.C1 ✓ | Команда `/ship`: проверки локально, commit с трейлером `Agent-Model`, push, `glab mr create --draft` по скиллу `to-mr` | P1 | 2 | из чата MAI создаётся Draft MR с описанием Summary/Evidence/Merge Danger | E1.5 |
 | E3.C2 ✓ | Статус MR в MAI: pipeline, находки ревью, действия steward, решение approver'а; обновление по опросу `glab` | P1 | 2 | карточка MR в ленте и на доске «Доставка» | E3.C1 |
 | E3.C3 | Локальный steward: если CI красный, MAI предлагает починить в том же чате до передачи облачному steward | P2 | 2 | исправление красного CI без ухода из MAI | E3.C2 |
-| E3.C4 | Связь с Multica MAI: ключ issue в заголовке MR, статус issue по состоянию MR | P2 | 1 | merge закрывает issue | E2.3 |
+| E3.C4 ✓ | Связь с Multica MAI: ключ issue в заголовке MR, статус issue по состоянию MR | P2 | 1 | merge закрывает issue | E2.3 |
 
 ### E3.D. Ship Reviewer
 

@@ -280,6 +280,7 @@ export const IPC_PERMISSIONS = {
   'boards:renderDiagram': ANY,
   'boards:plantumlStatus': ANY,
   'ship:status': ANY,
+  'ship:syncIssues': DEVELOPER,
   'boards:diff': ANY,
   'boards:stageRun': ADMIN,
   'boards:stageStop': ANY,

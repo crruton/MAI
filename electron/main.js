@@ -3578,6 +3578,18 @@ ipcMain.handle('boards:scan', async (_e, payload) =>
 );
 
 ipcMain.handle('boards:git', (_e, payload) => gitStatus(projectOf(payload)));
+// MR → задачи Multica MAI (E3.C4, ADR 0128): слитый MR закрывает задачу, открытый — «на ревью».
+ipcMain.handle('ship:syncIssues', async (_e, payload) => {
+  const dir = projectOf(payload);
+  if (!dir) return { ok: false, error: 'проект не выбран' };
+  try {
+    const { collectRecentMrs } = await import('./lib/ship/mr-status.js');
+    const mrs = await collectRecentMrs({ cwd: dir, days: 14 });
+    return multica.syncMrIssues(mrs, { target: multicaTarget(dir), dryRun: Boolean(payload?.dryRun) });
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err).slice(0, 300), plan: [], applied: [], skipped: [] };
+  }
+});
 // Статус MR MAI Ship (E3.C2, ADR 0125): только чтение, вход — glab пользователя.
 ipcMain.handle('ship:status', async (_e, payload) => {
   const dir = projectOf(payload);

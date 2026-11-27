@@ -143,3 +143,4 @@ ADR фиксируют решения, которые дорого менять:
 | [0125](0125-ship-status-mr-v-mai.md) | MAI Ship: статус MR в MAI через glab | accepted | 2026-11-27 |
 | [0126](0126-ship-obraz-i-mai-ship.md) | MAI Ship: `mai ship <роль>` и Docker-образ | accepted, дополнено 27.11 | 2026-11-27 |
 | [0127](0127-plantuml-vmesto-mermaid.md) | PlantUML (C4-PlantUML) вместо Mermaid на досках | accepted | 2026-11-27 |
+| [0128](0128-ship-mr-i-zadachi-multica.md) | MAI Ship: MR и задачи Multica MAI | accepted | 2026-11-27 |

@@ -78,6 +78,16 @@ export function issueUpdateArgs(id, { title, description }, target = {}) {
   return [...targetArgs(target), 'issue', 'update', String(id), '--title', title, '--description', description];
 }
 
+export const ISSUE_STATUSES = ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'blocked', 'cancelled'];
+
+/** Смена статуса задачи (E3.C4): `multica issue status <id> <status>`. */
+export function issueStatusArgs(id, status, target = {}) {
+  if (!ISSUE_STATUSES.includes(status)) throw new Error(`неизвестный статус Multica: ${status}`);
+  const clean = cleanId(id, 'id');
+  if (!clean) throw new Error('нет id задачи Multica');
+  return [...targetArgs(target), 'issue', 'status', clean, status];
+}
+
 /** Ответ CLI: массив или объект со списком под одним из ключей. */
 export function pickList(data, keys) {
   if (Array.isArray(data)) return data;

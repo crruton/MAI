@@ -4,7 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { loadSettings } from './config.js';
 import { listChanges, taskMarker, statusUpdatesFromIssues, applyTaskStatuses } from './openspec.js';
-import { targetArgs, issueListArgs, issueCreateArgs, issueUpdateArgs, normalizeWorkspaces, normalizeProjects } from './multica-target.js';
+import { targetArgs, issueListArgs, issueCreateArgs, issueUpdateArgs, issueStatusArgs, normalizeWorkspaces, normalizeProjects } from './multica-target.js';
+import { planIssueSync } from './ship/mr-issue.js';
 
 export { resolveTarget, saveProjectTarget } from './multica-target.js';
 import { pushSkills } from './multica-skills.js';
@@ -226,6 +227,29 @@ export function listIssues(limit = 30, target = {}) {
   } catch (err) {
     return { ok: false, error: err.message, issues: [] };
   }
+}
+
+/**
+ * MR → задачи Multica MAI (E3.C4, ADR 0128): слитый MR закрывает задачу, открытый — «на ревью».
+ * `mrs` — MR проекта (glab), задачи — из Multica цели проекта. Только шаги статуса вперёд.
+ */
+export function syncMrIssues(mrs, { target = {}, dryRun = false } = {}) {
+  const listing = listIssues(200, target);
+  if (!listing.ok) return { ok: false, error: listing.error, plan: [], applied: [], skipped: [] };
+  const { plan, skipped } = planIssueSync(mrs, listing.issues);
+  const applied = [];
+  const errors = [];
+  if (!dryRun) {
+    for (const step of plan) {
+      try {
+        run(issueStatusArgs(step.id, step.to, target), { timeout: 20_000 });
+        applied.push(step);
+      } catch (err) {
+        errors.push(`${step.key}: ${err.message}`);
+      }
+    }
+  }
+  return { ok: !errors.length, plan, applied, skipped, errors, message: `MR → Multica: ${dryRun ? `к смене ${plan.length}` : `изменено ${applied.length}`}${skipped.length ? `, пропущено ${skipped.length}` : ''}${errors.length ? `, ошибок ${errors.length}` : ''}` };
 }
 
 function findIssue(issues, marker) {

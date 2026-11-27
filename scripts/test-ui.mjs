@@ -647,6 +647,12 @@ ipcMain.handle('boards:load', () => ({
   settings: { projectDir: root, activeModel: 'test-model' },
 }));
 
+// Раздел [9]: «Задачи Multica» — MR → статусы задач (E3.C4).
+const issueSyncCalls = [];
+ipcMain.handle('ship:syncIssues', (_e, payload) => {
+  issueSyncCalls.push(payload);
+  return { ok: true, plan: [], applied: [{ key: 'MAI-1', to: 'done' }], skipped: [], errors: [], message: 'MR → Multica: изменено 1' };
+});
 // Раздел [9]: карточки MR MAI Ship на доске «Доставка» (E3.C2).
 ipcMain.handle('ship:status', () => ({
   ok: true,
@@ -974,6 +980,10 @@ app.whenReady().then(async () => {
     check('у панели досок есть отступ под кнопки окна', boardBar.paddingRight >= 16, JSON.stringify(boardBar));
     const shipCards = await win.webContents.executeJavaScript(`(() => [...document.querySelectorAll('.ship-card')].map((c) => c.innerText.replace(/\\s+/g, ' ').trim()))()`);
     check('доска «Доставка»: карточки MR MAI Ship', shipCards.length === 2 && /нужен человек/.test(shipCards[0]) && /pipeline ✗/.test(shipCards[0]) && /blocking/.test(shipCards[0]) && /require_human/.test(shipCards[0]) && /\$0\.42/.test(shipCards[0]) && /ещё не оценил/.test(shipCards[1]), JSON.stringify(shipCards));
+    await win.webContents.executeJavaScript(`document.querySelector('[data-act=ship-sync-issues]')?.click()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const syncToast = await win.webContents.executeJavaScript(`[...document.querySelectorAll('.toast, #toast, .toasts > *')].map((n) => n.textContent).join(' | ')`);
+    check('«Задачи Multica»: вызов синхронизации и итог (E3.C4)', issueSyncCalls.length === 1 && /MAI-1 → done/.test(syncToast), `${issueSyncCalls.length} ${syncToast}`);
 
     console.log('\n[10] Панель «Память»: версии и откат');
     await win.loadFile(path.join(root, 'renderer', 'index.html'));

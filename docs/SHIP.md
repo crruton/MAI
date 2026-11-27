@@ -108,6 +108,12 @@ mai ship approve --mr https://gitlab.example.com/group/app/-/merge_requests/42 -
 ([ADR 0125](adr/0125-ship-status-mr-v-mai.md)). Без glab блок пишет причину, доска работает.
 В чате то же показывает команда `/mr` — карточкой в ленте (только показ, модели не уходит).
 
+## MR и задачи Multica
+
+Слитый MR закрывает задачу Multica MAI с ключом из заголовка (`[MAI-42] …`) или ветки, открытый
+MR переводит её «на ревью». Кнопка «Задачи Multica» на доске «Доставка» или
+`"multica": { "mrSync": "auto" }` ([MULTICA.md](MULTICA.md#mr-и-задачи), ADR 0128).
+
 ## Если нужен человек
 
 Когда approver решил «нужен человек», MR назначается владельцам изменённых файлов по CODEOWNERS

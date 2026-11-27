@@ -10,6 +10,11 @@
 
 ### Added
 
+- MAI Ship ↔ Multica MAI (E3.C4, ADR 0128): ключ задачи из заголовка MR (`[MAI-42]`, после
+  `Draft:`) или ветки; слитый MR переводит задачу в `done`, открытый — в `in_review`, только
+  вперёд (`blocked`, `cancelled`, `done` не трогаются). Кнопка «Задачи Multica» на доске
+  «Доставка», автоматически — `multica.mrSync: "auto"`. IPC `ship:syncIssues` (developer).
+  Тест `test-ship-mr-issue` (19).
 - MAI Ship: `mai ship <review|approve|steward|report>` без Electron и `--mr <ссылка на MR>` (адрес
   GitLab, проект и номер из ссылки); Docker-образ `ci/ship.Dockerfile` (без Electron и mermaid,
   базовый образ аргументом `NODE_IMAGE`); CI-шаблон берёт образ из `MAI_SHIP_IMAGE` и тогда не

@@ -568,6 +568,7 @@ function onClick(event) {
     'open-artifact': () => api.boards.open('storage', `artifact:${target.dataset.id}`),
 
     'ship-refresh': () => loadShip(true),
+    'ship-sync-issues': () => syncShipIssues(true),
     'task-new': () => taskModal(null, target.dataset.status || 'backlog'),
     'task-edit': () => taskModal(findTask(id), ''),
     'task-delete': () => deleteTask(id),
@@ -745,6 +746,23 @@ async function loadShip(manual) {
   state.shipLoading = false;
   paintShip();
   if (manual) toast(state.ship?.ok ? 'MR обновлены' : 'MR не загружены', state.ship?.ok ? 'ok' : 'err');
+  // Автосвязь с Multica (E3.C4) — только если включена: "multica": { "mrSync": "auto" }.
+  if (state.ship?.ok && state.settings?.multica?.mrSync === 'auto') syncShipIssues(false);
+}
+
+/** MR → задачи Multica MAI (E3.C4, ADR 0128). */
+async function syncShipIssues(manual) {
+  if (!api.boards.shipSyncIssues) return;
+  let res;
+  try {
+    res = await api.boards.shipSyncIssues({ projectDir: state.projectDir });
+  } catch (err) {
+    res = { ok: false, error: err.message, applied: [] };
+  }
+  if (manual || res.applied?.length) {
+    const steps = (res.applied || []).map((s) => `${s.key} → ${s.to}`).join(', ');
+    toast(res.ok ? `${res.message || 'MR → Multica'}${steps ? `: ${steps}` : ''}` : `Multica: ${res.error || (res.errors || []).join('; ')}`, res.ok ? 'ok' : 'err');
+  }
 }
 
 function paintShip() {
@@ -756,6 +774,7 @@ function shipSection() {
   const s = state.ship;
   const head = `<div class="ship-head"><h2>Merge requests · MAI Ship</h2>
     <span class="muted">${state.shipLoading ? 'обновление…' : s?.at ? `обновлено ${esc(new Date(s.at).toLocaleTimeString())}` : ''}</span>
+    <button class="btn small ghost" data-act="ship-sync-issues" title="Слитый MR закрывает задачу Multica, открытый — «на ревью» (ключ [MAI-42] в заголовке MR)">Задачи Multica</button>
     <button class="btn small ghost" data-act="ship-refresh">Обновить</button></div>`;
   if (!s) return `<section class="ship-mrs">${head}<p class="muted">Загрузка…</p></section>`;
   if (!s.ok) return `<section class="ship-mrs">${head}<p class="muted">Статус MR недоступен: ${esc(s.error || 'ошибка')}. Нужен glab с входом в GitLab проекта (glab auth login).</p></section>`;

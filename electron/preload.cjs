@@ -284,6 +284,7 @@ contextBridge.exposeInMainWorld('mai', {
     scan: (payload) => invoke('boards:scan', payload),
     git: (payload) => invoke('boards:git', payload),
     shipStatus: (payload) => invoke('ship:status', payload),
+    shipSyncIssues: (payload) => invoke('ship:syncIssues', payload),
     diff: (payload) => invoke('boards:diff', payload),
     stageRun: (payload) => invoke('boards:stageRun', payload),
     stageStop: () => invoke('boards:stageStop'),

@@ -86,6 +86,14 @@ export function mrStatus({ mr, notes = [], discussions = [] }) {
   };
 }
 
+/** MR проекта за `days` дней (открытые, слитые, закрытые) — для связи с задачами Multica (E3.C4). */
+export async function collectRecentMrs({ cwd, days = 14, exec, now = Date.now() } = {}) {
+  const gitlab = createGitlab({ url: 'https://glab.local', token: 'glab', fetch: glabFetch({ cwd, exec }) });
+  const project = await gitlab.getProject(':id');
+  const mrs = await gitlab.listMrs(project.id, { updatedAfter: new Date(now - days * 86_400_000).toISOString() });
+  return mrs.map((m) => ({ iid: m.iid, title: m.title || '', state: m.state, source_branch: m.source_branch || '', web_url: m.web_url || '' }));
+}
+
 /** Открытые MR проекта папки (до `limit`, свежие сверху) → карточки. */
 export async function collectMrStatuses({ cwd, limit = 10, exec } = {}) {
   const gitlab = createGitlab({ url: 'https://glab.local', token: 'glab', fetch: glabFetch({ cwd, exec }) });
