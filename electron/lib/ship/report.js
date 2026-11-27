@@ -7,6 +7,8 @@
  * Открытый MR без новых коммитов — ещё не решён и в счёт не идёт. Без Electron.
  */
 
+import { mrCost } from './cost.js';
+
 export const DECISION_MARKER_RE = /<!-- mai-ship:decision (\{.*?\}) -->/;
 export const ENFORCE_MIN_DECIDED = 20;
 export const ENFORCE_MIN_RATE = 0.95;
@@ -137,16 +139,28 @@ export async function collectDecisions(gitlab, project, { days = 30, now = Date.
         humanApprovals = null;
       }
     }
-    out.push({ mr, decision, humanApprovals });
+    out.push({ mr, decision, humanApprovals, cost: mrCost(notes) });
   }
   return out;
+}
+
+/** Расход по MR: всего, число MR с расходом, медиана на MR. */
+export function costSummary(entries) {
+  const list = entries.map((e) => e.cost).filter((c) => c && (c.usd || c.tokens));
+  const usd = list.map((c) => c.usd).sort((a, b) => a - b);
+  return {
+    total: Math.round(usd.reduce((s, x) => s + x, 0) * 1e6) / 1e6,
+    mrs: list.length,
+    median: usd.length ? percentile(usd, 0.5) : 0,
+    unpriced: list.some((c) => c.unpriced),
+  };
 }
 
 const percentile = (sorted, q) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1) + 0.5))] : null);
 
 /**
  * Метрики потока (E3.G1): lead time от создания до слияния, доля влитых без человека, revert за
- * 14 дней. Стоимость моделей пока не копится — `cost: null`.
+ * 14 дней, расход моделей (E3.B4) — по записям `mai-ship:cost` в комментариях MR.
  */
 export function flowMetrics(entries, { revertDays = 14 } = {}) {
   const merged = entries.filter((e) => e.mr.state === 'merged' && e.mr.merged_at && e.mr.created_at);
@@ -169,7 +183,7 @@ export function flowMetrics(entries, { revertDays = 14 } = {}) {
     withoutHumanShare: merged.length ? withoutHuman / merged.length : 0,
     reverted: reverted.size,
     revertRate: originals ? reverted.size / originals : 0,
-    cost: null,
+    cost: costSummary(entries),
   };
 }
 
@@ -182,6 +196,8 @@ export function formatFlow(flow) {
     `- влито MR: ${flow.merged}; lead time — медиана ${h(flow.leadTimeHours.median)}, 90% — ${h(flow.leadTimeHours.p90)}`,
     `- влито без человека (approve в enforce): ${flow.withoutHuman} (${pct(flow.withoutHumanShare)})`,
     `- revert за 14 дней: ${flow.reverted} (${pct(flow.revertRate)})`,
-    '- стоимость моделей: не считается (расход пока не копится)',
+    flow.cost && flow.cost.mrs
+      ? `- стоимость моделей: $${flow.cost.total} на ${flow.cost.mrs} MR, медиана $${flow.cost.median} на MR${flow.cost.unpriced ? ' (не для всех моделей задана цена)' : ''}`
+      : '- стоимость моделей: расхода нет (нет записей mai-ship:cost)',
   ].join('\n');
 }

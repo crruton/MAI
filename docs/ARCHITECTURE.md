@@ -426,6 +426,13 @@ ADR 0122. `electron-shim.js` — `app`, `safeStorage`, `utilityProcess`: нас�
 запретные пути, коммит и push), `stewardRules`, `stewardTask`, `parseCommand`, `forbiddenMatchers`,
 `createAgentRunner` (тот же вызов `runAgent` в CLI и тестах). CLI — `mai-ship.mjs steward`.
 
+### MAI Ship: учёт затрат
+
+ADR 0124. `ship/cost.js` — `createMeter` (обёртка клиента `chat.completions`, история цикла
+агента), записи `mai-ship:cost` в комментариях (`costMarker`, `parseCosts`, `mergeCosts`;
+`upsertNote` копит запись роли), `mrCost`, `monthCost`, `budgetState`. Ревьюер и steward
+проверяют бюджет до вызова модели, approver передаёт `facts.cost` в политику.
+
 ### MAI Ship: эскалация
 
 ADR 0123. `ship/escalate.js` — `parseCodeowners`, `ownerPatternRe`, `ownersFor`, `shipChannel`,

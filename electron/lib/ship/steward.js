@@ -9,6 +9,7 @@ import { parse as parseYaml } from 'yaml';
 import { SELF_PROTECTED } from './policy.js';
 import { globToRegExp } from '../tools/fs.js';
 import { upsertNote } from './gitlab.js';
+import { budgetState, costLine, costMarker, createMeter } from './cost.js';
 import { SHIP_FILE, POLICY_FILE, LABELS } from './approve.js';
 
 export const ROUND_MARKER = '<!-- mai-ship:steward-round -->';
@@ -256,7 +257,20 @@ export async function runSteward({ gitlab, project, iid, git, runAgentTask, mode
   const task = stewardTask({ mr, jobs, findings, instructions, commands });
   if (dryRun) return { status: 'planned', task, jobs, findings, instructions, retries, replies };
 
+  // Бюджет (E3.B4): исчерпан — агента не запускаем, зовём человека.
+  const budget = shipCfg.budget || {};
+  if (budget.per_mr_usd || budget.monthly_usd) {
+    const state = await budgetState({ gitlab, project, iid, budget, notes });
+    if (state.exceeded) {
+      await gitlab.setLabels(project, iid, { add: [LABELS.needs_human] });
+      await upsertNote(gitlab, project, iid, 'steward', `**MAI Ship · steward** — остановлено: ${state.exceeded}. Нужен человек.`);
+      return { status: 'budget', reason: state.exceeded, replies };
+    }
+  }
   const run = await runAgentTask(task, { rules: stewardRules(commands) });
+  const meter = createMeter({ role: 'steward', pricing: shipCfg.pricing });
+  meter.addHistory(String(model).split('/').pop(), run.history || []);
+  const cost = meter.record();
   // -uall: новые файлы по одному, а не папкой (иначе db/ не попадёт под **/migrations/**).
   // `R  старый -> новый`: для переименования важны оба пути.
   const changed = String(await git(['status', '--porcelain', '-uall']))
@@ -265,14 +279,14 @@ export async function runSteward({ gitlab, project, iid, git, runAgentTask, mode
     .map((f) => f.trim().replace(/^"|"$/g, ''))
     .filter(Boolean);
   if (!changed.length && !mergedTarget) {
-    await upsertNote(gitlab, project, iid, 'steward', `**MAI Ship · steward** — изменений нет.\n\n${run.summary || ''}`.trim());
+    await upsertNote(gitlab, project, iid, 'steward', `**MAI Ship · steward** — изменений нет.\n\n${run.summary || ''}${cost ? `\n\n${costLine(cost)}` : ''}`.trim(), { cost });
     return { status: 'no-changes', jobs, findings, instructions, replies };
   }
   const touched = forbiddenTouched(changed, forbiddenMatchers(policy));
   if (touched.length) {
     // Рабочая копия CI одноразовая: правки не коммитим и не пушим, зовём человека.
     await gitlab.setLabels(project, iid, { add: [LABELS.needs_human] });
-    await upsertNote(gitlab, project, iid, 'steward', `**MAI Ship · steward** — нужен человек: исправление трогает пути, которые steward не меняет: ${touched.map((f) => `\`${f}\``).join(', ')}. Изменения не запушены.`);
+    await upsertNote(gitlab, project, iid, 'steward', `**MAI Ship · steward** — нужен человек: исправление трогает пути, которые steward не меняет: ${touched.map((f) => `\`${f}\``).join(', ')}. Изменения не запушены.${cost ? `\n\n${costLine(cost)}` : ''}`, { cost });
     return { status: 'needs-human', touched, replies };
   }
   if (changed.length) {
@@ -291,6 +305,8 @@ export async function runSteward({ gitlab, project, iid, git, runAgentTask, mode
     '',
     String(run.summary || '').slice(0, 1500),
     '',
+    cost ? costLine(cost) : '',
+    cost ? costMarker(cost) : '',
     ROUND_MARKER,
   ].filter((l, i, a) => l !== '' || a[i - 1] !== '').join('\n');
   // Каждый раунд — отдельный комментарий: по ним считается лимит раундов.
@@ -304,5 +320,5 @@ export async function runSteward({ gitlab, project, iid, git, runAgentTask, mode
       /* ответ — не главное: коммит уже в ветке */
     }
   }
-  return { status: 'pushed', sha, changed, jobs, findings, instructions, retries, mergedTarget, replies };
+  return { status: 'pushed', sha, changed, jobs, findings, instructions, retries, mergedTarget, replies, cost };
 }

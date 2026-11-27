@@ -9,6 +9,7 @@ import crypto from 'node:crypto';
 import { parse as parseYaml } from 'yaml';
 import { createSecretFilter } from '../secret-filter.js';
 import { diffText, upsertNote } from './gitlab.js';
+import { budgetState, costLine, createMeter } from './cost.js';
 import { SHIP_FILE } from './approve.js';
 
 export const LENSES = {
@@ -178,7 +179,20 @@ export async function runReview({ gitlab, project, iid, ask = null, makeModel = 
     return { status: 'skipped', reason: 'Ship выключен' };
   }
   if (shipCfg.review?.skip_draft && (mr.draft || mr.work_in_progress)) return { status: 'skipped', reason: 'MR в Draft' };
-  if (!ask && makeModel) ask = makeModel(shipCfg);
+  // Бюджет (E3.B4): исчерпан — модель не зовём, зовём человека.
+  const budget = shipCfg.budget || {};
+  if (budget.per_mr_usd || budget.monthly_usd) {
+    const state = await budgetState({ gitlab, project, iid, budget });
+    if (state.exceeded) {
+      if (!dryRun) {
+        await gitlab.setLabels(project, iid, { add: ['ship::needs-human'] });
+        await upsertNote(gitlab, project, iid, 'review', `**MAI Ship · ревью** — остановлено: ${state.exceeded}. Нужен человек.`);
+      }
+      return { status: 'skipped', reason: state.exceeded, budget: state };
+    }
+  }
+  const meter = createMeter({ role: 'review', pricing: shipCfg.pricing });
+  if (!ask && makeModel) ask = makeModel(shipCfg, meter);
   if (!ask) return { status: 'skipped', reason: 'модель ревьюера не настроена' };
 
   const diffs = await gitlab.getDiffs(project, iid);
@@ -232,8 +246,9 @@ export async function runReview({ gitlab, project, iid, ask = null, makeModel = 
     await gitlab.resolveDiscussion(project, iid, d.id);
     resolved += 1;
   }
-  await upsertNote(gitlab, project, iid, 'review', summary);
+  const cost = meter.record();
+  await upsertNote(gitlab, project, iid, 'review', cost ? `${summary}\n\n${costLine(cost)}` : summary, { cost });
   const blocking = confirmed.some((f) => f.severity === 'blocking');
   await gitlab.setLabels(project, iid, blocking ? { add: [BLOCKING_LABEL] } : { remove: [BLOCKING_LABEL] });
-  return { status: 'done', findings: confirmed, dropped, created, resolved, blocking };
+  return { status: 'done', findings: confirmed, dropped, created, resolved, blocking, cost };
 }

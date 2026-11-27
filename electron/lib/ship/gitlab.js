@@ -5,6 +5,8 @@
  * Токен — бот-учётки роли (ADR 0108): у approver'а право апрува без push.
  */
 
+import { costMarker, mergeCosts, parseCosts } from './cost.js';
+
 export const NOTE_MARKER = (role) => `<!-- mai-ship:${role} -->`;
 
 export function createGitlab({ url, token, fetch: fetchImpl = globalThis.fetch, timeoutMs = 30_000 }) {
@@ -114,11 +116,13 @@ export function diffText(diffs = [], max = 60_000) {
 }
 
 /** Создаёт или обновляет свой комментарий роли (маркер в теле) вместо нового на каждый прогон. */
-export async function upsertNote(gitlab, project, iid, role, body) {
+export async function upsertNote(gitlab, project, iid, role, body, { cost = null } = {}) {
   const marker = NOTE_MARKER(role);
   const notes = await gitlab.getNotes(project, iid);
   const mine = notes.find((n) => !n.system && String(n.body || '').includes(marker));
-  const text = `${body}\n\n${marker}`;
+  // Расход роли (E3.B4) накопительный: прошлые прогоны из перезаписываемого комментария не теряются.
+  const spent = mergeCosts([...(mine ? parseCosts(mine.body) : []), cost], role);
+  const text = `${body}${spent ? `\n\n${costMarker(spent)}` : ''}\n\n${marker}`;
   if (mine) {
     await gitlab.updateNote(project, iid, mine.id, text);
     return { id: mine.id, updated: true };

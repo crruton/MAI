@@ -82,7 +82,7 @@ check('влито 6 (открытый не считается)', flow.merged ===
 check('без человека — только approve в enforce и 0 апрувов людей', flow.withoutHuman === 1);
 check('revert за 14 дней: A — да (через 2 дня), C — нет (через 17 дней)', flow.reverted === 1 && Math.abs(flow.revertRate - 1 / 4) < 1e-9, JSON.stringify(flow));
 check('lead time: медиана и 90%', flow.leadTimeHours.median === 2 && flow.leadTimeHours.p90 === 72, JSON.stringify(flow.leadTimeHours));
-check('стоимость честно не считается', flow.cost === null && /не считается/.test(formatFlow(flow)));
+check('стоимость: без записей mai-ship:cost — расхода нет', flow.cost.mrs === 0 && /расхода нет/.test(formatFlow(flow)));
 check('пусто — без деления на ноль', flowMetrics([]).merged === 0 && flowMetrics([]).revertRate === 0 && /—/.test(formatFlow(flowMetrics([]))));
 
 console.log(`\nship-report: ${pass} OK, ${fail} FAIL`);

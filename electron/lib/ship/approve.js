@@ -12,6 +12,7 @@ import { diffFacts, diffText, upsertNote } from './gitlab.js';
 import { createSecretFilter } from '../secret-filter.js';
 import { decisionRecord, decisionMarker, parseDecision } from './report.js';
 import { escalate } from './escalate.js';
+import { budgetState, costLine, createMeter } from './cost.js';
 
 export const SHIP_FILE = '.mai-code/ship.yaml';
 export const POLICY_FILE = '.mai-code/approval-policy.yaml';
@@ -148,7 +149,8 @@ export async function runApprove({ gitlab, project, iid, classify = null, makeCl
   const policyFile = readYaml(await gitlab.getFile(project, POLICY_FILE, target), POLICY_FILE);
   if (ship.missing || policyFile.missing) return { status: 'skipped', reason: `нет ${ship.missing ? SHIP_FILE : POLICY_FILE} в ${target}`, actions };
   const shipCfg = ship.data || {};
-  if (!classify && makeClassifier) classify = makeClassifier(shipCfg);
+  const meter = createMeter({ role: 'approve', pricing: shipCfg.pricing });
+  if (!classify && makeClassifier) classify = makeClassifier(shipCfg, meter);
   const policy = policyFile.data;
   const yamlError = policyFile.error || ship.error;
 
@@ -157,6 +159,10 @@ export async function runApprove({ gitlab, project, iid, classify = null, makeCl
   const diffs = await gitlab.getDiffs(project, iid);
   const { files, changedLines } = diffFacts(diffs);
   const commits = await gitlab.getCommits(project, iid);
+  const notesBefore = await gitlab.getNotes(project, iid);
+  // Расход моделей (E3.B4): месяц считается, только если задан monthly_usd.
+  const budget = shipCfg.budget || {};
+  const spent = budget.per_mr_usd || budget.monthly_usd ? await budgetState({ gitlab, project, iid, budget, notes: notesBefore }) : { mr: 0, month: 0 };
   const executors = agentModelsFromCommits(commits.map((c) => c.message || ''));
   const facts = {
     files,
@@ -168,7 +174,8 @@ export async function runApprove({ gitlab, project, iid, classify = null, makeCl
     authorIsAgent: executors.length > 0,
     models: { approver: shipCfg.providers?.approver || '', reviewer: shipCfg.providers?.reviewer || '', executors },
     families: shipCfg.families || {},
-    budget: shipCfg.budget || {},
+    budget,
+    cost: { mr: spent.mr, month: spent.month ?? 0 },
     disabled,
     // Предварительный проход: классификаторы «нет». Модель зовём, только если так выходит approve.
     classifiers: Object.fromEntries((Array.isArray(policyFile.data?.classifiers) ? policyFile.data.classifiers : []).map((c) => [c?.name, false])),
@@ -205,9 +212,10 @@ export async function runApprove({ gitlab, project, iid, classify = null, makeCl
   if (dryRun) return { status: 'planned', result, note: body, actions, policyMode, record };
 
   // Прошлое решение — до перезаписи комментария: повтор по тому же SHA людей не дёргает (E3.F4).
-  const before = await gitlab.getNotes(project, iid);
+  const before = notesBefore;
   const previous = before.map((n) => parseDecision(n.body)).filter(Boolean).sort((a, b) => String(a.at).localeCompare(String(b.at))).pop() || null;
-  await upsertNote(gitlab, project, iid, 'approve', body);
+  const cost = meter.record();
+  await upsertNote(gitlab, project, iid, 'approve', cost ? `${body}\n\n${costLine(cost)}` : body, { cost });
   actions.push('note');
   const label = LABELS[result.action];
   await gitlab.setLabels(project, iid, { add: label ? [label] : [], remove: ALL_DECISION_LABELS.filter((l) => l !== label) });
@@ -232,5 +240,5 @@ export async function runApprove({ gitlab, project, iid, classify = null, makeCl
     if (escalation.reviewers.length) actions.push(`reviewers:${escalation.reviewers.join(',')}`);
     if (escalation.notified) actions.push('notified');
   }
-  return { status: 'done', result, actions, policyMode, record, escalation };
+  return { status: 'done', result, actions, policyMode, record, escalation, cost };
 }

@@ -18,6 +18,8 @@ providers:
 budget:
   per_mr_usd: 3
   monthly_usd: 300
+# Цены моделей, $ за 1M токенов (ADR 0124). Без цены бюджет не срабатывает.
+pricing: {}
 notify:
   channel: rocketchat
   events: [needs_human, blocked, budget, error]

@@ -10,6 +10,11 @@
 
 ### Added
 
+- MAI Ship: учёт затрат на модели (ADR 0124) — ревьюер, классификаторы approver'а и steward
+  считают токены и доллары по `pricing` из `ship.yaml` и пишут запись `mai-ship:cost` в свой
+  комментарий MR (накопительно). При превышении `budget.per_mr_usd` или `monthly_usd` ревьюер и
+  steward модель не зовут и ставят `ship::needs-human`, approver отдаёт «нужен человек».
+  `mai-ship report` показывает стоимость на MR. Модуль `ship/cost.js`, тест `test-ship-cost` (24).
 - MAI Ship: эскалация к человеку (ADR 0123) — при «нужен человек» approver назначает ревьюеров
   по CODEOWNERS target branch (кроме автора; на Free — одного) и шлёт уведомление в канал из
   `ship.yaml` (Telegram, Rocket.Chat, webhook); при «заблокировано» — только уведомление; повтор

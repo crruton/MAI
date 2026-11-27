@@ -107,10 +107,11 @@ ${formatFlow(flow)}`);
     return 0;
   }
   if (role === 'review') {
-    const makeModel = (shipCfg) => {
+    const makeModel = (shipCfg, meter) => {
       const model = modelId(shipCfg.providers?.reviewer);
       if (!env.SHIP_REVIEWER_BASE_URL || !env.SHIP_REVIEWER_API_KEY || !model) return null;
-      return createReviewModel({ client: new OpenAI({ baseURL: env.SHIP_REVIEWER_BASE_URL, apiKey: env.SHIP_REVIEWER_API_KEY, maxRetries: 2 }), model });
+      const client = new OpenAI({ baseURL: env.SHIP_REVIEWER_BASE_URL, apiKey: env.SHIP_REVIEWER_API_KEY, maxRetries: 2 });
+      return createReviewModel({ client: meter ? meter.wrap(client, model) : client, model });
     };
     const out = await runReview({ gitlab, project, iid, makeModel, env, dryRun: args.includes('--dry-run') });
     if (out.status !== 'done' && out.status !== 'planned') {
@@ -122,11 +123,12 @@ ${formatFlow(flow)}`);
 ${out.summary}`);
     return 0;
   }
-  const makeClassifier = (shipCfg) => {
+  const makeClassifier = (shipCfg, meter) => {
     const approver = String(shipCfg.providers?.approver || '');
     const model = approver.includes('/') ? approver.slice(approver.indexOf('/') + 1) : approver;
     if (!env.SHIP_APPROVER_BASE_URL || !env.SHIP_APPROVER_API_KEY || !model) return null; // без модели классификаторы «не посчитаны» → человек
-    return createClassifier({ client: new OpenAI({ baseURL: env.SHIP_APPROVER_BASE_URL, apiKey: env.SHIP_APPROVER_API_KEY, maxRetries: 2 }), model });
+    const client = new OpenAI({ baseURL: env.SHIP_APPROVER_BASE_URL, apiKey: env.SHIP_APPROVER_API_KEY, maxRetries: 2 });
+    return createClassifier({ client: meter ? meter.wrap(client, model) : client, model });
   };
   const out = await runApprove({ gitlab, project, iid, makeClassifier, env, dryRun: args.includes('--dry-run') });
   if (out.status === 'skipped') {
