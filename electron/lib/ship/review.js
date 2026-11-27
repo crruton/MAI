@@ -70,9 +70,35 @@ export function parseFindings(raw, lens) {
     .map((f) => ({ lens, file: f.file, line: f.line, severity: f.severity, title: f.title.trim().slice(0, 200), detail: String(f.detail || '').slice(0, 1500) }));
 }
 
-/** Отпечаток находки: файл, строка, направление и заголовок без регистра и пробелов. */
+/**
+ * Отпечаток находки — файл и строка (E3.D6): одна строка — одно обсуждение, а формулировка
+ * модели между прогонами может меняться и не должна плодить дубли.
+ */
 export function fingerprint(f) {
-  return crypto.createHash('sha256').update(`${f.file}:${f.line}:${f.lens}:${f.title.toLowerCase().replace(/\s+/g, ' ')}`).digest('hex').slice(0, 16);
+  return crypto.createHash('sha256').update(`${f.file}:${f.line}`).digest('hex').slice(0, 16);
+}
+
+const SEVERITY_ORDER = { blocking: 0, 'should-fix': 1, nit: 2 };
+
+/**
+ * Склеивает находки разных направлений на одной строке (боевая проверка E3.H0: одна ошибка
+ * приходила тремя обсуждениями). Серьёзность — максимальная, заголовок — самой серьёзной,
+ * пояснения — списком.
+ */
+export function mergeFindings(findings) {
+  const groups = new Map();
+  for (const f of findings) {
+    const key = `${f.file}:${f.line}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+  return [...groups.values()].map((list) => {
+    list.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
+    const top = list[0];
+    if (list.length === 1) return top;
+    const lenses = [...new Set(list.map((x) => x.lens))];
+    return { ...top, lens: lenses.join(', '), detail: list.map((x) => `- **${x.title}** (${x.lens}, ${x.severity}): ${x.detail}`).join('\n') };
+  });
 }
 
 const FIND_PROMPT = (lens) => `Ты — ревьюер merge request. Направление: ${LENSES[lens]}.
@@ -165,7 +191,7 @@ export async function runReview({ gitlab, project, iid, ask = null, makeModel = 
   for (const lens of lenses) found.push(...parseFindings(await ask(FIND_PROMPT(lens), context), lens));
   // Только на добавленные строки diff: иначе обсуждение не повесить и находка — не про этот MR.
   const placed = found.filter((f) => valid.get(f.file)?.has(f.line));
-  const unique = [...new Map(placed.map((f) => [fingerprint(f), f])).values()].slice(0, MAX_FINDINGS);
+  const unique = mergeFindings(placed).slice(0, MAX_FINDINGS);
   const confirmed = [];
   for (const f of unique) {
     const verdict = await ask(VERIFY_PROMPT, `Находка: ${JSON.stringify({ file: f.file, line: f.line, severity: f.severity, title: f.title, detail: f.detail })}\n\n${context}`);

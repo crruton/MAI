@@ -2,7 +2,7 @@
  * MAI Ship: роль ревьюера против поддельного GitLab и поддельной модели (E3.D1–D4, ADR 0120).
  */
 import { createGitlab } from '../electron/lib/ship/gitlab.js';
-import { runReview, addedLines, parseFindings, fingerprint, lensesFor, createReviewModel, BLOCKING_LABEL, FINDING_MARKER } from '../electron/lib/ship/review.js';
+import { runReview, addedLines, parseFindings, fingerprint, mergeFindings, lensesFor, createReviewModel, BLOCKING_LABEL, FINDING_MARKER } from '../electron/lib/ship/review.js';
 
 let pass = 0;
 let fail = 0;
@@ -97,6 +97,13 @@ check('добавленные строки по номерам новой вер
 check('находки: валидные взяты, мусор отброшен', parseFindings('```json\n[{"file":"a","line":1,"severity":"blocking","title":"x"},{"file":"a","line":"2","severity":"blocking","title":"y"},{"file":"a","line":3,"severity":"critical","title":"z"}]\n```', 'security').length === 1);
 check('не JSON — пусто', parseFindings('нет проблем', 'security').length === 0);
 check('отпечаток не зависит от регистра и пробелов', fingerprint({ ...EVAL, lens: 'security' }) === fingerprint({ ...EVAL, lens: 'security', title: 'EVAL  на пользовательском   вводе' }));
+const merged = mergeFindings([
+  { file: 'src/app.js', line: 3, lens: 'correctness', severity: 'should-fix', title: 'Нет обработки ошибок', detail: 'd1' },
+  { file: 'src/app.js', line: 3, lens: 'security', severity: 'blocking', title: 'eval на вводе', detail: 'd2' },
+  { file: 'src/app.js', line: 2, lens: 'tests', severity: 'nit', title: 'нет теста', detail: '' },
+]);
+check('одна строка — одна находка: серьёзность и заголовок самой серьёзной, пояснения списком (E3.D6)', merged.length === 2 && merged[0].severity === 'blocking' && merged[0].title === 'eval на вводе' && merged[0].lens === 'security, correctness' && /Нет обработки ошибок/.test(merged[0].detail) && /eval на вводе/.test(merged[0].detail), JSON.stringify(merged));
+check('отпечаток — файл и строка: другая формулировка не плодит дубль', fingerprint({ file: 'a', line: 1, lens: 'x', title: 'один' }) === fingerprint({ file: 'a', line: 1, lens: 'y', title: 'другой' }) && fingerprint({ file: 'a', line: 1 }) !== fingerprint({ file: 'a', line: 2 }));
 check('направления по уровню и явный список', lensesFor({ level: 'quick' }).join() === 'correctness' && lensesFor({}).join() === 'correctness,security,tests' && lensesFor({ level: 'deep' }).length === 5 && lensesFor({ lenses: ['security', 'nope'] }).join() === 'security');
 
 console.log('[2] ревью от начала до конца');
