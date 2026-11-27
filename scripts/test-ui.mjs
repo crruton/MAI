@@ -528,7 +528,13 @@ ipcMain.handle('app:clipboard', (_e, text) => {
 });
 // Агент схем: предложение и «Применить» (раздел [48], F10).
 const diagramApplies = [];
-ipcMain.handle('boards:views', () => ({ views: Object.fromEntries(['c1', 'c2', 'c3', 'c4', 'sequence', 'er', 'deployment', 'openapi'].map((k) => [k, { title: k.toUpperCase(), mermaid: 'graph TD; A-->B', puml: '' }])), drift: {} }));
+// Раздел [48]: схема PlantUML рисуется в main (ADR 0127) — заглушка отдаёт SVG со скриптом, окно его не исполняет.
+const renderCalls = [];
+ipcMain.handle('boards:renderDiagram', (_e, payload) => {
+  renderCalls.push(payload);
+  return { ok: true, svg: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="40"><text x="4" y="20">PUML-OK</text></svg>', engine: 'local' };
+});
+ipcMain.handle('boards:views', () => ({ views: Object.fromEntries(['c1', 'c2', 'c3', 'c4', 'sequence', 'er', 'deployment', 'openapi'].map((k) => [k, { title: k.toUpperCase(), puml: '@startuml\nA -> B\n@enduml' }])), drift: {} }));
 ipcMain.handle('boards:diagramChat', () => ({ ok: true, reply: 'Добавил Redis между API и Postgres', changed: true, proposal: { containers: [{ id: 'redis' }] }, baseHash: 'h1', diff: { added: 1, removed: 0, truncated: false, lines: [{ type: '@', text: '@@ строка 3 @@' }, { type: '+', text: '  { "id": "redis" }' }] } }));
 ipcMain.handle('boards:diagramApply', (_e, payload) => {
   diagramApplies.push(payload);
@@ -2169,6 +2175,8 @@ app.whenReady().then(async () => {
     await arch.loadFile(path.join(root, 'renderer', 'board.html'), { query: { board: 'architecture' } });
     await wait(1500);
     const archUi = (code) => arch.webContents.executeJavaScript(code);
+    const pumlShown = await archUi(`document.querySelector('#diagram .puml-svg')?.textContent || ''`);
+    check('схема архитектуры — SVG из PlantUML (ADR 0127), без mermaid', /PUML-OK/.test(pumlShown) && renderCalls.some((c) => /@startuml/.test(c.text) && c.format === 'svg') && !(await archUi(`Boolean(window.mermaid) || Boolean(document.querySelector('script[src*=mermaid]'))`)), pumlShown + JSON.stringify(renderCalls.slice(0, 1)));
     await archUi(`(() => { const i = document.querySelector('#diagram-agent-input'); i.value = 'добавь Redis'; document.querySelector('[data-act=diagram-agent-send]').click(); })()`);
     await wait(600);
     const prop = await archUi(`(() => { const p = document.querySelector('.diagram-proposal'); return p ? { text: p.textContent, add: Boolean(p.querySelector('.diff-add')), apply: Boolean(p.querySelector('[data-act=diagram-apply]')) } : null; })()`);

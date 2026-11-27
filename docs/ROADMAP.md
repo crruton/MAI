@@ -34,7 +34,7 @@ M1–M3 и начало M4 вошли в 0.2.0 (см. [CHANGELOG](../CHANGELOG.m
 - [x] Repowise: CLI, MCP с таймаутом подключения, встроенные инструменты, дистилляция
       shell, дашборд, `init --no-editor-setup` без правки чужих конфигов.
 - [x] Экспорт схем SVG/PNG/PUML/JSON и диалоговый агент схем, который правит
-      `architecture.model`, а не текст Mermaid.
+      `architecture.model`, а не текст схемы.
 - [x] Навыки из Delamain/Harness2: `handoff`, `dispatch`, `resource-locks`,
       `harness-refine`, `experience-reflect`, `diagram-editor`, `sandbox-isolation`.
 - [x] Песочницы проектов: отдельная папка, `.mai-code`, `memory.md`, git и шаблоны.

@@ -45,9 +45,10 @@ check('образ джоб — переменная MAI_SHIP_IMAGE, по умо�
 const before = ci['.mai-ship'].before_script.join('\n');
 check('с образом клон не нужен: /opt/mai → /tmp/mai', /\/opt\/mai\/scripts\/mai-ship\.mjs/.test(before) && /ln -sfn \/opt\/mai \/tmp\/mai/.test(before) && /git clone/.test(before));
 const dockerfile = fs.readFileSync(path.join(root, 'ci', 'ship.Dockerfile'), 'utf8');
-check('Dockerfile: базовый образ аргументом, без Electron, git, обёртка mai', /ARG NODE_IMAGE=node:24-slim/.test(dockerfile) && /--omit=dev/.test(dockerfile) && /install[^\n]*git/.test(dockerfile) && /exec node \/opt\/mai\/bin\/mai\.mjs/.test(dockerfile) && !/ENTRYPOINT \[/.test(dockerfile));
+check('Dockerfile: базовые образы аргументами, без Electron, git, обёртка mai', /ARG NODE_IMAGE=node:24-alpine/.test(dockerfile) && /ARG ALPINE_IMAGE=alpine:/.test(dockerfile) && /--omit=dev/.test(dockerfile) && /apk add[^\n]*git/.test(dockerfile) && /exec node \/opt\/mai\/bin\/mai\.mjs/.test(dockerfile) && !/ENTRYPOINT \[/.test(dockerfile));
+check('Dockerfile: итог — чистый alpine с бинарником node, без npm; в node_modules нет типов', /FROM \$\{ALPINE_IMAGE\}/.test(dockerfile) && /COPY --from=deps \/usr\/local\/bin\/node/.test(dockerfile) && /-name '\*\.d\.ts'/.test(dockerfile) && /COPY electron\/lib/.test(dockerfile) && !/COPY electron \.\/electron\n/.test(dockerfile));
 const ignore = fs.readFileSync(path.join(root, 'ci', 'ship.Dockerfile.dockerignore'), 'utf8');
-for (const need of ['electron/', 'bin/', 'scripts/mai-ship.mjs', 'package-lock.json']) check(`контекст образа включает ${need}`, ignore.includes(`!${need}`));
+for (const need of ['electron/lib/', 'bin/', 'scripts/mai-ship.mjs', 'package-lock.json']) check(`контекст образа включает ${need}`, ignore.includes(`!${need}`));
 const wf = fs.readFileSync(path.join(root, '.github', 'workflows', 'ship-image.yml'), 'utf8');
 check('публикация в GHCR — только из main', /if: github\.ref == 'refs\/heads\/main'[\s\S]*docker push/.test(wf) && (wf.match(/if: github\.ref == 'refs\/heads\/main'/g) || []).length === 2);
 

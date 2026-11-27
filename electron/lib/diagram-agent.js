@@ -103,8 +103,7 @@ export async function editDiagram({ provider, model, settings, projectDir, view,
 
   const context = [
     `Представление: ${view} — ${selected.title}`,
-    `Текущая Mermaid-схема:\n${selected.mermaid || '(нет)'}`,
-    selected.puml ? `Текущий PlantUML:\n${selected.puml}` : '',
+    `Текущая схема (PlantUML):\n${selected.puml || '(нет)'}`,
     `Текущая модель архитектуры:\n${JSON.stringify(current, null, 2)}`,
     `Задача пользователя: ${message}`,
   ]

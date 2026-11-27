@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- CSP (бэклог A2.5): скрипты только из приложения, без inline и eval. Стили inline нужны Mermaid. -->
+    <!-- CSP (бэклог A2.5): скрипты только из приложения, без inline и eval. Стили inline нужны SVG схем PlantUML. -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
@@ -41,7 +41,7 @@
       </header>
 
       <main class="board-view" id="view">
-        <!-- Заглушка на время загрузки mermaid и модуля доски. -->
+        <!-- Заглушка на время загрузки модуля доски. -->
         <div class="board-loading">
           <div class="board-loading-spinner"></div>
           <div class="board-loading-title">Загружаю доску…</div>

@@ -50,10 +50,14 @@
 | Deployment | узлы, VM/контейнеры, CPU, RAM, GPU |
 | OpenAPI | эндпоинты, методы, теги, спецификация |
 
-- **Mermaid** рисуется локально (пакет `mermaid`, без сети).
-- **PlantUML** генерируется и экспортируется кнопкой «Экспорт .puml». Встроенный
-  рендер PUML не подключён: для него нужен Java и PlantUML-сервер, которых мы не
-  предполагаем на машине. Экспорт открывается в IDE/PlantUML-плагине.
+- **Схемы — PlantUML** (C4-PlantUML для C1–C3 и deployment, ADR 0127). Рисует main-процесс:
+  локальная Java + `plantuml.jar` или сервер PlantUML команды. Публичный сервер не используется.
+- **Настройка.** Java ищется в `JAVA_HOME`, `PATH` и типичных папках Windows (JRE из Archi,
+  Adoptium). `plantuml.jar` положите в папку `plantuml` данных MAI или укажите путь в
+  `settings.json`: `"plantuml": { "jar": "C:/tools/plantuml.jar", "java": "…/java.exe" }`.
+  Без Java — `"plantuml": { "server": "https://plantuml.<ваш-домен>" }` (self-hosted
+  `plantuml-server`). Ничего не настроено — доска показывает исходник и подсказку.
+- **Экспорт** SVG и PNG рисует тот же PlantUML; «.puml» — исходник для IDE.
 - **Baseline** фиксирует хеши всех представлений и git HEAD. Если модель или git
   изменились, доска показывает баннер дрейфа и помечает конкретные представления.
 - **ADR** создаются как артефакты `adr:*` с версиями и статусом

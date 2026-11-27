@@ -141,4 +141,5 @@ ADR фиксируют решения, которые дорого менять:
 | [0123](0123-ship-eskalaciya-k-cheloveku.md) | MAI Ship: эскалация к человеку — CODEOWNERS и уведомления | accepted | 2026-11-27 |
 | [0124](0124-ship-uchet-zatrat.md) | MAI Ship: учёт затрат на модели в комментариях MR | accepted | 2026-11-27 |
 | [0125](0125-ship-status-mr-v-mai.md) | MAI Ship: статус MR в MAI через glab | accepted | 2026-11-27 |
-| [0126](0126-ship-obraz-i-mai-ship.md) | MAI Ship: `mai ship <роль>` и Docker-образ | accepted | 2026-11-27 |
+| [0126](0126-ship-obraz-i-mai-ship.md) | MAI Ship: `mai ship <роль>` и Docker-образ | accepted, дополнено 27.11 | 2026-11-27 |
+| [0127](0127-plantuml-vmesto-mermaid.md) | PlantUML (C4-PlantUML) вместо Mermaid на досках | accepted | 2026-11-27 |

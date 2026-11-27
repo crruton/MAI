@@ -78,6 +78,7 @@ import {
   recordCorrection,
   updateCorrection,
 } from './lib/boards.js';
+import { createPlantuml } from './lib/plantuml.js';
 import { gitStatus, gitDiff, gitHead } from './lib/git.js';
 import { runStage } from './lib/deploy.js';
 import { checkCommand, redactSecrets } from './lib/guardrails.js';
@@ -3868,7 +3869,6 @@ ipcMain.handle('boards:exportDiagram', async (event, payload) => {
         {
           view: payload.view,
           title: view.title,
-          mermaid: view.mermaid,
           puml: view.puml,
           model: boards.architecture?.model || {},
         },
@@ -3877,11 +3877,11 @@ ipcMain.handle('boards:exportDiagram', async (event, payload) => {
       );
     }
   }
-  if (format === 'svg') data = String(data || '');
-  if (format === 'png') {
-    const raw = String(data || '');
-    const base64 = raw.includes(',') ? raw.slice(raw.indexOf(',') + 1) : raw;
-    data = Buffer.from(base64, 'base64');
+  if ((format === 'svg' || format === 'png') && payload.view !== 'openapi') {
+    // Из PlantUML в main (ADR 0127): та же схема, что на экране, PNG — без растеризации окна.
+    const r = await plantuml.render(view.puml || '', format);
+    if (!r.ok) return { ok: false, error: r.error || 'PlantUML не отрисовал схему' };
+    data = format === 'png' ? r.png : r.svg;
   }
   if (!data) return { ok: false, error: 'Нет данных для сохранения' };
 
@@ -3900,10 +3900,9 @@ ipcMain.handle('boards:exportDiagram', async (event, payload) => {
 
 /**
  * Растеризация SVG в PNG через скрытое offscreen-окно.
- *
- * Canvas в рендерере «тускнеет» на SVG с foreignObject (Mermaid рисует так
- * подписи), а nativeImage не декодирует SVG. Offscreen-окно рендерит ту же
- * разметку Chromium и отдаёт снимок без ограничения tainted canvas.
+ * Схемы досок рисует PlantUML в main (ADR 0127); растеризация осталась для произвольного SVG:
+ * canvas в рендерере «тускнеет» на SVG с foreignObject, а nativeImage не декодирует SVG.
+ * Offscreen-окно рендерит ту же разметку Chromium и отдаёт снимок без ограничения tainted canvas.
  */
 ipcMain.handle('boards:rasterize', async (_e, payload) => {
   const svg = String(payload?.svg || '');
@@ -4063,7 +4062,7 @@ ipcMain.handle('boards:saveView', (_e, payload) => {
     kind: payload.view === 'openapi' ? 'openapi' : 'diagram',
     name: `Архитектура · ${payload.view}`,
     title: view.title,
-    content: payload.view === 'openapi' ? JSON.stringify(view.spec, null, 2) : `${view.mermaid}\n\n--- PlantUML ---\n${view.puml}\n`,
+    content: payload.view === 'openapi' ? JSON.stringify(view.spec, null, 2) : `${view.puml}\n`,
     meta: { view: payload.view, generatedAt: new Date().toISOString() },
     note: 'сгенерировано доской архитектуры',
   });
@@ -4087,6 +4086,14 @@ const autoSyncEnabled = () => {
   const cfg = loadSettings().infra || {};
   return Boolean(cfg.autoSync && (cfg.postgresUrl || cfg.seaweedUrl));
 };
+// Рендер схем досок (ADR 0127): PlantUML локально (Java + plantuml.jar) или сервер команды.
+const plantuml = createPlantuml({ getSettings: () => loadSettings(), dataDir: dataDir() });
+ipcMain.handle('boards:renderDiagram', async (_e, payload) => {
+  const r = await plantuml.render(String(payload?.text || ''), payload?.format === 'png' ? 'png' : 'svg');
+  return { ok: r.ok, svg: r.svg || '', png: r.png ? r.png.toString('base64') : '', error: r.error || '', engine: r.engine || '', setup: Boolean(r.setup) };
+});
+ipcMain.handle('boards:plantumlStatus', () => plantuml.status());
+
 const syncQueue = createSyncQueue({
   run: (projectDir) => infra.autoSync(projectDir, { embed: loadSettings().infra?.autoSyncEmbed !== false }),
   debounceMs: Number(process.env.MAI_SYNC_DEBOUNCE_MS || 5000),

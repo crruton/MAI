@@ -20,7 +20,7 @@ export function selfCheckOut(argv = process.argv, env = process.env) {
 }
 
 const REQUIRED_FILES = ['renderer/index.html', 'renderer/app.js', 'renderer/board.html', 'electron/preload.cjs', 'electron/main.js', 'docs/USER-GUIDE.md', 'package.json'];
-const REQUIRED_MODULES = ['openai', 'pdf-lib', '@modelcontextprotocol/sdk/client/index.js', 'mermaid/package.json'];
+const REQUIRED_MODULES = ['openai', 'pdf-lib', '@modelcontextprotocol/sdk/client/index.js'];
 
 export async function runSelfCheck({ appPath, userData, version = '', platform = process.platform, safeStorage = null, systemCa = 0, env = process.env, versions = process.versions, importer = (m) => import(m) }) {
   const checks = [];
@@ -40,7 +40,7 @@ export async function runSelfCheck({ appPath, userData, version = '', platform =
 
   for (const mod of REQUIRED_MODULES) {
     try {
-      // mermaid — модуль окна: проверяем, что он упакован, а не грузим в main.
+      // Модуль окна (package.json): проверяем, что он упакован, а не грузим в main.
       if (mod.endsWith('package.json')) {
         const { createRequire } = await import('node:module');
         createRequire(path.join(appPath, 'package.json')).resolve(mod);

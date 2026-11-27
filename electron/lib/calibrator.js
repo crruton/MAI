@@ -43,7 +43,7 @@ export function buildContext({ prd = '', model = {}, views = {}, adrs = [], open
   const parts = [
     `## PRD\n${cut(prd, 16_000) || '(нет docs/PRD.md)'}`,
     `## Модель архитектуры (JSON)\n${cut(JSON.stringify(model || {}, null, 1), 16_000)}`,
-    ...['c1', 'c2', 'c3'].filter((k) => views[k]?.mermaid).map((k) => `## ${views[k].title || k.toUpperCase()}\n${cut(views[k].mermaid, 4_000)}`),
+    ...['c1', 'c2', 'c3'].filter((k) => views[k]?.puml).map((k) => `## ${views[k].title || k.toUpperCase()}\n${cut(views[k].puml, 4_000)}`),
     `## ADR (${adrs.length})\n${
       adrs.length
         ? adrs

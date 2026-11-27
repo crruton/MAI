@@ -611,9 +611,9 @@ function onClick(event) {
       delete state.diagramChat[state.openView];
       render();
     },
-    'copy-mermaid': () => {
+    'copy-puml': () => {
       const view = state.viewsData?.views?.[state.openView];
-      copyText(state.openView === 'openapi' ? JSON.stringify(view?.spec || {}, null, 2) : view?.mermaid || '');
+      copyText(state.openView === 'openapi' ? JSON.stringify(view?.spec || {}, null, 2) : view?.puml || '');
     },
     'adr-new': () => adrModal(null),
     'adr-edit': () => adrModal((state.boards.architecture.adrs || []).find((a) => a.id === id)),
@@ -1057,7 +1057,7 @@ function renderArchitecture() {
     <div class="page-head">
       <div>
         <h1>Архитектура</h1>
-        <p>C1–C4, sequence, ER, deployment с sizing и OpenAPI. Mermaid рисуется локально, PlantUML экспортируется.</p>
+        <p>C1–C4, sequence, ER, deployment с sizing и OpenAPI. Схемы — PlantUML (C4-PlantUML): рисуются локально через Java или сервером PlantUML команды.</p>
       </div>
       <div class="head-actions">
         <button class="btn" data-act="calibrate" ${state.calibration?.busy ? 'disabled' : ''}>${state.calibration?.busy ? 'Калибровка…' : 'Откалибровать'}</button>
@@ -1114,7 +1114,7 @@ function architectureDiagrams() {
           <div class="card-head"><h2>Как это устроено</h2></div>
           <p class="muted" style="margin:0">
             Модель архитектуры хранится в <span class="mono">.mai-code/boards.json</span>.
-            Из неё генерируются Mermaid и PlantUML. Baseline фиксирует хеши представлений и git HEAD — расхождение показывает дрейф.
+            Из неё генерируется PlantUML. Baseline фиксирует хеши представлений и git HEAD — расхождение показывает дрейф.
             PlantUML не рендерится без Java-рантайма, поэтому экспортируется файлом.
           </p>
         </div>
@@ -1125,7 +1125,7 @@ function architectureDiagrams() {
           <h2>${esc(view?.title || VIEW_NAMES[state.openView])}</h2>
           <div class="diagram-toolbar">
             <button class="btn small ghost" data-act="toggle-source">${state.showSource ? 'Показать диаграмму' : 'Исходник'}</button>
-            <button class="btn small ghost" data-act="copy-mermaid">Копировать</button>
+            <button class="btn small ghost" data-act="copy-puml">Копировать</button>
             <button class="btn small" data-act="save-view">В артефакты</button>
             <select class="input diagram-export" data-change="export-format" title="Скачать схему">
               <option value="">Скачать…</option>
@@ -1136,7 +1136,7 @@ function architectureDiagrams() {
           </div>
         </div>
         <div class="diagram" id="diagram"></div>
-        ${state.showSource ? `<pre class="source" style="margin-top:12px">${esc(`--- Mermaid ---\n${view?.mermaid || ''}\n\n--- PlantUML ---\n${view?.puml || ''}`)}</pre>` : ''}
+        ${state.showSource ? `<pre class="source" style="margin-top:12px">${esc(view?.puml || '')}</pre>` : ''}
         ${diagramAgentPanel(view)}
       </div>
     </div>`;
@@ -1195,10 +1195,10 @@ function paintDiagram() {
     return;
   }
   if (state.showSource) {
-    node.innerHTML = `<pre class="source">${esc(view.mermaid)}</pre>`;
+    node.innerHTML = `<pre class="source">${esc(view.puml)}</pre>`;
     return;
   }
-  renderMermaidInto(node, view.mermaid);
+  renderPumlInto(node, view.puml);
 }
 
 function openapiTable(view) {
@@ -1357,33 +1357,11 @@ async function exportDiagram(format) {
   }
   try {
     let data = '';
-    if (format === 'svg' || format === 'png') {
-      if (state.openView === 'openapi') {
-        toast('Для OpenAPI доступен формат JSON', 'err');
-        return;
-      }
-      const svg = document.querySelector('#diagram svg');
-      if (!svg) {
-        toast('Диаграмма ещё не отрисована', 'err');
-        return;
-      }
-      const clone = svg.cloneNode(true);
-      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-      const text = new XMLSerializer().serializeToString(clone);
-      if (format === 'svg') {
-        data = text;
-      } else {
-        const rect = svg.getBoundingClientRect();
-        const raster = await api.boards.rasterize({
-          svg: text,
-          scale: 2,
-          width: Math.max(1, Math.ceil(rect.width || 1200)),
-          height: Math.max(1, Math.ceil(rect.height || 800)),
-        });
-        if (!raster.ok) throw new Error(raster.error || 'Не удалось собрать PNG');
-        data = raster.dataUrl;
-      }
+    if ((format === 'svg' || format === 'png') && state.openView === 'openapi') {
+      toast('Для OpenAPI доступен формат JSON', 'err');
+      return;
     }
+    // SVG и PNG рисует main из PlantUML (ADR 0127): та же схема, без растеризации окна.
     const res = await api.boards.exportDiagram({
       projectDir: state.projectDir,
       view: state.openView,
@@ -1531,80 +1509,38 @@ async function deleteAdr(id) {
   render();
 }
 
-/* ---------- mermaid ---------- */
+/* ---------- PlantUML (ADR 0127) ---------- */
 
-let mermaidSeq = 0;
-let mermaidLoading = null;
+let pumlSeq = 0;
 
 /**
- * Грузит mermaid при первом обращении к диаграмме.
- * Скрипт весит ~5 МБ, поэтому не подключаем его на старте доски.
+ * Схема рисуется в main: PlantUML (Java + plantuml.jar) или сервер команды. В окне — готовый SVG
+ * (main убирает скрипты и обработчики). Без Java и сервера — исходник и подсказка, как настроить.
  */
-function ensureMermaid() {
-  if (window.mermaid) return Promise.resolve(window.mermaid);
-  mermaidLoading ??= new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = '../node_modules/mermaid/dist/mermaid.min.js';
-    script.onload = () => {
-      initMermaid();
-      resolve(window.mermaid || null);
-    };
-    script.onerror = () => {
-      mermaidLoading = null;
-      reject(new Error('Не удалось загрузить mermaid'));
-    };
-    document.head.append(script);
-  });
-  return mermaidLoading;
-}
-
-function initMermaid() {
-  if (!window.mermaid) return;
-  try {
-    window.mermaid.initialize({
-      startOnLoad: false,
-      theme: 'dark',
-      securityLevel: 'loose',
-      fontFamily: "'Segoe UI', system-ui, sans-serif",
-      themeVariables: {
-        background: '#10131b',
-        primaryColor: '#1c2030',
-        primaryTextColor: '#e8eaf2',
-        primaryBorderColor: '#7c5cff',
-        lineColor: '#6b7288',
-        secondaryColor: '#232838',
-        tertiaryColor: '#161922',
-      },
-    });
-  } catch {
-    /* старые версии mermaid могут не знать части опций */
-  }
-}
-
-async function renderMermaidInto(node, text) {
+async function renderPumlInto(node, text) {
   if (!text) {
     node.innerHTML = '<div class="empty-note">Пустая диаграмма</div>';
     return;
   }
+  const seq = ++pumlSeq;
+  node.innerHTML = '<div class="empty-note">Рисую схему…</div>';
+  let res;
   try {
-    await ensureMermaid();
-  } catch {
-    /* ниже покажем исходник */
+    res = await api.boards.renderDiagram({ text, format: 'svg' });
+  } catch (err) {
+    res = { ok: false, error: err?.message || String(err) };
   }
-  if (!window.mermaid) {
-    node.innerHTML = `<div class="fallback"><p class="muted">Mermaid не загрузился, показываю исходник.</p><pre class="source">${esc(text)}</pre></div>`;
+  // Пока рисовали, открыли другое представление — старый ответ не показываем.
+  if (seq !== pumlSeq || !node.isConnected) return;
+  if (res.ok && res.svg) {
+    node.innerHTML = `<div class="puml-svg">${res.svg}</div>`;
     return;
   }
-  try {
-    const id = `mai-mermaid-${++mermaidSeq}`;
-    const { svg } = await window.mermaid.render(id, text);
-    if (node.isConnected) node.innerHTML = svg;
-  } catch (err) {
-    node.innerHTML = `<div class="fallback">
-      <div class="diagram-error">Mermaid: ${esc(err?.message || err)}</div>
-      <pre class="source">${esc(text)}</pre>
-    </div>`;
-  }
+  node.innerHTML = `<div class="fallback">
+    <div class="diagram-error">${esc(res.error || 'PlantUML не отрисовал схему')}</div>
+    ${res.svg ? `<div class="puml-svg">${res.svg}</div>` : ''}
+    <pre class="source">${esc(text)}</pre>
+  </div>`;
 }
 
 /* ---------- runners ---------- */

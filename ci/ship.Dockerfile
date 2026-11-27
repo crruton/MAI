@@ -7,24 +7,35 @@
 # В GitLab CI — переменная MAI_SHIP_IMAGE (ci/mai-ship.gitlab-ci.yml): джоба не клонирует MAI.
 # ENTRYPOINT не задан: GitLab запускает в образе свою оболочку.
 # Базовый образ — аргументом: без доступа к Docker Hub — зеркало или прокси-кэш Harbor, например
-#   --build-arg NODE_IMAGE=mirror.gcr.io/library/node:24-slim
-ARG NODE_IMAGE=node:24-slim
-FROM ${NODE_IMAGE}
+#   --build-arg NODE_IMAGE=mirror.gcr.io/library/node:24-alpine --build-arg ALPINE_IMAGE=mirror.gcr.io/library/alpine:3.24
+#
+# Размер (ADR 0126, дополнение): alpine вместо debian-slim; итоговый слой — чистый alpine, в него
+# копируется только бинарник node (npm, corepack и yarn не попадают); из node_modules убраны типы,
+# sourcemap и markdown (лицензии остаются); mermaid удалён из зависимостей MAI (ADR 0127); из
+# исходников — только electron/lib. Итог: 272 МБ (64 МБ сжато) вместо 837 МБ.
+ARG NODE_IMAGE=node:24-alpine
+# Та же версия alpine, что у NODE_IMAGE: бинарник node собран под её musl и libstdc++.
+ARG ALPINE_IMAGE=alpine:3.24
 
-# git нужен steward'у (коммит и push в ветку MR); ca-certificates — для HTTPS к GitLab и шлюзам.
-RUN apt-get update -qq \
-  && apt-get install -y -qq --no-install-recommends git ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
-
+FROM ${NODE_IMAGE} AS deps
 WORKDIR /opt/mai
 COPY package.json package-lock.json ./
-# Electron — devDependency: в образ не ставится. Скрипты пакетов не запускаются.
-# mermaid (~170 МБ с зависимостями) рисует схемы в окне — ролям Ship не нужен.
+# Electron — devDependency: не ставится. Скрипты пакетов не запускаются.
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
-  && npm uninstall --ignore-scripts --no-audit --no-fund mermaid \
-  && npm cache clean --force
+  && find node_modules -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' -o -name '*.md' -o -name '*.markdown' -o -name '*.ts.map' \) -delete \
+  && find node_modules -type d \( -name test -o -name tests -o -name __tests__ -o -name docs -o -name example -o -name examples \) -prune -exec rm -rf {} + \
+  && rm -rf node_modules/.package-lock.json
 
-COPY electron ./electron
+FROM ${ALPINE_IMAGE}
+# git — steward'у (коммит и push в ветку MR); ca-certificates — HTTPS к GitLab и шлюзам моделей;
+# libstdc++ и libgcc — зависимости бинарника node.
+RUN apk add --no-cache git ca-certificates libstdc++ libgcc
+COPY --from=deps /usr/local/bin/node /usr/local/bin/node
+
+WORKDIR /opt/mai
+COPY --from=deps /opt/mai/node_modules ./node_modules
+COPY package.json ./
+COPY electron/lib ./electron/lib
 COPY bin ./bin
 COPY scripts/mai-ship.mjs ./scripts/mai-ship.mjs
 # Обёртка, а не ссылка на bin/mai.mjs: shebang из рабочей копии Windows (CRLF) в Linux не работает.

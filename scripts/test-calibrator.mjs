@@ -20,7 +20,7 @@ function check(name, cond, extra = '') {
 const parts = {
   prd: '# PRD\nПользователи входят через SSO.',
   model: { containers: [{ id: 'api', name: 'API' }] },
-  views: { c1: { title: 'C1 · Контекст', mermaid: 'graph TD; U-->S' }, c2: { title: 'C2', mermaid: 'graph TD; A-->B' }, c4: { title: 'C4', mermaid: 'skip' } },
+  views: { c1: { title: 'C1 · Контекст', puml: '@startuml\nU -> S\n@enduml' }, c2: { title: 'C2', puml: '@startuml\nA -> B\n@enduml' }, c4: { title: 'C4', puml: 'skip' } },
   adrs: [{ title: '0001 Хранилище', status: 'accepted', content: 'Postgres' }],
   openspec: [{ name: 'auth', title: 'Вход', summary: 'SSO', open: ['Keycloak', 'Роли'] }],
 };

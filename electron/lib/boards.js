@@ -192,149 +192,134 @@ export function saveBoardSection(projectDir, section, value, rev) {
   return saveBoards(projectDir, current);
 }
 
-/* ---------- mermaid / plantuml ---------- */
+/* ---------- PlantUML (ADR 0127: вместо Mermaid) ---------- */
 
 const mid = (value) => String(value || 'x').replace(/[^a-zA-Z0-9_]/g, '_').replace(/^(\d)/, 'n$1');
-const label = (value) =>
+/** Строка для макроса C4-PlantUML: без двойных кавычек и переводов строк. */
+const q = (value) =>
   String(value ?? '')
-    .replace(/"/g, '&quot;')
-    .replace(/\|/g, '/')
-    .replace(/\r?\n/g, ' ');
+    .replace(/"/g, "'")
+    .replace(/\r?\n/g, ' ')
+    .trim();
 
-function relLabel(model, from, to) {
-  const rel = (model.relations || []).find((r) => r.from === from && r.to === to);
-  if (!rel) return '';
-  return [rel.label, rel.tech].filter(Boolean).join(' · ');
-}
-
-function c1(model) {
-  const lines = ['flowchart LR'];
-  lines.push(`  sys(["${label(model.system?.name || 'Система')}"])`);
-  (model.system?.actors || []).forEach((actor, i) => {
-    lines.push(`  actor_${i}(["${label(actor)}"]) --> sys`);
-  });
-  (model.system?.externals || []).forEach((ext, i) => {
-    lines.push(`  ext_${i}["${label(ext)}"]`);
-    lines.push(`  sys -->|"использует"| ext_${i}`);
-  });
-  return lines.join('\n');
-}
-
-function c2(model) {
-  const lines = ['flowchart TB'];
-  const containers = model.containers || [];
-  lines.push('  subgraph sys["' + label(model.system?.name || 'Система') + '"]');
-  for (const c of containers) {
-    lines.push(`    ${mid(c.id)}["${label(c.name)}${c.tech ? `<br/><small>${label(c.tech)}</small>` : ''}"]`);
-  }
-  lines.push('  end');
-  const containerIds = new Set(containers.map((c) => c.id));
-  const componentContainer = new Map(
-    (model.components || []).map((c) => [c.id, c.container]).filter(([, container]) => container),
-  );
+/** Связи между элементами уровня: компонент поднимается до своего контейнера (C2). */
+function levelEdges(model, ids, lift = new Map()) {
   const edges = new Map();
   for (const rel of model.relations || []) {
-    const from = containerIds.has(rel.from) ? rel.from : componentContainer.get(rel.from);
-    const to = containerIds.has(rel.to) ? rel.to : componentContainer.get(rel.to);
-    if (!from || !to || !containerIds.has(from) || !containerIds.has(to) || from === to) continue;
+    const from = ids.has(rel.from) ? rel.from : lift.get(rel.from);
+    const to = ids.has(rel.to) ? rel.to : lift.get(rel.to);
+    if (!from || !to || !ids.has(from) || !ids.has(to) || from === to) continue;
     const key = `${from}->${to}`;
-    if (!edges.has(key)) edges.set(key, { from, to, labels: [] });
-    const text = label(rel.label || rel.tech || '');
-    if (text && !edges.get(key).labels.includes(text)) edges.get(key).labels.push(text);
+    if (!edges.has(key)) edges.set(key, { from, to, labels: [], tech: [] });
+    const e = edges.get(key);
+    if (rel.label && !e.labels.includes(q(rel.label))) e.labels.push(q(rel.label));
+    if (rel.tech && !e.tech.includes(q(rel.tech))) e.tech.push(q(rel.tech));
   }
-  for (const edge of edges.values()) {
-    const text = edge.labels.join(', ');
-    lines.push(`  ${mid(edge.from)} -->|"${text}"| ${mid(edge.to)}`);
-  }
+  return [...edges.values()].map((e) => `Rel(${mid(e.from)}, ${mid(e.to)}, "${e.labels.join(', ')}"${e.tech.length ? `, "${e.tech.join(', ')}"` : ''})`);
+}
+
+const isDb = (c) => /postgres|mysql|mongo|redis|sqlite|clickhouse|database|\bdb\b|бд|хранилищ/i.test(`${c.tech || ''} ${c.name || ''}`);
+const isQueue = (c) => /kafka|rabbit|nats|queue|очеред|sqs/i.test(`${c.tech || ''} ${c.name || ''}`);
+
+function pumlC1(model) {
+  const actors = model.system?.actors || [];
+  const externals = model.system?.externals || [];
+  const lines = ['@startuml', '!include <C4/C4_Context>', 'LAYOUT_LEFT_RIGHT()', ''];
+  actors.forEach((actor, i) => lines.push(`Person(actor_${i}, "${q(actor)}")`));
+  lines.push(`System(sys, "${q(model.system?.name || 'Система')}", "${q(model.system?.description || '')}")`);
+  externals.forEach((ext, i) => lines.push(`System_Ext(ext_${i}, "${q(ext)}")`));
+  lines.push('');
+  actors.forEach((_a, i) => lines.push(`Rel(actor_${i}, sys, "работает")`));
+  externals.forEach((_e, i) => lines.push(`Rel(sys, ext_${i}, "использует")`));
+  lines.push('', 'SHOW_LEGEND()', '@enduml');
   return lines.join('\n');
 }
 
-function c3(model) {
-  const lines = ['flowchart TB'];
-  const components = model.components || [];
+function pumlC2(model) {
   const containers = model.containers || [];
-  for (const container of containers) {
+  const lines = ['@startuml', '!include <C4/C4_Container>', 'LAYOUT_TOP_DOWN()', ''];
+  lines.push(`System_Boundary(sys, "${q(model.system?.name || 'Система')}") {`);
+  for (const c of containers) {
+    const macro = isDb(c) ? 'ContainerDb' : isQueue(c) ? 'ContainerQueue' : 'Container';
+    lines.push(`  ${macro}(${mid(c.id)}, "${q(c.name)}", "${q(c.tech)}", "${q(c.description)}")`);
+  }
+  lines.push('}');
+  const ids = new Set(containers.map((c) => c.id));
+  const lift = new Map((model.components || []).filter((c) => c.container).map((c) => [c.id, c.container]));
+  lines.push('', ...levelEdges(model, ids, lift), '', 'SHOW_LEGEND()', '@enduml');
+  return lines.join('\n');
+}
+
+function pumlC3(model) {
+  const components = model.components || [];
+  const lines = ['@startuml', '!include <C4/C4_Component>', 'LAYOUT_TOP_DOWN()', ''];
+  for (const container of model.containers || []) {
     const own = components.filter((c) => c.container === container.id);
     if (!own.length) continue;
-    lines.push(`  subgraph ${mid(container.id)}["${label(container.name)}"]`);
-    for (const c of own) {
-      lines.push(`    ${mid(c.id)}["${label(c.name)}${c.description ? `<br/><small>${label(c.description)}</small>` : ''}"]`);
-    }
-    lines.push('  end');
+    lines.push(`Container_Boundary(${mid(container.id)}, "${q(container.name)}") {`);
+    for (const c of own) lines.push(`  Component(${mid(c.id)}, "${q(c.name)}", "${q(c.tech)}", "${q(c.description)}")`);
+    lines.push('}');
   }
-  for (const rel of model.relations || []) {
-    if (components.some((c) => c.id === rel.from) && components.some((c) => c.id === rel.to)) {
-      lines.push(`  ${mid(rel.from)} -->|"${label(rel.label || rel.tech || '')}"| ${mid(rel.to)}`);
-    }
-  }
+  const ids = new Set(components.map((c) => c.id));
+  lines.push('', ...levelEdges(model, ids), '', 'SHOW_LEGEND()', '@enduml');
   return lines.join('\n');
 }
 
-function c4(model) {
-  const lines = ['classDiagram'];
+function pumlC4(model) {
   const components = model.components || [];
-  const className = (id) => {
-    const component = components.find((c) => c.id === id);
-    const raw = String(component?.name || id || 'x').replace(/[^a-zA-Z0-9_]/g, '');
-    return raw || mid(id);
-  };
+  const lines = ['@startuml', 'hide empty members', 'skinparam classAttributeIconSize 0'];
   for (const c of components) {
-    lines.push(`  class ${className(c.id)} {`);
-    if (c.description) lines.push(`    +${c.description.replace(/\n/g, ' ')}`);
-    lines.push('  }');
+    lines.push(`class "${q(c.name)}" as ${mid(c.id)} {`);
+    if (c.description) lines.push(`  ${q(c.description)}`);
+    lines.push('}');
   }
+  const ids = new Set(components.map((c) => c.id));
   for (const rel of model.relations || []) {
-    if (components.some((c) => c.id === rel.from) && components.some((c) => c.id === rel.to)) {
-      lines.push(`  ${className(rel.from)} --> ${className(rel.to)} : ${label(rel.label || 'uses')}`);
-    }
+    if (ids.has(rel.from) && ids.has(rel.to)) lines.push(`${mid(rel.from)} --> ${mid(rel.to)} : ${q(rel.label || 'uses')}`);
   }
+  lines.push('@enduml');
   return lines.join('\n');
 }
 
-function sequence(model) {
+function pumlSequence(model) {
   const seq = model.sequence || {};
-  const lines = ['sequenceDiagram', `  title ${label(seq.title || 'Сценарий')}`];
   const participants = seq.participants || [];
-  participants.forEach((p, i) => lines.push(`  participant P${i} as ${label(p)}`));
-  const indexOf = (name) => {
-    const i = participants.indexOf(name);
-    return i === -1 ? 0 : i;
-  };
-  for (const message of seq.messages || []) {
-    const arrow = message.kind === 'return' ? '-->>' : message.kind === 'async' ? '-)' : '->>';
-    lines.push(`  P${indexOf(message.from)}${arrow}P${indexOf(message.to)}: ${label(message.text)}`);
+  const lines = ['@startuml', 'autonumber', `title ${q(seq.title || 'Сценарий')}`];
+  participants.forEach((p, i) => lines.push(`participant "${q(p)}" as P${i}`));
+  const idx = (name) => Math.max(0, participants.indexOf(name));
+  for (const m of seq.messages || []) {
+    const arrow = m.kind === 'return' ? '-->' : m.kind === 'async' ? '->>' : '->';
+    lines.push(`P${idx(m.from)} ${arrow} P${idx(m.to)} : ${q(m.text)}`);
   }
+  lines.push('@enduml');
   return lines.join('\n');
 }
 
 const CARD = { 'one-one': '||--||', 'one-many': '||--o{', 'many-one': '}o--||', 'many-many': '}o--o{' };
 
-function er(model) {
-  const lines = ['erDiagram'];
+function pumlEr(model) {
+  const lines = ['@startuml', 'hide circle', 'skinparam linetype ortho'];
   for (const entity of model.er?.entities || []) {
-    lines.push(`  ${mid(entity.name)} {`);
-    for (const attr of entity.attributes || []) {
-      lines.push(`    ${attr.type || 'text'} ${mid(attr.name)}${attr.pk ? ' PK' : attr.fk ? ' FK' : ''}`);
-    }
-    lines.push('  }');
+    lines.push(`entity "${q(entity.name)}" as ${mid(entity.name)} {`);
+    const attrs = entity.attributes || [];
+    for (const a of attrs.filter((x) => x.pk)) lines.push(`  * ${q(a.name)} : ${q(a.type || 'text')} <<PK>>`);
+    if (attrs.some((x) => x.pk)) lines.push('  --');
+    for (const a of attrs.filter((x) => !x.pk)) lines.push(`  ${q(a.name)} : ${q(a.type || 'text')}${a.fk ? ' <<FK>>' : ''}`);
+    lines.push('}');
   }
-  for (const rel of model.er?.relations || []) {
-    lines.push(`  ${mid(rel.from)} ${CARD[rel.cardinality] || '||--o{'} ${mid(rel.to)} : "${label(rel.label || 'related')}"`);
-  }
+  for (const rel of model.er?.relations || []) lines.push(`${mid(rel.from)} ${CARD[rel.cardinality] || '||--o{'} ${mid(rel.to)} : ${q(rel.label || 'related')}`);
+  lines.push('@enduml');
   return lines.join('\n');
 }
 
-function deployment(model) {
-  const lines = ['flowchart TB'];
+function pumlDeployment(model) {
+  const lines = ['@startuml', '!include <C4/C4_Deployment>', 'LAYOUT_TOP_DOWN()', ''];
   for (const node of model.deployment?.nodes || []) {
-    const sizing = [node.vm, node.cpu, node.ram, node.gpu && node.gpu !== '0' ? `GPU ${node.gpu}` : 'GPU 0']
-      .filter(Boolean)
-      .join(' · ');
-    lines.push(`  ${mid(node.id)}["${label(node.name)}<br/><small>${label(sizing)}</small>"]`);
+    const sizing = [node.vm, node.cpu, node.ram, node.gpu && node.gpu !== '0' ? `GPU ${node.gpu}` : 'GPU 0'].filter(Boolean).join(' · ');
+    lines.push(`Deployment_Node(${mid(node.id)}, "${q(node.name)}", "${q(sizing)}")`);
   }
-  for (const link of model.deployment?.links || []) {
-    lines.push(`  ${mid(link.from)} --> ${mid(link.to)}`);
-  }
+  for (const link of model.deployment?.links || []) lines.push(`Rel(${mid(link.from)}, ${mid(link.to)}, "${q(link.label || '')}")`);
+  lines.push('', '@enduml');
   return lines.join('\n');
 }
 
@@ -354,92 +339,6 @@ function openapiView(model) {
   return { info: spec.info || {}, endpoints, spec };
 }
 
-function pumlC1(model) {
-  const lines = ['@startuml', 'left to right direction'];
-  (model.system?.actors || []).forEach((actor, i) => lines.push(`actor "${actor}" as A${i}`));
-  lines.push(`rectangle "${model.system?.name || 'Система'}" as S`);
-  (model.system?.actors || []).forEach((_a, i) => lines.push(`A${i} --> S`));
-  (model.system?.externals || []).forEach((ext, i) => {
-    lines.push(`rectangle "${ext}" as E${i}`);
-    lines.push(`S --> E${i}`);
-  });
-  lines.push('@enduml');
-  return lines.join('\n');
-}
-
-function pumlC2(model) {
-  const lines = ['@startuml', `package "${model.system?.name || 'Система'}" {`];
-  for (const c of model.containers || []) {
-    lines.push(`  component "${c.name}" as ${mid(c.id)}${c.tech ? ` <<${c.tech}>>` : ''}`);
-  }
-  lines.push('}');
-  for (const rel of model.relations || []) {
-    const ids = (model.containers || []).map((c) => c.id);
-    if (ids.includes(rel.from) && ids.includes(rel.to)) lines.push(`${mid(rel.from)} --> ${mid(rel.to)} : ${rel.label || ''}`);
-  }
-  lines.push('@enduml');
-  return lines.join('\n');
-}
-
-function pumlC3(model) {
-  const lines = ['@startuml'];
-  for (const container of model.containers || []) {
-    const own = (model.components || []).filter((c) => c.container === container.id);
-    if (!own.length) continue;
-    lines.push(`package "${container.name}" {`);
-    for (const c of own) lines.push(`  component "${c.name}" as ${mid(c.id)}`);
-    lines.push('}');
-  }
-  for (const rel of model.relations || []) {
-    const ids = (model.components || []).map((c) => c.id);
-    if (ids.includes(rel.from) && ids.includes(rel.to)) lines.push(`${mid(rel.from)} --> ${mid(rel.to)} : ${rel.label || ''}`);
-  }
-  lines.push('@enduml');
-  return lines.join('\n');
-}
-
-function pumlC4(model) {
-  const lines = ['@startuml'];
-  for (const c of model.components || []) lines.push(`class "${c.name}" as ${mid(c.id)}`);
-  for (const rel of model.relations || []) {
-    const ids = (model.components || []).map((c) => c.id);
-    if (ids.includes(rel.from) && ids.includes(rel.to)) lines.push(`${mid(rel.from)} --> ${mid(rel.to)} : ${rel.label || ''}`);
-  }
-  lines.push('@enduml');
-  return lines.join('\n');
-}
-
-function pumlSequence(model) {
-  const seq = model.sequence || {};
-  const lines = ['@startuml', `title ${seq.title || 'Сценарий'}`];
-  (seq.participants || []).forEach((p) => lines.push(`participant "${p}"`));
-  for (const m of seq.messages || []) lines.push(`"${m.from}" ${m.kind === 'return' ? '-->' : '->'} "${m.to}" : ${m.text}`);
-  lines.push('@enduml');
-  return lines.join('\n');
-}
-
-function pumlEr(model) {
-  const lines = ['@startuml'];
-  for (const entity of model.er?.entities || []) {
-    lines.push(`entity "${entity.name}" {`);
-    for (const attr of entity.attributes || []) lines.push(`  ${attr.pk ? '*' : ''}${attr.name} : ${attr.type || 'text'}`);
-    lines.push('}');
-  }
-  for (const rel of model.er?.relations || []) lines.push(`"${rel.from}" }o--|| "${rel.to}" : ${rel.label || ''}`);
-  lines.push('@enduml');
-  return lines.join('\n');
-}
-
-function pumlDeployment(model) {
-  const lines = ['@startuml'];
-  for (const node of model.deployment?.nodes || []) {
-    lines.push(`node "${node.name}\\n${[node.vm, node.cpu, node.ram, node.gpu].filter(Boolean).join(' / ')}" as ${mid(node.id)}`);
-  }
-  for (const link of model.deployment?.links || []) lines.push(`${mid(link.from)} --> ${mid(link.to)}`);
-  lines.push('@enduml');
-  return lines.join('\n');
-}
-
 const VIEWS = ['c1', 'c2', 'c3', 'c4', 'sequence', 'er', 'deployment', 'openapi'];
 
 const hash = (text) => crypto.createHash('sha256').update(String(text), 'utf8').digest('hex').slice(0, 16);
@@ -449,15 +348,15 @@ export function generateViews(projectDir, gitHead = '') {
   const model = data.architecture.model || {};
   const baseline = data.architecture.baseline || null;
   const views = {
-    c1: { title: 'C1 · Контекст', mermaid: c1(model), puml: pumlC1(model) },
-    c2: { title: 'C2 · Контейнеры', mermaid: c2(model), puml: pumlC2(model) },
-    c3: { title: 'C3 · Компоненты', mermaid: c3(model), puml: pumlC3(model) },
-    c4: { title: 'C4 · Код', mermaid: c4(model), puml: pumlC4(model) },
-    sequence: { title: 'Sequence', mermaid: sequence(model), puml: pumlSequence(model) },
-    er: { title: 'ER-диаграмма', mermaid: er(model), puml: pumlEr(model) },
-    deployment: { title: 'Deployment + sizing', mermaid: deployment(model), puml: pumlDeployment(model) },
+    c1: { title: 'C1 · Контекст', puml: pumlC1(model) },
+    c2: { title: 'C2 · Контейнеры', puml: pumlC2(model) },
+    c3: { title: 'C3 · Компоненты', puml: pumlC3(model) },
+    c4: { title: 'C4 · Код', puml: pumlC4(model) },
+    sequence: { title: 'Sequence', puml: pumlSequence(model) },
+    er: { title: 'ER-диаграмма', puml: pumlEr(model) },
+    deployment: { title: 'Deployment + sizing', puml: pumlDeployment(model) },
   };
-  for (const view of Object.values(views)) view.hash = hash(`${view.mermaid}\n${view.puml}`);
+  for (const view of Object.values(views)) view.hash = hash(view.puml);
   const openapi = openapiView(model);
   openapi.title = 'OpenAPI';
   openapi.hash = hash(JSON.stringify(openapi.spec));

@@ -426,6 +426,13 @@ ADR 0122. `electron-shim.js` — `app`, `safeStorage`, `utilityProcess`: нас�
 запретные пути, коммит и push), `stewardRules`, `stewardTask`, `parseCommand`, `forbiddenMatchers`,
 `createAgentRunner` (тот же вызов `runAgent` в CLI и тестах). CLI — `mai-ship.mjs steward`.
 
+### Схемы досок: PlantUML
+
+ADR 0127. `plantuml.js` — `createPlantuml({ getSettings, dataDir })`: `render(text, svg|png)` через
+Java + `plantuml.jar` (`-pipe`, профиль SANDBOX) или сервер команды (`encodePlantuml`), кэш и слияние
+запросов, `sanitizeSvg`. Генераторы C4-PlantUML — `boards.js` (`pumlC1…pumlDeployment`). IPC
+`boards:renderDiagram`, `boards:plantumlStatus` (any); экспорт SVG/PNG — тот же рендер в main.
+
 ### MAI Ship: `mai ship` и образ
 
 ADR 0126. `bin/mai.mjs ship …` → `scripts/mai-ship.mjs` тем же Node, без Electron; `--mr <ссылка>`

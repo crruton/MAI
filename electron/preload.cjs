@@ -295,6 +295,8 @@ contextBridge.exposeInMainWorld('mai', {
     exportView: (payload) => invoke('boards:exportView', payload),
     exportDiagram: (payload) => invoke('boards:exportDiagram', payload),
     rasterize: (payload) => invoke('boards:rasterize', payload),
+    renderDiagram: (payload) => invoke('boards:renderDiagram', payload),
+    plantumlStatus: () => invoke('boards:plantumlStatus'),
     diagramChat: (payload) => invoke('boards:diagramChat', payload),
     diagramApply: (payload) => invoke('boards:diagramApply', payload),
     calibrate: (payload) => invoke('boards:calibrate', payload),
