@@ -1,7 +1,7 @@
 /**
  * MAI Ship: журнал решений и согласие approver ↔ человек (E3.F6, E3.G2, ADR 0121).
  */
-import { decisionRecord, decisionMarker, parseDecision, humanOutcome, agrees, agreementReport, formatReport, collectDecisions, ENFORCE_MIN_DECIDED } from '../electron/lib/ship/report.js';
+import { decisionRecord, decisionMarker, parseDecision, humanOutcome, agrees, agreementReport, formatReport, collectDecisions, flowMetrics, formatFlow, ENFORCE_MIN_DECIDED } from '../electron/lib/ship/report.js';
 
 let pass = 0;
 let fail = 0;
@@ -62,8 +62,28 @@ const gitlab = {
   getNotes: async (project, iid) => notesByMr[iid] || [],
 };
 const collected = await collectDecisions(gitlab, 'g/app', { days: 7, now: Date.parse('2026-11-26T00:00:00Z') });
-check('берётся последнее решение по MR, MR без решения пропущен', collected.length === 1 && collected[0].decision.rule === 'docs', JSON.stringify(collected));
+check('берётся последнее решение по MR; MR без решения — в выборке для метрик потока', collected.length === 2 && collected[0].decision.rule === 'docs' && collected[1].decision === null, JSON.stringify(collected));
+check('MR без решения не влияет на согласие', agreementReport(collected).total === 1);
 check('период — updated_after', listed.updatedAfter === '2026-11-19T00:00:00.000Z', JSON.stringify(listed));
+
+console.log('[5] метрики потока (E3.G1)');
+const at = (d, h = 0) => new Date(Date.parse('2026-11-01T00:00:00Z') + d * 86_400_000 + h * 3_600_000).toISOString();
+const flowEntries = [
+  { mr: { iid: 1, state: 'merged', title: 'Добавить A', created_at: at(0), merged_at: at(0, 2) }, decision: { decision: 'approve', mode: 'enforce' }, humanApprovals: 0 },
+  { mr: { iid: 2, state: 'merged', title: 'Добавить B', created_at: at(0), merged_at: at(1) }, decision: { decision: 'require_human', mode: 'enforce' }, humanApprovals: 1 },
+  { mr: { iid: 3, state: 'merged', title: 'Добавить C', created_at: at(0), merged_at: at(3) }, decision: null, humanApprovals: 1 },
+  { mr: { iid: 4, state: 'merged', title: 'Revert "Добавить A"', created_at: at(2), merged_at: at(2, 1) }, decision: null, humanApprovals: 1 },
+  { mr: { iid: 5, state: 'merged', title: 'Revert "Добавить C"', created_at: at(20), merged_at: at(20) }, decision: null, humanApprovals: 1 },
+  { mr: { iid: 6, state: 'opened', title: 'В работе', created_at: at(0) }, decision: null, humanApprovals: null },
+  { mr: { iid: 7, state: 'merged', title: 'Добавить D', created_at: at(0), merged_at: at(0, 1) }, decision: { decision: 'approve', mode: 'observe' }, humanApprovals: 0 },
+];
+const flow = flowMetrics(flowEntries);
+check('влито 6 (открытый не считается)', flow.merged === 6, JSON.stringify(flow));
+check('без человека — только approve в enforce и 0 апрувов людей', flow.withoutHuman === 1);
+check('revert за 14 дней: A — да (через 2 дня), C — нет (через 17 дней)', flow.reverted === 1 && Math.abs(flow.revertRate - 1 / 4) < 1e-9, JSON.stringify(flow));
+check('lead time: медиана и 90%', flow.leadTimeHours.median === 2 && flow.leadTimeHours.p90 === 72, JSON.stringify(flow.leadTimeHours));
+check('стоимость честно не считается', flow.cost === null && /не считается/.test(formatFlow(flow)));
+check('пусто — без деления на ноль', flowMetrics([]).merged === 0 && flowMetrics([]).revertRate === 0 && /—/.test(formatFlow(flowMetrics([]))));
 
 console.log(`\nship-report: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

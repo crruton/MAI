@@ -10,6 +10,8 @@
 
 ### Added
 
+- MAI Ship, `report` (E3.G1): метрики потока — lead time (медиана и 90%), доля MR, влитых
+  без человека, revert за 14 дней. Стоимость моделей пока не считается.
 - MAI Ship: steward (ADR 0122) — `node scripts/mai-ship.mjs steward` и джоба `ship:steward`
   (`when: on_failure`): упавшие джобы, blocking-находки и `@mai` → цикл агента MAI в режиме
   «только разрешённое» → коммит с `Agent-Model`, push в ветку MR, комментарий с откатом;
