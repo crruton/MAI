@@ -90,6 +90,24 @@ export function createGitlab({ url, token, fetch: fetchImpl = globalThis.fetch, 
   };
 }
 
+/**
+ * Ссылка на MR → { server, project, iid } или null (E3.A5: `mai ship review --mr <url>`).
+ * `https://host/group/sub/app/-/merge_requests/7` → server `https://host`, project `group/sub/app`.
+ * GitLab в подпапке (`https://host/gitlab/...`) не различим по ссылке — для него задают GITLAB_URL и --project.
+ */
+export function parseMrUrl(value) {
+  let u;
+  try {
+    u = new URL(String(value || ''));
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(u.protocol)) return null;
+  const m = /^\/(.+?)\/-\/merge_requests\/(\d+)(?:\/.*)?$/.exec(u.pathname);
+  if (!m) return null;
+  return { server: `${u.protocol}//${u.host}`, project: decodeURIComponent(m[1]), iid: Number(m[2]) };
+}
+
 /** Изменённые файлы и строки из ответа `/diffs`. */
 export function diffFacts(diffs = []) {
   const files = [];

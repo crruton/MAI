@@ -1,0 +1,9 @@
+# Контекст образа MAI Ship (BuildKit читает <Dockerfile>.dockerignore): только нужное.
+*
+!package.json
+!package-lock.json
+!electron/
+!bin/
+!scripts/mai-ship.mjs
+**/node_modules
+**/*.test.*

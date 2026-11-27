@@ -10,6 +10,11 @@
 
 ### Added
 
+- MAI Ship: `mai ship <review|approve|steward|report>` без Electron и `--mr <ссылка на MR>` (адрес
+  GitLab, проект и номер из ссылки); Docker-образ `ci/ship.Dockerfile` (без Electron и mermaid,
+  базовый образ аргументом `NODE_IMAGE`); CI-шаблон берёт образ из `MAI_SHIP_IMAGE` и тогда не
+  клонирует MAI; workflow `ship-image` собирает и проверяет образ, публикует в GHCR только из
+  `main` (ADR 0126). Тест `test-ship-cli` (15).
 - Команда `/mr` (E3.C2, ADR 0125): статус открытых MR MAI Ship карточкой в ленте чата — pipeline,
   находки, раунды steward, решение approver'а, расход. Только показ: в сессию не пишется и модели
   не уходит; после ответа агента остаётся на месте.

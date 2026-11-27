@@ -426,6 +426,12 @@ ADR 0122. `electron-shim.js` — `app`, `safeStorage`, `utilityProcess`: нас�
 запретные пути, коммит и push), `stewardRules`, `stewardTask`, `parseCommand`, `forbiddenMatchers`,
 `createAgentRunner` (тот же вызов `runAgent` в CLI и тестах). CLI — `mai-ship.mjs steward`.
 
+### MAI Ship: `mai ship` и образ
+
+ADR 0126. `bin/mai.mjs ship …` → `scripts/mai-ship.mjs` тем же Node, без Electron; `--mr <ссылка>`
+— `parseMrUrl` (`ship/gitlab.js`). Образ — `ci/ship.Dockerfile` (+ `.dockerignore`), публикация —
+`.github/workflows/ship-image.yml` (GHCR, только из `main`). CI-шаблон берёт `MAI_SHIP_IMAGE`.
+
 ### MAI Ship: статус MR
 
 ADR 0125. `ship/mr-status.js` — `glabFetch` (fetch для `createGitlab` поверх `glab api` в папке

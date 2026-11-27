@@ -75,6 +75,11 @@ PR через `gh`) с описанием по навыку `to-mr`. Draft не 
      - remote: https://raw.githubusercontent.com/crruton/MAI/dev/ci/mai-ship.gitlab-ci.yml
    ```
 
+   Чтобы джобы не клонировали MAI на каждом запуске, задайте переменную `MAI_SHIP_IMAGE` — образ
+   MAI Ship (`ghcr.io/crruton/mai-ship:sha-<коммит>` или его копия в Harbor; ADR 0126). Собрать
+   самому: `docker build -f ci/ship.Dockerfile -t mai-ship .`; без Docker Hub —
+   `--build-arg NODE_IMAGE=<зеркало>/node:24-slim`.
+
 5. GitLab Free: включите «Pipelines must succeed». Джоба `ship:approval` красная, пока нужен
    человек (код 3) или MR заблокирован (код 2). После апрува человека перезапустите джобу.
    GitLab Premium: approval rule с ботом и «Remove all approvals when commits are added».
@@ -85,10 +90,13 @@ PR через `gh`) с описанием по навыку `to-mr`. Draft не 
 ## Локально
 
 ```powershell
-$env:GITLAB_URL = "https://gitlab.example.com"; $env:GITLAB_TOKEN = "<токен>"
-node scripts/mai-ship.mjs review --project group/app --mr 42 --dry-run
-node scripts/mai-ship.mjs approve --project group/app --mr 42 --dry-run
+$env:GITLAB_TOKEN = "<токен>"
+mai ship review --mr https://gitlab.example.com/group/app/-/merge_requests/42 --dry-run
+mai ship approve --mr https://gitlab.example.com/group/app/-/merge_requests/42 --dry-run
 ```
+
+`mai ship` работает без Electron (ADR 0126). Адрес GitLab, проект и номер берутся из ссылки на MR;
+то же — `node scripts/mai-ship.mjs <роль> --project group/app --mr 42` с `GITLAB_URL`.
 
 `--dry-run` печатает решение и текст комментария, ничего не записывая.
 
@@ -187,7 +195,8 @@ approver'а без ошибок.
 ## Ограничения
 
 - Джобы CI на живом GitLab не проверены: у инстанса боевой проверки нет раннеров.
-- Образа MAI Ship нет: джоба клонирует MAI и ставит зависимости на каждом запуске.
+- Образ MAI Ship (709 МБ) собран и проверен локально; публикация в GHCR — из `main` workflow
+  `ship-image`, на GitHub ещё не запускалась. Без `MAI_SHIP_IMAGE` джоба клонирует MAI.
 - Уведомление о бюджете в канал не отправляется — только метка и комментарий.
 - Карточка `/mr` в ленте не сохраняется в сессии: после перезапуска её вызывают снова.
 - Ревьюер видит только diff и `AGENTS.md`, без чтения остального кода.

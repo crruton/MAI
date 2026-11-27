@@ -3,6 +3,7 @@
  * MAI Ship без окна (ADR 0108): роли агентов для GitLab CI.
  *
  *   node scripts/mai-ship.mjs review  [--project <id|путь>] [--mr <iid>] [--dry-run]
+ *   mai ship review --mr https://gitlab.example/group/app/-/merge_requests/7   (то же без Electron; E3.A5)
  *   node scripts/mai-ship.mjs approve [--project <id|путь>] [--mr <iid>] [--dry-run] [--gate] [--journal <файл.jsonl>]
  *   node scripts/mai-ship.mjs report  [--project <id|путь>] [--days 30] [--json]
  *   node scripts/mai-ship.mjs steward [--project <id|путь>] [--mr <iid>] [--dry-run]
@@ -24,7 +25,7 @@
  * перезапустит её).
  */
 import OpenAI from 'openai';
-import { createGitlab } from '../electron/lib/ship/gitlab.js';
+import { createGitlab, parseMrUrl } from '../electron/lib/ship/gitlab.js';
 import { runApprove, createClassifier, gateExitCode } from '../electron/lib/ship/approve.js';
 import { runReview, createReviewModel } from '../electron/lib/ship/review.js';
 import { collectDecisions, agreementReport, formatReport, flowMetrics, formatFlow } from '../electron/lib/ship/report.js';
@@ -41,8 +42,15 @@ const option = (name) => {
 const env = process.env;
 
 async function main() {
+  if (!role || role === '--help' || role === '-h') {
+    console.log('mai ship <review|approve|steward|report> [--mr <iid|ссылка на MR>] [--project <id|путь>] [--dry-run] [--gate] [--journal <файл>] [--days N] [--json]\nПеременные: GITLAB_TOKEN, SHIP_*_BASE_URL, SHIP_*_API_KEY — см. docs/SHIP.md.');
+    return 0;
+  }
   if (!['approve', 'review', 'report', 'steward'].includes(role)) throw new Error('роль: review, approve, steward или report');
-  const project = option('--project') || env.CI_PROJECT_ID;
+  // --mr <ссылка>: адрес GitLab, проект и номер — из ссылки (E3.A5). Явные GITLAB_URL и --project главнее.
+  const fromUrl = parseMrUrl(option('--mr'));
+  if (fromUrl && !env.GITLAB_URL && !env.CI_SERVER_URL) env.GITLAB_URL = fromUrl.server;
+  const project = option('--project') || fromUrl?.project || env.CI_PROJECT_ID;
   if (role === 'report') {
     if (!project) throw new Error('нужен --project (или CI_PROJECT_ID)');
     const gitlab = createGitlab({ url: env.GITLAB_URL || env.CI_SERVER_URL, token: env.GITLAB_TOKEN });
@@ -55,7 +63,7 @@ async function main() {
 ${formatFlow(flow)}`);
     return 0;
   }
-  const iid = option('--mr') || env.CI_MERGE_REQUEST_IID;
+  const iid = fromUrl?.iid || option('--mr') || env.CI_MERGE_REQUEST_IID;
   if (!project || !iid) throw new Error('нужны --project и --mr (или CI_PROJECT_ID и CI_MERGE_REQUEST_IID)');
   const gitlab = createGitlab({ url: env.GITLAB_URL || env.CI_SERVER_URL, token: env.GITLAB_TOKEN });
   const modelId = (value) => (String(value || '').includes('/') ? String(value).slice(String(value).indexOf('/') + 1) : String(value || ''));

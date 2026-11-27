@@ -145,7 +145,8 @@
 - **Без окна** — `mai -p "задача" --output json|stream-json` для скриптов и CI: те же
   ключи, правила и хуки; спросить некого — разрешения через `--allow` (ADR 0077).
 - **MAI Ship для GitLab** — ревьюер, steward и approver MR в CI по политике-файлу в репозитории;
-  цикл агента работает и без Electron (`node scripts/mai-ship.mjs`), `/ship` — Draft MR из чата ([SHIP.md](docs/SHIP.md)).
+  без Electron — `mai ship review --mr <ссылка>` и Docker-образ (`ci/ship.Dockerfile`), `/ship` — Draft MR
+  из чата, `/mr` — статус MR в ленте ([SHIP.md](docs/SHIP.md)).
 - **Субагенты** — агент поручает подзадачу субагенту со своим контекстом
   (`explore`, `plan`, `calibrator`, `general` или свой тип из `.mai-code/agents/<имя>.md`) и
   получает только итог; разрешения — те же, что у чата. `/agents` — список.

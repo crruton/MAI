@@ -12,8 +12,8 @@
 ## 2. Движок без окна
 
 - [x] Запускать цикл агента без Electron: прослойка `electron-shim.js`. (E3.A5)
-- [ ] Добавить подкоманду `mai ship <review|steward|approve> --mr <url>` в `electron/lib/cli.js`. (E3.A5)
-- [ ] Собрать Docker-образ движка. Опубликовать образ в Harbor. (E3.A5)
+- [x] Добавить подкоманду `mai ship <review|steward|approve> --mr <url>`. (E3.A5; в лаунчере `bin/mai.mjs`, без Electron — ADR 0126)
+- [ ] Собрать Docker-образ движка. Опубликовать образ в Harbor. (E3.A5; образ собран и проверен, GHCR — из `main`; Harbor — копия силами команды)
 
 ## 3. Политика
 

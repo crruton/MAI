@@ -12,15 +12,18 @@
 #
 # Роли: ship:review (находки на строках diff, метка ship::blocking) и ship:approval.
 # Steward — следующий шаг (E3.E). Ревьюеру нужны SHIP_REVIEWER_BASE_URL и SHIP_REVIEWER_API_KEY.
-# Образа MAI Ship пока нет (E3.A5): джоба берёт MAI из git по закреплённому MAI_SHIP_REF.
+# Образ MAI Ship (E3.A5, ADR 0126): MAI_SHIP_IMAGE — например ghcr.io/crruton/mai-ship:sha-<коммит> или
+# копия в вашем Harbor. С образом джоба не клонирует MAI (MAI_SHIP_REF не нужен). Без образа —
+# node:24-slim, MAI берётся из git по закреплённому MAI_SHIP_REF.
 
 variables:
   MAI_SHIP_REPO: https://github.com/crruton/MAI.git
   MAI_SHIP_REF: dev
+  MAI_SHIP_IMAGE: node:24-slim
 
 .mai-ship:
   stage: .post
-  image: node:24-slim
+  image: $MAI_SHIP_IMAGE
   interruptible: true
   timeout: 15m
   rules:
@@ -28,9 +31,15 @@ variables:
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
   before_script:
-    - apt-get update -qq && apt-get install -y -qq git >/dev/null
-    - git clone --depth 1 --branch "$MAI_SHIP_REF" "$MAI_SHIP_REPO" /tmp/mai
-    - cd /tmp/mai && npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+    # В образе MAI Ship движок уже в /opt/mai; иначе — клон и зависимости на каждом запуске.
+    - |
+      if [ -f /opt/mai/scripts/mai-ship.mjs ]; then
+        ln -sfn /opt/mai /tmp/mai
+      else
+        apt-get update -qq && apt-get install -y -qq git >/dev/null
+        git clone --depth 1 --branch "$MAI_SHIP_REF" "$MAI_SHIP_REPO" /tmp/mai
+        (cd /tmp/mai && npm ci --omit=dev --ignore-scripts --no-audit --no-fund)
+      fi
 
 ship:review:
   extends: .mai-ship
