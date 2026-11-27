@@ -277,6 +277,7 @@ export const IPC_PERMISSIONS = {
   'boards:baseline': DEVELOPER,
   'boards:scan': ANY,
   'boards:git': ANY,
+  'ship:status': ANY,
   'boards:diff': ANY,
   'boards:stageRun': ADMIN,
   'boards:stageStop': ANY,

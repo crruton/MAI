@@ -641,6 +641,16 @@ ipcMain.handle('boards:load', () => ({
   settings: { projectDir: root, activeModel: 'test-model' },
 }));
 
+// Раздел [9]: карточки MR MAI Ship на доске «Доставка» (E3.C2).
+ipcMain.handle('ship:status', () => ({
+  ok: true,
+  at: '2026-11-27T12:00:00Z',
+  items: [
+    { iid: 7, title: 'Миграция', url: 'https://gitlab.example/g/app/-/merge_requests/7', branch: 'ship/db', draft: true, author: 'dev', pipeline: 'failed', review: { findings: 3, open: 1, blocking: true }, steward: { rounds: 2 }, approver: { decision: 'require_human', mode: 'enforce', stale: false }, cost: { usd: 0.42 }, status: 'needs-human' },
+    { iid: 8, title: 'Docs', url: 'https://gitlab.example/g/app/-/merge_requests/8', branch: 'ship/docs', draft: false, author: 'dev', pipeline: 'success', review: { findings: 0, open: 0, blocking: false }, steward: { rounds: 0 }, approver: null, cost: null, status: 'in-progress' },
+  ],
+}));
+
 app.whenReady().then(async () => {
   // Как в приложении: тема по умолчанию — тёмная (ADR 0074), а не системная.
   nativeTheme.themeSource = 'dark';
@@ -956,6 +966,8 @@ app.whenReady().then(async () => {
     check('панель досок тянет окно', boardBar.barRegion === 'drag', JSON.stringify(boardBar));
     check('вкладки досок не тянут окно', boardBar.tabRegion === 'no-drag', JSON.stringify(boardBar));
     check('у панели досок есть отступ под кнопки окна', boardBar.paddingRight >= 16, JSON.stringify(boardBar));
+    const shipCards = await win.webContents.executeJavaScript(`(() => [...document.querySelectorAll('.ship-card')].map((c) => c.innerText.replace(/\\s+/g, ' ').trim()))()`);
+    check('доска «Доставка»: карточки MR MAI Ship', shipCards.length === 2 && /нужен человек/.test(shipCards[0]) && /pipeline ✗/.test(shipCards[0]) && /blocking/.test(shipCards[0]) && /require_human/.test(shipCards[0]) && /\$0\.42/.test(shipCards[0]) && /ещё не оценил/.test(shipCards[1]), JSON.stringify(shipCards));
 
     console.log('\n[10] Панель «Память»: версии и откат');
     await win.loadFile(path.join(root, 'renderer', 'index.html'));

@@ -53,6 +53,9 @@ export function createGitlab({ url, token, fetch: fetchImpl = globalThis.fetch, 
     /** Пользователь токена — сам approver: его апрув не считается апрувом человека. */
     getUser: () => call('GET', '/user'),
     getMr: (project, iid) => call('GET', mrPath(project, iid)),
+    getProject: (project) => call('GET', `/projects/${p(project)}`),
+    /** Открытые MR, свежие сверху, одна страница (статус в MAI, E3.C2). */
+    listOpenMrs: (project, limit = 10) => call('GET', `/projects/${p(project)}/merge_requests?state=opened&order_by=updated_at&per_page=${Math.min(100, Math.max(1, Number(limit) || 10))}`),
     /** MR проекта, обновлённые после даты (для отчёта о согласии). */
     listMrs: (project, { updatedAfter } = {}) => all(`/projects/${p(project)}/merge_requests?state=all&order_by=updated_at${updatedAfter ? `&updated_after=${encodeURIComponent(updatedAfter)}` : ''}`),
     // GitLab 17.3 отвечает 500 на /diffs с per_page=100 (боевая проверка E3.H0): страница по 20.

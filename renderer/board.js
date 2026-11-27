@@ -248,6 +248,7 @@ function loadAux() {
   }
   if (BOARD === 'quality') loadErrors();
   if (BOARD === 'storage') loadArtifacts();
+  if (BOARD === 'delivery') startShipPolling();
 }
 
 async function refreshAll() {
@@ -566,6 +567,7 @@ function onClick(event) {
     'open-board': () => api.boards.open(target.dataset.board, target.dataset.focus || ''),
     'open-artifact': () => api.boards.open('storage', `artifact:${target.dataset.id}`),
 
+    'ship-refresh': () => loadShip(true),
     'task-new': () => taskModal(null, target.dataset.status || 'backlog'),
     'task-edit': () => taskModal(findTask(id), ''),
     'task-delete': () => deleteTask(id),
@@ -714,6 +716,77 @@ function onChange(event) {
 
 /* ---------- delivery ---------- */
 
+/* MR MAI Ship (E3.C2, ADR 0125): статус по опросу glab, раз в минуту, пока доска открыта. */
+const SHIP_STATUS = {
+  'needs-human': ['amber', 'нужен человек'],
+  blocked: ['red', 'заблокирован'],
+  paused: ['', 'пауза'],
+  'red-ci': ['red', 'CI красный'],
+  approved: ['green', 'одобрен'],
+  'in-progress': ['blue', 'в работе'],
+};
+const PIPELINE = { success: ['green', 'pipeline ✓'], failed: ['red', 'pipeline ✗'], running: ['blue', 'pipeline …'], pending: ['blue', 'pipeline ожидает'], canceled: ['', 'pipeline отменён'] };
+let shipTimer = null;
+
+function startShipPolling() {
+  loadShip(false);
+  if (!shipTimer) shipTimer = setInterval(() => loadShip(false), 60_000);
+}
+
+async function loadShip(manual) {
+  if (!api.boards.shipStatus) return;
+  state.shipLoading = true;
+  paintShip();
+  try {
+    state.ship = await api.boards.shipStatus({ projectDir: state.projectDir });
+  } catch (err) {
+    state.ship = { ok: false, error: err.message };
+  }
+  state.shipLoading = false;
+  paintShip();
+  if (manual) toast(state.ship?.ok ? 'MR обновлены' : 'MR не загружены', state.ship?.ok ? 'ok' : 'err');
+}
+
+function paintShip() {
+  const box = document.getElementById('ship-mrs');
+  if (box) box.innerHTML = shipSection();
+}
+
+function shipSection() {
+  const s = state.ship;
+  const head = `<div class="ship-head"><h2>Merge requests · MAI Ship</h2>
+    <span class="muted">${state.shipLoading ? 'обновление…' : s?.at ? `обновлено ${esc(new Date(s.at).toLocaleTimeString())}` : ''}</span>
+    <button class="btn small ghost" data-act="ship-refresh">Обновить</button></div>`;
+  if (!s) return `<section class="ship-mrs">${head}<p class="muted">Загрузка…</p></section>`;
+  if (!s.ok) return `<section class="ship-mrs">${head}<p class="muted">Статус MR недоступен: ${esc(s.error || 'ошибка')}. Нужен glab с входом в GitLab проекта (glab auth login).</p></section>`;
+  if (!s.items.length) return `<section class="ship-mrs">${head}<p class="muted">Открытых MR нет. Создайте Draft MR командой /ship в чате.</p></section>`;
+  return `<section class="ship-mrs">${head}<div class="ship-grid">${s.items.map(shipCard).join('')}</div></section>`;
+}
+
+function shipCard(mr) {
+  const [tone, label] = SHIP_STATUS[mr.status] || ['', mr.status];
+  const [ptone, plabel] = PIPELINE[mr.pipeline] || ['', mr.pipeline ? `pipeline ${mr.pipeline}` : 'pipeline нет'];
+  const a = mr.approver;
+  const approver = a ? `approver: ${esc(a.decision)}${a.mode === 'observe' ? ' (observe)' : ''}${a.stale ? ' · старый SHA' : ''}` : 'approver: ещё не оценил';
+  return `<article class="ship-card">
+    <div class="ship-title"><button class="link-chip" data-act="open-url" data-url="${esc(mr.url)}">!${esc(mr.iid)}</button> ${esc(mr.title)}</div>
+    <div class="task-meta">
+      <span class="badge ${tone}">${esc(label)}</span>
+      <span class="badge ${ptone}">${esc(plabel)}</span>
+      ${mr.draft ? '<span class="badge">Draft</span>' : ''}
+      ${mr.review.blocking ? '<span class="badge red">blocking</span>' : ''}
+    </div>
+    <div class="ship-lines">
+      <div>ревью: находок ${mr.review.findings}, открыто ${mr.review.open}</div>
+      <div>steward: раундов ${mr.steward.rounds}</div>
+      <div>${approver}</div>
+      ${mr.cost ? `<div>расход моделей: $${esc(mr.cost.usd)}${mr.cost.unpriced ? ' (без цены части моделей)' : ''}</div>` : ''}
+      <div class="muted">${esc(mr.branch)}${mr.author ? ` · @${esc(mr.author)}` : ''}</div>
+    </div>
+  </article>`;
+}
+
+
 function findTask(id) {
   return (state.boards.delivery.tasks || []).find((task) => task.id === id);
 }
@@ -752,6 +825,8 @@ function renderDelivery() {
     </div>
 
     ${multica.url ? `<div class="banner info"><span>Multica: ${esc(multica.url)}</span><button class="btn small ghost" data-act="multica-open">Открыть</button></div>` : ''}
+
+    <div id="ship-mrs">${shipSection()}</div>
 
     <div class="kanban">
       ${columns

@@ -10,6 +10,11 @@
 
 ### Added
 
+- MAI Ship: статус MR в MAI (ADR 0125) — на доске «Доставка» блок «Merge requests · MAI Ship»:
+  открытые MR проекта с pipeline, находками ревьюера, раундами steward, решением approver'а
+  (и на тот ли SHA), расходом моделей и итогом. Данные — `glab api` с входом пользователя,
+  опрос раз в минуту; IPC `ship:status`. Модуль `ship/mr-status.js`, тест `test-ship-mr-status` (14).
+- MAI Ship: доставка уведомления «нужен человек» в Telegram проверена вживую (E3.H0c).
 - MAI Ship: учёт затрат на модели (ADR 0124) — ревьюер, классификаторы approver'а и steward
   считают токены и доллары по `pricing` из `ship.yaml` и пишут запись `mai-ship:cost` в свой
   комментарий MR (накопительно). При превышении `budget.per_mr_usd` или `monthly_usd` ревьюер и

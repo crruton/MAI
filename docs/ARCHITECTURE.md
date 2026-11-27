@@ -426,6 +426,13 @@ ADR 0122. `electron-shim.js` — `app`, `safeStorage`, `utilityProcess`: нас�
 запретные пути, коммит и push), `stewardRules`, `stewardTask`, `parseCommand`, `forbiddenMatchers`,
 `createAgentRunner` (тот же вызов `runAgent` в CLI и тестах). CLI — `mai-ship.mjs steward`.
 
+### MAI Ship: статус MR
+
+ADR 0125. `ship/mr-status.js` — `glabFetch` (fetch для `createGitlab` поверх `glab api` в папке
+проекта, `:id` — подстановка glab), `mrStatus` (карточка из MR, комментариев, обсуждений),
+`collectMrStatuses`. IPC `ship:status` (any, только чтение) → `boards.shipStatus` в
+preload; доска «Доставка» опрашивает раз в минуту.
+
 ### MAI Ship: учёт затрат
 
 ADR 0124. `ship/cost.js` — `createMeter` (обёртка клиента `chat.completions`, история цикла

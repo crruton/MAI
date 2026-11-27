@@ -3577,6 +3577,17 @@ ipcMain.handle('boards:scan', async (_e, payload) =>
 );
 
 ipcMain.handle('boards:git', (_e, payload) => gitStatus(projectOf(payload)));
+// Статус MR MAI Ship (E3.C2, ADR 0125): только чтение, вход — glab пользователя.
+ipcMain.handle('ship:status', async (_e, payload) => {
+  const dir = projectOf(payload);
+  if (!dir) return { ok: false, error: 'проект не выбран' };
+  try {
+    const { collectMrStatuses } = await import('./lib/ship/mr-status.js');
+    return { ok: true, items: await collectMrStatuses({ cwd: dir, limit: 10 }), at: new Date().toISOString() };
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err).slice(0, 300) };
+  }
+});
 ipcMain.handle('boards:diff', (_e, payload) => gitDiff(projectOf(payload), payload?.file || ''));
 
 ipcMain.handle('boards:stageRun', (event, payload) => {

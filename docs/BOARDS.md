@@ -25,7 +25,9 @@
 - приоритет, исполнитель, срок, описание;
 - связи с артефактами хранилища (чипы открывают артефакт в окне «Хранилище»);
 - ссылка на issue в Multica;
-- прогресс и счётчики.
+- прогресс и счётчики;
+- блок «Merge requests · MAI Ship»: открытые MR проекта со статусом pipeline, ревью, steward,
+  approver и расходом; через `glab api`, раз в минуту ([SHIP.md](SHIP.md#статус-mr-в-mai)).
 
 **Multica.** [Multica](https://github.com/multica-ai/multica) — отдельное self-hosted
 приложение (Go + Postgres + Next.js), а не библиотека. MAI Code не запускает его стек и

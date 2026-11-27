@@ -499,3 +499,14 @@ table.grid td .mono { font-size: 11.5px; }
 .calibration-table .sub { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
 .calibration-error { margin: 0 0 10px; display: flex; gap: 8px; align-items: center; }
 .calibration-log { margin-top: 10px; }
+
+
+/* MR MAI Ship на доске «Доставка» (E3.C2) */
+.ship-mrs { margin: 14px 0 18px; }
+.ship-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.ship-head h2 { font-size: 15px; margin: 0; }
+.ship-head .btn { margin-left: auto; }
+.ship-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.ship-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--bg-elev-2); }
+.ship-title { font-weight: 600; margin-bottom: 6px; }
+.ship-lines { font-size: 12.5px; line-height: 1.55; margin-top: 6px; }
