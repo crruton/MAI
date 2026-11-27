@@ -10,6 +10,10 @@
 
 ### Added
 
+- MAI Ship, steward (E3.E2–E3.E4, ADR 0122): сбой раннера или сети — один перезапуск джобы,
+  повтор на том же коммите — `ship::needs-human`; конфликт с target — слияние target в ветку MR
+  (чисто — push, конфликт — отмена и список файлов человеку); ответ «исправлено в `<sha>`» в
+  обсуждении находки. В клиенте GitLab — `retryJob`, `replyDiscussion`. `test-ship-steward` (28).
 - MAI Ship, `report` (E3.G1): метрики потока — lead time (медиана и 90%), доля MR, влитых
   без человека, revert за 14 дней. Стоимость моделей пока не считается.
 - MAI Ship: steward (ADR 0122) — `node scripts/mai-ship.mjs steward` и джоба `ship:steward`

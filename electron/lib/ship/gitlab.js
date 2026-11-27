@@ -64,6 +64,10 @@ export function createGitlab({ url, token, fetch: fetchImpl = globalThis.fetch, 
     getJobTrace: (project, jobId) => call('GET', `/projects/${p(project)}/jobs/${Number(jobId)}/trace`, { raw: true, allow404: true }),
     /** Участник проекта с учётом групп: access_level 30 — Developer. */
     getMember: (project, userId) => call('GET', `/projects/${p(project)}/members/all/${Number(userId)}`, { allow404: true }),
+    /** Перезапуск джобы (сбой инфраструктуры). */
+    retryJob: (project, jobId) => call('POST', `/projects/${p(project)}/jobs/${Number(jobId)}/retry`),
+    /** Ответ в обсуждении MR. */
+    replyDiscussion: (project, iid, discussionId, body) => call('POST', `${mrPath(project, iid)}/discussions/${encodeURIComponent(discussionId)}/notes`, { body: { body } }),
     getPipelineJobs: (project, pipelineId) => all(`/projects/${p(project)}/pipelines/${Number(pipelineId)}/jobs`),
     getDiscussions: (project, iid) => all(`${mrPath(project, iid)}/discussions`),
     /** Обсуждение на строке diff: `position` — base/start/head SHA, new_path, new_line. */

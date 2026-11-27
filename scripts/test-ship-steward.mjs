@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { runSteward, parseCommand, stewardRules, forbiddenMatchers, forbiddenTouched, createAgentRunner, ROUND_MARKER } from '../electron/lib/ship/steward.js';
+import { runSteward, parseCommand, stewardRules, forbiddenMatchers, forbiddenTouched, createAgentRunner, ROUND_MARKER, RETRY_MARKER, classifyFailure } from '../electron/lib/ship/steward.js';
 import { LABELS } from '../electron/lib/ship/approve.js';
 
 process.env.MAI_DATA_DIR ||= fs.mkdtempSync(path.join(os.tmpdir(), 'mai-steward-data-'));
@@ -181,6 +181,62 @@ out = await runSteward(base(repo, f, { runAgentTask }));
 check('агент правит файл по правилам steward, коммит запушен', out.status === 'pushed' && fs.readFileSync(path.join(repo.work, 'src', 'a.js'), 'utf8').includes('a + b'), JSON.stringify(out).slice(0, 300));
 check('git push от агента отклонён правилом, человека не спрашивали', asked.length === 0 && !repo.originLog().split('\n')[0].includes('dev'), JSON.stringify(asked));
 check('итог агента — в комментарии раунда', f.state.created[0].includes('Исправил знак в sum.'));
+
+console.log('[7] инфраструктура, конфликты с target, ответы в обсуждениях (E3.E2–E4)');
+check('классификация: failure_reason раннера и сетевой лог → infra; ассерт → code',
+  classifyFailure({ failure_reason: 'runner_system_failure' }) === 'infra' && classifyFailure({ failure_reason: 'script_failure' }, 'npm ERR! network ECONNRESET') === 'infra' && classifyFailure({ failure_reason: 'script_failure' }, 'AssertionError: expected 5') === 'code');
+const withExtras = (f2) => {
+  f2.state.retried = [];
+  f2.state.replies = [];
+  f2.gitlab.retryJob = async (project, jobId) => { f2.state.retried.push(jobId); };
+  f2.gitlab.replyDiscussion = async (project, iid, did, body) => { f2.state.replies.push({ did, body }); };
+  return f2;
+};
+repo = setupRepo();
+f = withExtras(fakeGitlab({ jobs: [{ id: 21, name: 'test', stage: 'test', status: 'failed', failure_reason: 'stuck_or_timeout_failure' }] }));
+f.state.mr.sha = 'abc123def456';
+calls = [];
+out = await runSteward(base(repo, f, { runAgentTask: fixAgent(calls) }));
+check('сбой раннера → перезапуск джобы, агент не вызван', out.status === 'retried' && f.state.retried.join() === '21' && calls.length === 0 && f.state.created.some((b) => b.includes(RETRY_MARKER('abc123def456', 'test'))), JSON.stringify(out));
+out = await runSteward(base(repo, f, { runAgentTask: fixAgent(calls) }));
+check('повтор на том же SHA → нужен человек, второго перезапуска нет', f.state.retried.length === 1 && f.state.mr.labels.includes(LABELS.needs_human) && calls.length === 0 && out.retries[0].already === true, JSON.stringify(out));
+
+// Конфликт: в main та же строка изменена иначе.
+const g2 = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8' });
+function advanceMain(r, content) {
+  r.git(['push', '-q', 'origin', 'HEAD:refs/heads/main']);
+  const other = path.join(r.root, 'other');
+  g2(r.root, ['clone', '-q', '-b', 'main', r.origin, other]);
+  g2(other, ['config', 'user.name', 'lead']);
+  g2(other, ['config', 'user.email', 'lead@example.com']);
+  fs.writeFileSync(path.join(other, ...content.file.split('/')), content.text);
+  g2(other, ['add', '.']);
+  g2(other, ['commit', '-q', '-m', 'main moves']);
+  g2(other, ['push', '-q', 'origin', 'main']);
+}
+repo = setupRepo();
+advanceMain(repo, { file: 'src/a.js', text: 'export const sum = (a, b) => Number(a) + Number(b);\n' });
+editFile(repo, 'src/a.js', 'export const sum = (a, b) => a + b; // feature\n');
+repo.git(['commit', '-q', '-am', 'feature edit']);
+repo.git(['push', '-q', 'origin', 'feature']);
+const beforeConflict = repo.originLog();
+f = withExtras(fakeGitlab({ jobs: [] }));
+f.state.mr.has_conflicts = true;
+out = await runSteward(base(repo, f, { runAgentTask: fixAgent([]) }));
+check('конфликт с main → слияние отменено, нужен человек со списком файлов, push не было',
+  out.status === 'conflict' && out.conflicted.join() === 'src/a.js' && f.state.mr.labels.includes(LABELS.needs_human) && repo.originLog() === beforeConflict && repo.git(['status', '--porcelain']).trim() === '' && f.state.notes.some((n) => /конфликт с `main`/.test(n.body) && n.body.includes('src/a.js')), JSON.stringify(out));
+
+repo = setupRepo();
+advanceMain(repo, { file: 'README.md', text: '# app\n' });
+f = withExtras(fakeGitlab({ jobs: [] }));
+f.state.mr.merge_status = 'cannot_be_merged';
+out = await runSteward(base(repo, f, { runAgentTask: fixAgent([]) }));
+check('без конфликта → main влит и запушен, агент не нужен', out.status === 'merged-target' && repo.originLog().includes(out.sha) && fs.existsSync(path.join(repo.work, 'README.md')) && f.state.created.some((b) => b.includes(`git revert -m 1 ${out.sha}`) && b.includes(ROUND_MARKER)), JSON.stringify(out));
+
+repo = setupRepo();
+f = withExtras(fakeGitlab({ jobs: [], discussions: [{ id: 'd-1', notes: [{ body: '⛔ **MAI Ship · ревью · blocking** (correctness)\n\n**Неверный знак**', position: { new_path: 'src/a.js', new_line: 1 }, resolved: false }] }] }));
+out = await runSteward(base(repo, f, { runAgentTask: async (task, opts) => { editFile(repo, 'src/a.js', 'export const sum = (a, b) => a + b;\n'); return fixAgent([])(task, opts); } }));
+check('после коммита — ответ в обсуждении находки с SHA; закрывает ревьюер', out.status === 'pushed' && f.state.replies.length === 1 && f.state.replies[0].did === 'd-1' && f.state.replies[0].body.includes(out.sha.slice(0, 12)) && /закроет ревьюер/.test(f.state.replies[0].body), JSON.stringify(f.state.replies));
 
 console.log(`\nship-steward: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);
