@@ -1644,6 +1644,16 @@ app.whenReady().then(async () => {
     const hookCard = await win.webContents.executeJavaScript(`document.querySelector('.hook-card')?.textContent || ''`);
     check('замечание хука — отдельной карточкой, не репликой пользователя', /Хук Stop/.test(hookCard) && /тесты не запускались/.test(hookCard), hookCard);
 
+    console.log('\n[23a] /mr: статус MR MAI Ship в ленте (E3.C2)');
+    await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/mr'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const shipFeedText = await win.webContents.executeJavaScript(`document.querySelector('.ship-feed')?.innerText || ''`);
+    check("/mr: карточка MR в ленте", /!7/.test(shipFeedText) && /нужен человек/.test(shipFeedText) && /blocking/.test(shipFeedText) && /ещё не оценил/.test(shipFeedText), shipFeedText);
+    win.webContents.send('chat:event', { type: 'done', messages: [{ role: 'user', content: 'сделай' }, { role: 'hook', event: 'Stop', content: '[Хук Stop, раунд 1] Работа не принята: тесты не запускались' }, { role: 'assistant', content: 'готово' }] });
+    await new Promise((r) => setTimeout(r, 300));
+    const feedKept = await win.webContents.executeJavaScript(`document.querySelectorAll('.ship-feed').length`);
+    check('/mr: карточка не пропадает после ответа агента', feedKept === 1, String(feedKept));
+
     console.log('\n[24] Субагенты: /agents и карточка вызова (ADR 0036)');
     await win.webContents.executeJavaScript(`(() => { const i = document.querySelector('#input'); i.value = '/agents'; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
     await new Promise((r) => setTimeout(r, 400));

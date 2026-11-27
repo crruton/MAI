@@ -36,6 +36,7 @@ export const BUILTIN_COMMANDS = [
   { name: 'privacy', description: 'Куда уходят данные: модели, телеметрия, MCP, веб — и чек-лист «строго локально»' },
   { name: 'signoff', description: 'Тесты проходят → статус signoff на HEAD в GitHub; fail — отклонить', argumentHint: '[fail] [контекст]' },
   { name: 'pr', description: 'Создать pull request: ветка, push, описание по шаблону репозитория', argumentHint: '[уточнение]', overridable: true },
+  { name: 'mr', description: 'MAI Ship: статус открытых MR проекта в ленте — pipeline, ревью, steward, approver, расход' },
   { name: 'ship', description: 'MAI Ship: проверки, коммит с атрибуцией, push, Draft MR/PR — дальше ревью и approver в CI', argumentHint: '[ключ задачи или уточнение]', overridable: true },
   { name: 'worktree', description: 'Чат в отдельной рабочей копии (git worktree): список или новая', argumentHint: '[имя]' },
   { name: 'projects', description: 'Проекты: папки, инструкции, коннекторы и вид — одним кликом' },

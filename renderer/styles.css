@@ -988,3 +988,17 @@ button { cursor: pointer; }
 .topbar-row-main .runner-chip { max-width: 100%; }
 .topbar-row-main .topbar-row-actions { flex: 0 0 auto; }
 @media (max-width: 1280px) { .runner-label { display: none; } }
+
+/* /mr: статус MR MAI Ship в ленте (E3.C2) */
+.ship-feed { min-width: min(640px, 100%); }
+.ship-feed-head { display: flex; gap: 4px; color: var(--text-dim); }
+.ship-feed-item { padding: 6px 0; border-top: 1px solid var(--border); }
+.ship-feed-item:first-child { border-top: 0; }
+.ship-feed-title { font-weight: 600; }
+.ship-feed-facts { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.ship-badge { margin-left: 8px; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--border); }
+.ship-badge.red { color: var(--red); }
+.ship-badge.amber { color: var(--amber); }
+.ship-badge.green { color: var(--green); }
+.ship-badge.blue { color: var(--accent); }
+.link-btn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; font-weight: 600; }

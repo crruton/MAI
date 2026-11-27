@@ -1243,6 +1243,7 @@ function messageNode(message, index = -1) {
       el('div', { class: 'bubble', text: message.display || message.content || '' }),
     ]);
   }
+  if (message.role === 'ship-status') return shipStatusNode(message);
   if (message.role === 'runtime') {
     return runtimeNode(message.name || 'Рантайм', message.content || '', message.code, false);
   }
@@ -2005,6 +2006,78 @@ function shipPrompt(args = '') {
     .join('\n');
 }
 
+/**
+ * /mr (E3.C2, ADR 0125): статус открытых MR MAI Ship карточкой в ленте. Только показ: в сессию
+ * не пишется и модели не уходит (история чата живёт в main).
+ */
+const SHIP_MR_STATUS = {
+  'needs-human': ['amber', 'нужен человек'],
+  blocked: ['red', 'заблокирован'],
+  paused: ['', 'пауза'],
+  'red-ci': ['red', 'CI красный'],
+  approved: ['green', 'одобрен'],
+  'in-progress': ['blue', 'в работе'],
+};
+const SHIP_PIPELINE = { success: 'pipeline ✓', failed: 'pipeline ✗', running: 'pipeline …', pending: 'pipeline ожидает', canceled: 'pipeline отменён' };
+
+/** Карточки /mr живут только в окне: при обновлении истории из main остаются на своём месте. */
+function keepLocalCards(prev, next) {
+  const cards = [];
+  let n = 0;
+  for (const m of prev) {
+    if (m.role === 'ship-status') cards.push({ at: n, m });
+    else n += 1;
+  }
+  if (!cards.length) return next;
+  const out = [...next];
+  for (const c of cards.reverse()) out.splice(Math.min(c.at, out.length), 0, c.m);
+  return out;
+}
+
+async function showShipStatus() {
+  let res;
+  try {
+    res = await api.boards.shipStatus({ projectDir: state.projectDir });
+  } catch (err) {
+    res = { ok: false, error: err.message };
+  }
+  state.messages.push({ role: 'ship-status', ...res });
+  renderAll();
+}
+
+function shipStatusNode(message) {
+  const head = el('div', { class: 'review-head ship-feed-head' }, [
+    el('span', { text: 'MAI Ship · merge requests' }),
+    message.at ? el('span', { class: 'muted', text: ' · ' + new Date(message.at).toLocaleTimeString() }) : null,
+  ]);
+  let body;
+  if (!message.ok) body = el('p', { class: 'hint-text', text: 'Статус MR недоступен: ' + (message.error || 'ошибка') + '. Нужен glab с входом в GitLab проекта (glab auth login).' });
+  else if (!message.items?.length) body = el('p', { class: 'hint-text', text: 'Открытых MR нет. Создайте Draft MR командой /ship.' });
+  else
+    body = el(
+      'div',
+      { class: 'ship-feed-list' },
+      message.items.map((mr) => {
+        const [tone, label] = SHIP_MR_STATUS[mr.status] || ['', mr.status];
+        const a = mr.approver;
+        const facts = [
+          SHIP_PIPELINE[mr.pipeline] || (mr.pipeline ? 'pipeline ' + mr.pipeline : 'pipeline нет'),
+          'ревью: ' + mr.review.findings + ', открыто ' + mr.review.open + (mr.review.blocking ? ', blocking' : ''),
+          'steward: ' + mr.steward.rounds,
+          a ? 'approver: ' + a.decision + (a.mode === 'observe' ? ' (observe)' : '') + (a.stale ? ', старый SHA' : '') : 'approver: ещё не оценил',
+          mr.cost ? 'расход $' + mr.cost.usd : null,
+        ].filter(Boolean);
+        return el('div', { class: 'ship-feed-item' }, [
+          el('button', { class: 'link-btn', type: 'button', text: '!' + mr.iid, onclick: () => mr.url && api.openExternal(mr.url) }),
+          el('span', { class: 'ship-feed-title', text: ' ' + mr.title + (mr.draft ? ' · Draft' : '') }),
+          el('span', { class: 'ship-badge ' + tone, text: label }),
+          el('div', { class: 'ship-feed-facts', text: facts.join(' · ') }),
+        ]);
+      }),
+    );
+  return el('div', { class: 'msg msg-review' }, [el('div', { class: 'review-card ship-feed' }, [head, body])]);
+}
+
 /* ---------- рабочие копии для чатов (CC11.5, ADR 0076) ---------- */
 
 /**
@@ -2418,6 +2491,10 @@ async function runSlash(text) {
     case 'ship':
       clear();
       await send({ text: shipPrompt(args), display: `/ship${args ? ` ${args}` : ''}` });
+      return;
+    case 'mr':
+      clear();
+      await showShipStatus();
       return;
     case 'worktree':
       clear();
@@ -3938,7 +4015,7 @@ const suggest = { kind: '', items: [], index: 0, token: null, timer: null };
 const SLASH_GROUPS = {
   'Чат': ['compact', 'context', 'cost', 'clear', 'rename', 'fork', 'rewind', 'resume', 'export', 'import', 'help'],
   'Модель и режим': ['model', 'mode'],
-  'Git': ['commit', 'review', 'security-review', 'pr', 'ship', 'worktree', 'signoff'],
+  'Git': ['commit', 'review', 'security-review', 'pr', 'ship', 'mr', 'worktree', 'signoff'],
   'Проект': ['init', 'memory', 'agents', 'hooks', 'permissions', 'trash', 'projects', 'onboarding'],
   'Подключения': ['connectors', 'packages', 'schedule'],
   'Обслуживание': ['updates', 'cleanup', 'privacy'],
@@ -4379,7 +4456,7 @@ function handleEvent(event) {
       refreshCheckpoints().then(() => renderAll());
       refreshResults(true);
       notify('Агент закончил', [...(event.messages || [])].reverse().find((m) => m.role === 'assistant' && m.content)?.content || '');
-      state.messages = event.messages || state.messages;
+      state.messages = event.messages ? keepLocalCards(state.messages, event.messages) : state.messages;
       state.live = null;
       state.running = false;
       setRunning(false);
