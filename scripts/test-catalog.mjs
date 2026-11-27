@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkCatalog, scanText, frontmatter, skillRefs } from '../electron/lib/catalog-check.js';
+import { checkCatalog, scanText, frontmatter, skillRefs, loadPolicy } from '../electron/lib/catalog-check.js';
 import { readCatalog, installFromMarketplace } from '../electron/lib/marketplace.js';
 import { listPackages } from '../electron/lib/packages.js';
 
@@ -109,6 +109,24 @@ if (installed) {
   check('файлы навыка на месте', fs.existsSync(path.join(dataDir, 'packages', 'grilling', 'skills', 'grilling', 'LICENSE')));
 }
 fs.rmSync(dataDir, { recursive: true, force: true });
+
+console.log('[9] закрытые списки — вне публичного репозитория');
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const pub = JSON.parse(fs.readFileSync(path.join(repoRoot, 'catalog', 'catalog-policy.json'), 'utf8'));
+check('в публичной политике нет хостов и названий команды', pub.denyHosts.length === 0 && pub.denyTerms.length === 0);
+const pdir = fs.mkdtempSync(path.join(os.tmpdir(), 'mai-policy-'));
+fs.mkdirSync(path.join(pdir, 'catalog'));
+fs.writeFileSync(path.join(pdir, 'catalog', 'catalog-policy.json'), JSON.stringify({ denyHosts: [], allowEmails: ['*@example.com'], denyTerms: [] }));
+fs.writeFileSync(path.join(pdir, 'catalog', 'catalog-policy.local.json'), JSON.stringify({ denyHosts: ['corp.example.net'], denyTerms: ['secret-project'] }));
+const merged = loadPolicy(pdir, { MAI_CATALOG_DENY_HOSTS: 'intra.example.org, corp.example.net', MAI_CATALOG_DENY_TERMS: 'codename' });
+check('локальный файл и переменные окружения складываются, без повторов', merged.denyHosts.join() === 'corp.example.net,intra.example.org' && merged.denyTerms.join() === 'secret-project,codename' && merged.allowEmails.join() === '*@example.com', JSON.stringify(merged));
+check('без локального файла и переменных — только общие правила', loadPolicy(path.join(pdir, 'нет'), {}).denyHosts.length === 0);
+fs.rmSync(pdir, { recursive: true, force: true });
+const prevHosts = process.env.MAI_CATALOG_DENY_HOSTS;
+process.env.MAI_CATALOG_DENY_HOSTS = 'intra.example.org';
+const leak = fixture((files) => { files['catalog/demo/skills/demo/SKILL.md'] += 'Сервер: build.intra.example.org\n'; });
+if (prevHosts === undefined) delete process.env.MAI_CATALOG_DENY_HOSTS; else process.env.MAI_CATALOG_DENY_HOSTS = prevHosts;
+check('хост из переменной окружения ловится проверкой каталога', leak.errors.some((e) => /intra\.example\.org/.test(e)), leak.errors.join('; '));
 
 console.log(`\ncatalog: ${pass} OK, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

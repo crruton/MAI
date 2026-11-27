@@ -13,6 +13,20 @@ import { validateRoles } from './catalog-roles.js';
 
 export const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 export const POLICY_FILE = 'catalog/catalog-policy.json';
+/**
+ * Запрещённые хосты и названия команды — не в публичном репозитории (их список сам их раскрывает):
+ * локальный файл вне git и переменные окружения (секреты CI). Публичный файл — только общие правила.
+ */
+export const LOCAL_POLICY_FILE = 'catalog/catalog-policy.local.json';
+
+const csv = (value) => String(value || '').split(',').map((s) => s.trim()).filter(Boolean);
+
+/** Правила проверки: публичный файл + локальный файл + MAI_CATALOG_DENY_HOSTS / MAI_CATALOG_DENY_TERMS. */
+export function loadPolicy(root, env = process.env) {
+  const parts = [readJson(path.join(root, POLICY_FILE)) || {}, readJson(path.join(root, LOCAL_POLICY_FILE)) || {}, { denyHosts: csv(env.MAI_CATALOG_DENY_HOSTS), denyTerms: csv(env.MAI_CATALOG_DENY_TERMS) }];
+  const merge = (key) => [...new Set(parts.flatMap((p) => (Array.isArray(p[key]) ? p[key].map(String) : [])))];
+  return { denyHosts: merge('denyHosts'), allowEmails: merge('allowEmails'), denyTerms: merge('denyTerms') };
+}
 const TEXT_EXT = new Set(['.md', '.txt', '.json', '.yaml', '.yml', '.py', '.sh', '.js', '.mjs', '.cjs', '.ts', '.css', '.html', '.tpl', '.tf', '.hcl', '']);
 const MAX_SKILL_LINES = 500;
 
@@ -95,15 +109,14 @@ export function scanText(text, { denyHosts = [], allowEmails = [], denyTerms = [
  * @param {string} root корень репозитория с `mai-marketplace.json`
  * @returns {{ errors: string[], warnings: string[], packages: number, skills: number }}
  */
-export function checkCatalog(root) {
+export function checkCatalog(root, { env = process.env } = {}) {
   const errors = [];
   const warnings = [];
   let skills = 0;
   const refs = [];
   const index = readJson(path.join(root, CATALOG));
   if (!index || !Array.isArray(index.packages)) return { errors: [`${CATALOG}: нет списка packages`], warnings, packages: 0, skills };
-  const policy = readJson(path.join(root, POLICY_FILE)) || {};
-  const scan = { denyHosts: policy.denyHosts || [], allowEmails: policy.allowEmails || [], denyTerms: policy.denyTerms || [] };
+  const scan = loadPolicy(root, env);
   const seen = new Set();
   for (const [i, entry] of index.packages.entries()) {
     const at = `${CATALOG}: packages[${i}]`;

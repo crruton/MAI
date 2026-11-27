@@ -175,7 +175,7 @@
 `release-notes`, `standup`, `stop-slop`, `system-design`, `tdd`, `tech-debt`, `testing-strategy`,
 `to-mr`, `ub-mode`), 15 devops (без внутренних зеркал и адресов офиса), продуктовые скиллы после
 слияния дублей (S1, S4, S5). Только в приватный каталог: `people-directory`, `rocket-notify`,
-`jira-*`, `estimator-wbs-upload`, `devops-context` (зеркала и офис), `grandline-design-reference`.
+`jira-*`, `estimator-wbs-upload`, `devops-context` (зеркала и офис), справочник дизайна внутреннего проекта.
 
 ---
 

@@ -419,6 +419,10 @@
 
 ### Security
 
+- Каталог: запрещённые хосты и внутренние названия команды убраны из публичного
+  `catalog/catalog-policy.json` — список сам их раскрывал. Закрытые списки — в
+  `catalog/catalog-policy.local.json` (вне git) и в `MAI_CATALOG_DENY_HOSTS` / `MAI_CATALOG_DENY_TERMS`
+  (ADR 0111, дополнение 27.11.2026). Упоминание внутреннего проекта убрано из бэклога.
 - Зависимости (ADR 0104): Electron 38.8.6 → 45.4.1 (уязвимость высокого риска в
   Electron ≤ 42.11.15), openai 6 → 7.62, electron-builder → 26.18, hono — `npm audit
   fix`, `minimatch` 7–11.0.8 в инструментах сборки — через `overrides`. `npm audit` —

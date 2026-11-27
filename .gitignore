@@ -39,3 +39,6 @@ desktop.ini
 
 # Отчёты набора сценариев (ADR 0082)
 evals/reports/
+
+# Локальные запрещённые хосты и названия каталога (ADR 0111): сам список раскрывает внутреннее
+catalog/catalog-policy.local.json
