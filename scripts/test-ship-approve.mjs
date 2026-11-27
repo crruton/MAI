@@ -98,6 +98,7 @@ function fakeGitlab({ mode = 'observe', files = ['docs/guide.md'], pipeline = 's
       return json(note);
     }
     if (p === '/projects/group/app/pipelines/555/jobs') return json(page === 1 ? state.jobs : []);
+    if (p === '/user') return json({ username: state.selfUser || 'mai-ship-approver' });
     if (p.endsWith('/approvals') && method === 'GET') return json({ approved_by: state.approvedBy.map((username) => ({ user: { username } })) });
     if (p.endsWith('/approve')) {
       if (body.sha !== state.mr.sha) return json({ message: 'SHA does not match HEAD' }, 409);
@@ -216,6 +217,7 @@ check('enforce + approve → 0', (await gate({ mode: 'enforce' })) === 0);
 check('enforce + нужен человек, апрува нет → 3', (await gate({ mode: 'enforce', files: ['db/migrations/1.sql'] })) === 3);
 check('апрув только бота не считается → 3', (await gate({ mode: 'enforce', files: ['db/migrations/1.sql'] }, (s) => { s.approvedBy = ['mai-ship-approver']; })) === 3);
 check('апрув человека → 0', (await gate({ mode: 'enforce', files: ['db/migrations/1.sql'] }, (s) => { s.approvedBy = ['anna']; })) === 0);
+check('апрув владельца токена approver (нет бот-учётки) не считается → 3', (await gate({ mode: 'enforce', files: ['db/migrations/1.sql'] }, (s) => { s.approvedBy = ['token-owner']; s.selfUser = 'token-owner'; })) === 3);
 check('enforce + block → 2', (await gate({ mode: 'enforce', pipeline: 'failed' })) === 2);
 check('новый коммит во время оценки → 3', (await gate({ mode: 'enforce', headAfter: 'fff' })) === 3);
 

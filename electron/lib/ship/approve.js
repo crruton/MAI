@@ -118,7 +118,15 @@ export async function gateExitCode(out, { gitlab, project, iid, botUsername = 'm
   if (action === 'approve' || action === 'skip') return 0;
   if (action === 'block') return 2;
   const approvals = await gitlab.getApprovals(project, iid);
-  const humans = (approvals?.approved_by || []).map((a) => a?.user?.username).filter((u) => u && u !== botUsername);
+  // Не человек: бот по имени и пользователь токена approver'а (боевая проверка E3.H0: без отдельной
+  // бот-учётки approver апрувит от владельца токена, и такой апрув не должен открывать гейт).
+  let self = '';
+  try {
+    self = (await gitlab.getUser?.())?.username || '';
+  } catch {
+    self = '';
+  }
+  const humans = (approvals?.approved_by || []).map((a) => a?.user?.username).filter((u) => u && u !== botUsername && u !== self);
   return humans.length ? 0 : 3;
 }
 

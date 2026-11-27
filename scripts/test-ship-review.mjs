@@ -45,10 +45,17 @@ function fakeGitlab({ ship = 'version: 1\nenabled: true\nreview:\n  level: stand
       state.mr.labels = [...new Set([...state.mr.labels.filter((l) => !remove.includes(l)), ...add])];
       return json(state.mr);
     }
+    // Как GitLab 17.3: /diffs с per_page=100 → 500 (найдено боевой проверкой E3.H0).
+    if (p.endsWith('/diffs') && u.searchParams.get('per_page') === '100') return json({ message: '500 Internal Server Error' }, 500);
     if (p.endsWith('/diffs')) return json(page === 1 ? state.diffs : []);
     if (p.endsWith('/discussions') && method === 'GET') return json(page === 1 ? state.discussions : []);
+    if ((m = p.match(/\/discussions\/([^/]+)$/)) && method === 'PUT') {
+      const d = state.discussions.find((x) => x.id === m[1]);
+      if (u.searchParams.get('resolved') === 'true') d.notes[0].resolved = true;
+      return json(d);
+    }
     if (p.endsWith('/discussions') && method === 'POST') {
-      const d = { id: `d${id++}`, notes: [{ body: body.body, position: body.position }] };
+      const d = { id: `d${id++}`, notes: [{ body: body.body, position: body.position, resolvable: true, resolved: false }] };
       state.discussions.push(d);
       return json(d, 201);
     }
@@ -106,6 +113,7 @@ check('повтор: без дублей обсуждений и сводки', 
 model = fakeModel({ findings: {} });
 out = await runReview({ gitlab: g.gitlab, project, iid: 7, ask: model.ask });
 check('находок не стало → метка ship::blocking снята', !g.state.mr.labels.includes(BLOCKING_LABEL) && out.findings.length === 0);
+check('исправленная находка — своё обсуждение закрыто (боевая проверка E3.H0)', out.resolved === 1 && g.state.discussions[0].notes[0].resolved === true, JSON.stringify(out));
 
 console.log('[3] пропуски и dry-run');
 g = fakeGitlab();

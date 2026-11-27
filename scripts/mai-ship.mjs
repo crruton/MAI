@@ -64,8 +64,19 @@ async function main() {
       const server = new URL(env.CI_SERVER_URL || env.GITLAB_URL);
       const repoPath = env.CI_MERGE_REQUEST_SOURCE_PROJECT_PATH || env.CI_PROJECT_PATH;
       if (!repoPath) throw new Error('не известен путь проекта (CI_PROJECT_PATH)');
-      const remote = `${server.protocol}//oauth2:${encodeURIComponent(stewardToken)}@${server.host}/${repoPath}.git`;
-      execFileSync('git', ['push', remote, `HEAD:refs/heads/${branch}`], { cwd, stdio: ['ignore', 'ignore', 'pipe'] });
+      // Токен — через credential helper из переменной окружения: в аргументах git и в тексте
+      // ошибки его нет, поэтому он не попадёт в лог CI.
+      const remote = `${server.protocol}//${server.host}/${repoPath}.git`;
+      const helper = '!f() { echo username=oauth2; echo "password=$MAI_SHIP_PUSH_TOKEN"; }; f';
+      try {
+        execFileSync('git', ['-c', 'credential.helper=', '-c', `credential.helper=${helper}`, 'push', remote, `HEAD:refs/heads/${branch}`], {
+          cwd,
+          stdio: ['ignore', 'ignore', 'pipe'],
+          env: { ...process.env, MAI_SHIP_PUSH_TOKEN: stewardToken, GIT_TERMINAL_PROMPT: '0' },
+        });
+      } catch (err) {
+        throw new Error(`git push в ${branch} не удался: ${String(err.stderr || '').trim().slice(0, 300)}`);
+      }
     };
     const runAgentTask = async (task, { rules }) => {
       const { runAgent } = await import('../electron/lib/agent.js');
@@ -119,7 +130,7 @@ ${out.summary}`);
     return 0;
   }
   const r = out.result;
-  console.log(`MAI Ship approver: ${r.decision} (${r.action}) — правило ${r.rule}: ${r.reason}`);
+  console.log(`MAI Ship approver: ${r.decision} (${r.action}) — правило ${r.rule}${r.reason && r.reason !== `правило ${r.rule}` ? `: ${r.reason}` : ""}`);
   // JSONL-журнал для артефакта CI (E3.F6).
   const journal = option('--journal');
   if (journal && out.record) fs.appendFileSync(journal, `${JSON.stringify(out.record)}\n`);
@@ -136,7 +147,7 @@ ${out.summary}`);
 main().then(
   (code) => process.exit(code),
   (err) => {
-    console.error(`MAI Ship approver: ${err.message}`);
+    console.error(`MAI Ship ${role || ""}: ${err.message}`);
     process.exit(1);
   },
 );

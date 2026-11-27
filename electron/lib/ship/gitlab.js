@@ -28,14 +28,14 @@ export function createGitlab({ url, token, fetch: fetchImpl = globalThis.fetch, 
     return res.status === 204 ? null : res.json();
   }
 
-  async function all(path) {
+  async function all(path, perPage = 100) {
     const out = [];
     for (let page = 1; page <= 20; page += 1) {
       const sep = path.includes('?') ? '&' : '?';
-      const chunk = await call('GET', `${path}${sep}per_page=100&page=${page}`);
+      const chunk = await call('GET', `${path}${sep}per_page=${perPage}&page=${page}`);
       if (!Array.isArray(chunk) || chunk.length === 0) break;
       out.push(...chunk);
-      if (chunk.length < 100) break;
+      if (chunk.length < perPage) break;
     }
     return out;
   }
@@ -44,10 +44,13 @@ export function createGitlab({ url, token, fetch: fetchImpl = globalThis.fetch, 
   const mrPath = (project, iid) => `/projects/${p(project)}/merge_requests/${Number(iid)}`;
 
   return {
+    /** Пользователь токена — сам approver: его апрув не считается апрувом человека. */
+    getUser: () => call('GET', '/user'),
     getMr: (project, iid) => call('GET', mrPath(project, iid)),
     /** MR проекта, обновлённые после даты (для отчёта о согласии). */
     listMrs: (project, { updatedAfter } = {}) => all(`/projects/${p(project)}/merge_requests?state=all&order_by=updated_at${updatedAfter ? `&updated_after=${encodeURIComponent(updatedAfter)}` : ''}`),
-    getDiffs: (project, iid) => all(`${mrPath(project, iid)}/diffs`),
+    // GitLab 17.3 отвечает 500 на /diffs с per_page=100 (боевая проверка E3.H0): страница по 20.
+    getDiffs: (project, iid) => all(`${mrPath(project, iid)}/diffs`, 20),
     getCommits: (project, iid) => all(`${mrPath(project, iid)}/commits`),
     getNotes: (project, iid) => all(`${mrPath(project, iid)}/notes?sort=desc`),
     /** Файл из ветки; нет файла — null. */
@@ -64,6 +67,8 @@ export function createGitlab({ url, token, fetch: fetchImpl = globalThis.fetch, 
     getPipelineJobs: (project, pipelineId) => all(`/projects/${p(project)}/pipelines/${Number(pipelineId)}/jobs`),
     getDiscussions: (project, iid) => all(`${mrPath(project, iid)}/discussions`),
     /** Обсуждение на строке diff: `position` — base/start/head SHA, new_path, new_line. */
+    /** Закрыть обсуждение (своя находка, которой больше нет). */
+    resolveDiscussion: (project, iid, discussionId) => call('PUT', `${mrPath(project, iid)}/discussions/${encodeURIComponent(discussionId)}?resolved=true`),
     createDiscussion: (project, iid, body, position) => call('POST', `${mrPath(project, iid)}/discussions`, { body: { body, position } }),
     /** Кто апрувнул MR (есть и на Free). Сброс апрувов при push — настройка проекта. */
     getApprovals: (project, iid) => call('GET', `${mrPath(project, iid)}/approvals`),

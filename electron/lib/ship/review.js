@@ -195,8 +195,19 @@ export async function runReview({ gitlab, project, iid, ask = null, makeModel = 
     });
     created += 1;
   }
+  // Свои находки, которых в этом прогоне нет, — исправлены: обсуждение закрывается. Иначе steward
+  // взялся бы чинить уже исправленное (боевая проверка E3.H0). Чужие обсуждения не трогаем.
+  const current = new Set(confirmed.map(fingerprint));
+  let resolved = 0;
+  for (const d of existing) {
+    const first = d.notes?.[0];
+    const m = /<!-- mai-ship:finding:([0-9a-f]{16}) -->/.exec(String(first?.body || ''));
+    if (!m || current.has(m[1]) || first.resolved || !first.resolvable) continue;
+    await gitlab.resolveDiscussion(project, iid, d.id);
+    resolved += 1;
+  }
   await upsertNote(gitlab, project, iid, 'review', summary);
   const blocking = confirmed.some((f) => f.severity === 'blocking');
   await gitlab.setLabels(project, iid, blocking ? { add: [BLOCKING_LABEL] } : { remove: [BLOCKING_LABEL] });
-  return { status: 'done', findings: confirmed, dropped, created, blocking };
+  return { status: 'done', findings: confirmed, dropped, created, resolved, blocking };
 }
