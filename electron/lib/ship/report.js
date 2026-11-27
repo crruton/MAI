@@ -106,19 +106,82 @@ export function formatReport(report, { days } = {}) {
   return lines.join('\n');
 }
 
-/** Собирает [{ mr, decision }] по MR проекта, обновлённым за `days` дней. */
-export async function collectDecisions(gitlab, project, { days = 30, now = Date.now() } = {}) {
+/**
+ * Собирает [{ mr, decision, humanApprovals }] по MR проекта, обновлённым за `days` дней. MR без решения
+ * approver'а тоже входят (для метрик потока); у влитых — число апрувов людей (не бота и не
+ * пользователя токена).
+ */
+export async function collectDecisions(gitlab, project, { days = 30, now = Date.now(), botUsername = 'mai-ship-approver' } = {}) {
   const since = new Date(now - days * 86_400_000).toISOString();
   const mrs = await gitlab.listMrs(project, { updatedAfter: since });
+  let self = '';
+  try {
+    self = (await gitlab.getUser?.())?.username || '';
+  } catch {
+    self = '';
+  }
   const out = [];
   for (const mr of mrs) {
     const notes = await gitlab.getNotes(project, mr.iid);
     let decision = null;
-    for (const n of notes) {
-      const d = parseDecision(n.body);
+    for (const note of notes) {
+      const d = parseDecision(note.body);
       if (d && (!decision || String(d.at) > String(decision.at))) decision = d;
     }
-    if (decision) out.push({ mr, decision });
+    let humanApprovals = null;
+    if (mr.state === 'merged' && gitlab.getApprovals) {
+      try {
+        const a = await gitlab.getApprovals(project, mr.iid);
+        humanApprovals = (a?.approved_by || []).map((x) => x?.user?.username).filter((u) => u && u !== botUsername && u !== self).length;
+      } catch {
+        humanApprovals = null;
+      }
+    }
+    out.push({ mr, decision, humanApprovals });
   }
   return out;
+}
+
+const percentile = (sorted, q) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1) + 0.5))] : null);
+
+/**
+ * Метрики потока (E3.G1): lead time от создания до слияния, доля влитых без человека, revert за
+ * 14 дней. Стоимость моделей пока не копится — `cost: null`.
+ */
+export function flowMetrics(entries, { revertDays = 14 } = {}) {
+  const merged = entries.filter((e) => e.mr.state === 'merged' && e.mr.merged_at && e.mr.created_at);
+  const hours = merged.map((e) => (Date.parse(e.mr.merged_at) - Date.parse(e.mr.created_at)) / 3_600_000).filter((h) => h >= 0).sort((a, b) => a - b);
+  const withoutHuman = merged.filter((e) => e.decision?.decision === 'approve' && e.decision?.mode === 'enforce' && e.humanApprovals === 0).length;
+  const byTitle = new Map(merged.map((e) => [String(e.mr.title || ''), e]));
+  const reverted = new Set();
+  for (const e of merged) {
+    const m = /^Revert "(.+)"$/.exec(String(e.mr.title || ''));
+    const original = m && byTitle.get(m[1]);
+    if (!original || original === e) continue;
+    const gap = Date.parse(e.mr.merged_at) - Date.parse(original.mr.merged_at);
+    if (gap >= 0 && gap <= revertDays * 86_400_000) reverted.add(original.mr.iid);
+  }
+  const originals = merged.filter((e) => !/^Revert "/.test(String(e.mr.title || ''))).length;
+  return {
+    merged: merged.length,
+    leadTimeHours: { median: percentile(hours, 0.5), p90: percentile(hours, 0.9) },
+    withoutHuman,
+    withoutHumanShare: merged.length ? withoutHuman / merged.length : 0,
+    reverted: reverted.size,
+    revertRate: originals ? reverted.size / originals : 0,
+    cost: null,
+  };
+}
+
+/** Текст метрик потока для отчёта. */
+export function formatFlow(flow) {
+  const pct = (x) => `${Math.round(x * 1000) / 10}%`;
+  const h = (x) => (x == null ? '—' : x < 48 ? `${Math.round(x * 10) / 10} ч` : `${Math.round((x / 24) * 10) / 10} дн`);
+  return [
+    'Поток (E3.G1):',
+    `- влито MR: ${flow.merged}; lead time — медиана ${h(flow.leadTimeHours.median)}, 90% — ${h(flow.leadTimeHours.p90)}`,
+    `- влито без человека (approve в enforce): ${flow.withoutHuman} (${pct(flow.withoutHumanShare)})`,
+    `- revert за 14 дней: ${flow.reverted} (${pct(flow.revertRate)})`,
+    '- стоимость моделей: не считается (расход пока не копится)',
+  ].join('\n');
 }

@@ -27,7 +27,7 @@ import OpenAI from 'openai';
 import { createGitlab } from '../electron/lib/ship/gitlab.js';
 import { runApprove, createClassifier, gateExitCode } from '../electron/lib/ship/approve.js';
 import { runReview, createReviewModel } from '../electron/lib/ship/review.js';
-import { collectDecisions, agreementReport, formatReport } from '../electron/lib/ship/report.js';
+import { collectDecisions, agreementReport, formatReport, flowMetrics, formatFlow } from '../electron/lib/ship/report.js';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { runSteward, createAgentRunner } from '../electron/lib/ship/steward.js';
@@ -47,8 +47,12 @@ async function main() {
     if (!project) throw new Error('нужен --project (или CI_PROJECT_ID)');
     const gitlab = createGitlab({ url: env.GITLAB_URL || env.CI_SERVER_URL, token: env.GITLAB_TOKEN });
     const days = Number(option('--days') || 30);
-    const report = agreementReport(await collectDecisions(gitlab, project, { days }));
-    console.log(args.includes('--json') ? JSON.stringify(report, null, 2) : formatReport(report, { days }));
+    const entries = await collectDecisions(gitlab, project, { days, botUsername: env.MAI_SHIP_BOT_USERNAME || 'mai-ship-approver' });
+    const report = agreementReport(entries);
+    const flow = flowMetrics(entries);
+    console.log(args.includes('--json') ? JSON.stringify({ ...report, flow }, null, 2) : `${formatReport(report, { days })}
+
+${formatFlow(flow)}`);
     return 0;
   }
   const iid = option('--mr') || env.CI_MERGE_REQUEST_IID;
